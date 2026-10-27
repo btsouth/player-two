@@ -94,7 +94,7 @@ h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: .2px; }
 .wave i:nth-child(5) { animation-delay: -.55s !important; }
 
 /* What it sees */
-.screen { position: relative; aspect-ratio: 16 / 9; max-height: 52vh; margin: 0 auto;
+.screen { position: relative; aspect-ratio: 16 / 9;
   border-radius: 14px; overflow: hidden;
   background: #06070b; border: 1px solid var(--line); }
 .screen img { width: 100%; height: 100%; object-fit: contain; display: block;
