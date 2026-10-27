@@ -290,7 +290,15 @@ class Session:
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         self.voice.cue("working")
-        run = await self.agent.run(text, self.latest)
+        try:
+            run = await self.agent.run(text, self.latest)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001  say it out loud instead of going silent
+            self.voice.cue("error")
+            self.events.emit("error", where="agent", message=str(exc)[:300])
+            await self.voice.say("Sorry, something went wrong on my end. Try that again?")
+            return
         self.events.emit("agent", request=text, outcome=run.outcome,
                          steps=[{"tool": s.tool, "args": s.args} for s in run.steps],
                          seconds=round(run.seconds, 2))
@@ -419,6 +427,7 @@ class Session:
                 writer.close()
 
         server = await asyncio.start_unix_server(client, str(path))
+        self.serving.set()
         async with server:
             await server.serve_forever()
 
@@ -454,16 +463,20 @@ class Session:
     async def run(self, ui: bool = True) -> None:
         from .web import PORT, serve_ui
 
+        # Open the control socket first, so a talk key pressed during start-up still lands.
+        self.serving = asyncio.Event()
+        tasks = [asyncio.create_task(self.serve()), asyncio.create_task(self.track_status())]
+        if ui:
+            tasks.append(asyncio.create_task(serve_ui(self)))
+            print(f"Player Two window: http://127.0.0.1:{PORT}/", file=sys.stderr)
+        await self.serving.wait()
         await asyncio.to_thread(self.voice.warm_up)
         self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device,
-                         game=self.s.game or "Ready when you are", talk_key="F8")
+                         game=self.s.game or "Ready when you are", talk_key="F8",
+                         brain=self.muse.model)
         self.emit_settings()
-        tasks = [self.watch(), self.serve(), self.track_status()]
-        if ui:
-            tasks.append(serve_ui(self))
-            print(f"Player Two window: http://127.0.0.1:{PORT}/", file=sys.stderr)
         await self.voice.say("Player Two is here. Hold the talk key and tell me what you need.")
-        await asyncio.gather(*tasks)
+        await asyncio.gather(self.watch(), *tasks)
 
     def close(self) -> None:
         self.controls.close()
