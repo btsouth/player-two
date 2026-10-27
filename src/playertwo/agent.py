@@ -51,6 +51,24 @@ TOOLS = [
 ]
 
 
+MOVES = {"up", "down", "left", "right", "lb", "rb"}
+
+
+def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
+    """Cut a press list just before an `a` that follows cursor movement.
+
+    Moving and confirming blind is where wrong picks come from, so the agent has to look
+    at the highlight before every confirm. A lone `a` (advancing dialogue) is fine.
+    """
+    moved = False
+    for i, b in enumerate(buttons):
+        if b in MOVES:
+            moved = True
+        elif b == "a" and moved:
+            return buttons[:i], "a"
+    return buttons, ""
+
+
 @dataclass
 class Step:
     tool: str
@@ -72,7 +90,8 @@ class Agent:
                  max_turns: int = 10, settle_s: float = 0.45,
                  ask: Callable[[str], Awaitable[str]] | None = None,
                  confirm: str = "important", language: str = "English",
-                 on_action: Callable[[str, dict], None] | None = None):
+                 on_action: Callable[[str, dict], None] | None = None,
+                 look_before_confirm: bool = True):
         self.muse = muse
         self.controls = controls
         self.grab = grab
@@ -82,6 +101,7 @@ class Agent:
         self.settle_s = settle_s
         self.ask = ask
         self.on_action = on_action
+        self.look_before_confirm = look_before_confirm
         self.confirm = confirm
         self.language = language
         self.history: list[str] = []
@@ -96,13 +116,22 @@ class Agent:
         return "\n".join(parts)
 
     async def _act(self, name: str, a: dict) -> str:
-        if self.on_action:
-            self.on_action(name, a)
         if name == "press":
             buttons = [b for b in a.get("buttons", []) if b in BUTTONS][:12]
+            held_back = ""
+            if self.look_before_confirm:
+                buttons, held_back = split_before_confirm(buttons)
             gap = int(a.get("gap_ms", 150))
+            if self.on_action:
+                self.on_action(name, {**a, "buttons": buttons})
             await asyncio.to_thread(self.controls.sequence, buttons, max(60, min(gap, 1000)))
-            return f"pressed {' '.join(buttons)}"
+            done = f"pressed {' '.join(buttons)}"
+            if held_back:
+                done += (". Stopped before confirming: look at what is highlighted now. If it "
+                         "is what the player wants, press a on its own; if not, fix it first.")
+            return done
+        if self.on_action:
+            self.on_action(name, a)
         if name == "hold":
             ms = max(50, min(int(a.get("ms", 500)), 5000))
             inp = a.get("input", "left_stick")

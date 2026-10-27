@@ -130,7 +130,8 @@ class TestAgent:
 
     def test_presses_then_finishes(self):
         agent, pad, said, _, _ = self.make([
-            [("press", {"buttons": ["down", "a"]})],
+            [("press", {"buttons": ["down"]})],
+            [("press", {"buttons": ["a"]})],
             [("finish", {"text": "Done."})],
         ])
         result = run(agent.run("use skill"))
@@ -164,6 +165,15 @@ class TestAgent:
         result = run(agent.run("loop forever"))
         assert result.outcome == "gave up"
         assert "couldn't finish" in said[-1]
+
+
+def test_never_confirms_without_looking():
+    from playertwo.agent import split_before_confirm
+
+    assert split_before_confirm(["a", "a", "a"]) == (["a", "a", "a"], "")
+    assert split_before_confirm(["down", "down", "a"]) == (["down", "down"], "a")
+    assert split_before_confirm(["a", "right", "a", "a"]) == (["a", "right"], "a")
+    assert split_before_confirm(["down"]) == (["down"], "")
 
 
 class TestNarrator:

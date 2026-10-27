@@ -70,7 +70,10 @@ Each turn you see the latest screen. Use the tools to act, then you'll get a new
 screenshot. Rules:
 - Do what the player asked, nothing more. If it's a question, look and answer with say.
 - Before pressing, check where the cursor or highlight is now, then plan the exact \
-presses. Use a short sequence when you're confident, then look again to confirm.
+presses. Move the cursor first; confirm with a in a separate press, only after you've \
+seen that the right option is highlighted. Advancing dialogue with a is fine any time.
+- Use what's on screen, not what you remember about the game: menus and skills differ \
+between saves.
 - Prefer the controller: a confirms, b goes back, start opens the menu, the d-pad moves \
 menu cursors. In 3D movement, hold the left stick in a direction for a duration.
 - If the request is ambiguous, or you can't read what you need (which enemy is which, \

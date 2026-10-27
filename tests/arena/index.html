@@ -65,7 +65,10 @@ function drawEnemies() {
     el.classList.toggle("gone", h <= 0);
   });
   $("psp").textContent = sp;
+  publish();
 }
+// The window title carries the game state so tests can check outcomes.
+function publish() { document.title = `Arena A${hp[0]} B${hp[1]} SP${sp} ${state}`; }
 function command() {
   state = "command"; say("", "Yu's turn. Choose a command.");
   menu(["Attack", "Skill", "Item", "Guard"]);
@@ -83,7 +86,8 @@ function hit(i, dmg, what) {
   say("", `${what} hits Shadow ${"AB"[i]} for ${dmg} damage.`);
   state = "result"; hideMenu();
 }
-function confirm() {
+function confirm() { step(); publish(); }
+function step() {
   if (state === "talk") {
     line++;
     if (line < lines.length) { say(...lines[line]); }
@@ -118,6 +122,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowUp" && !$("menu").classList.contains("hidden")) { sel = (sel + items.length - 1) % items.length; drawMenu(); }
   else if (e.key === "Enter") confirm();
   else if (e.key === "Escape") back();
+  publish();
   e.preventDefault();
 });
 say(...lines[0]); drawEnemies();
