@@ -22,10 +22,20 @@ class Settings:
     # Agent turns (voice commands) get a little more thought.
     agent_effort: str = "low"
     base_url: str = "https://api.meta.ai/v1"
-    voice: str = "af_heart"
+    # Kokoro voice. Empty means the default voice for `language`.
+    voice: str = ""
     speech_rate: float = 1.1
-    # How chatty narration is: "quiet" (only dialogue and choices), "normal", "detailed".
+    # How chatty narration is: "terse" (bare facts, for fast screen reader users),
+    # "quiet" (only dialogue and choices), "normal", "detailed".
     verbosity: str = "normal"
+    # Language Player Two speaks. On-screen text in other languages is translated.
+    language: str = "English"
+    # Where speech goes: "voice" (the built-in narrator) or "screen-reader" (NVDA, Orca).
+    output: str = "voice"
+    # When the agent checks before acting: "always", "important", or "never".
+    confirm: str = "important"
+    # The game has its own screen narrator: leave menus to it and cover the rest.
+    team_up: bool = False
     # Longest side of the screenshot sent to the model.
     image_max_side: int = 1280
     # Frames per second the screen watcher samples.
@@ -34,7 +44,6 @@ class Settings:
     controls: str = "auto"
     capture: str = "auto"
     game: str = ""
-    language: str = "en-us"
     extra: dict = field(default_factory=dict)
 
     @classmethod

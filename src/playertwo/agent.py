@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .muse import Muse, image_part
-from .prompts import AGENT, GAME_CONTEXT
+from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame
 
 TOOLS = [
@@ -36,6 +36,12 @@ TOOLS = [
         "description": "Say something short to the player out loud.",
         "parameters": {"type": "object", "properties": {"text": {"type": "string"}},
                        "required": ["text"]}}},
+    {"type": "function", "function": {
+        "name": "ask_player",
+        "description": "Ask the player a short question out loud and wait for their spoken "
+                       "answer. Use it to confirm a plan or clear up what they meant.",
+        "parameters": {"type": "object", "properties": {"question": {"type": "string"}},
+                       "required": ["question"]}}},
     {"type": "function", "function": {
         "name": "finish",
         "description": "The request is done (or can't be done). Tell the player in one "
@@ -63,7 +69,9 @@ class Run:
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
-                 max_turns: int = 8, settle_s: float = 0.45):
+                 max_turns: int = 10, settle_s: float = 0.45,
+                 ask: Callable[[str], Awaitable[str]] | None = None,
+                 confirm: str = "important", language: str = "English"):
         self.muse = muse
         self.controls = controls
         self.grab = grab
@@ -71,11 +79,19 @@ class Agent:
         self.game = game
         self.max_turns = max_turns
         self.settle_s = settle_s
+        self.ask = ask
+        self.confirm = confirm
+        self.language = language
         self.history: list[str] = []
         self.cancelled = False
 
     def system(self) -> str:
-        return AGENT + ("\n" + GAME_CONTEXT.format(game=self.game) if self.game else "")
+        parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]
+        if self.language.lower() not in ("english", "british english"):
+            parts.append(LANGUAGE.format(language=self.language))
+        if self.game:
+            parts.append(GAME_CONTEXT.format(game=self.game))
+        return "\n".join(parts)
 
     async def _act(self, name: str, a: dict) -> str:
         if name == "press":
@@ -132,6 +148,15 @@ class Agent:
                 if c.function.name == "say":
                     await self.speak(args.get("text", ""))
                     result = "said"
+                elif c.function.name == "ask_player":
+                    question = args.get("question", "")
+                    if self.ask is None:
+                        await self.speak(question)
+                        result = "The player can't answer right now. Don't do it; finish."
+                    else:
+                        answer = await self.ask(question)
+                        result = f'The player said: "{answer}"' if answer else (
+                            "No answer. Don't do it; finish and say you'll wait.")
                 elif c.function.name == "finish":
                     finished = args.get("text", "Done.")
                     result = "finished"

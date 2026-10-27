@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from .muse import Muse, image_part
-from .prompts import DESCRIBE, GAME_CONTEXT, NARRATOR, VERBOSITY
+from .prompts import DESCRIBE, GAME_CONTEXT, LANGUAGE, NARRATOR, TEAM_UP, VERBOSITY
 from .screen import Frame
 
 
@@ -21,15 +21,22 @@ class Line:
 
 
 class Narrator:
-    def __init__(self, muse: Muse, verbosity: str = "normal", game: str = ""):
+    def __init__(self, muse: Muse, verbosity: str = "normal", game: str = "",
+                 language: str = "English", team_up: bool = False):
         self.muse = muse
         self.verbosity = verbosity
         self.game = game
+        self.language = language
+        self.team_up = team_up
         self.recent: deque[str] = deque(maxlen=4)
         self.log: list[Line] = []
 
     def system(self) -> str:
         parts = [NARRATOR, VERBOSITY.get(self.verbosity, "")]
+        if self.language.lower() not in ("english", "british english"):
+            parts.append(LANGUAGE.format(language=self.language))
+        if self.team_up:
+            parts.append(TEAM_UP)
         if self.game:
             parts.append(GAME_CONTEXT.format(game=self.game))
         return "\n".join(p for p in parts if p)

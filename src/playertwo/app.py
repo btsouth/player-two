@@ -66,7 +66,8 @@ class Session:
         self.voice = Voice(settings, self.mixer)
         self.capture = capture or auto_capture()
         self.controls = open_controls(controls or settings.controls)
-        self.narrator = Narrator(self.muse, settings.verbosity, settings.game)
+        self.narrator = Narrator(self.muse, settings.verbosity, settings.game,
+                                 settings.language, settings.team_up)
         self.watcher = ChangeWatcher()
         self.events = Events()
         self.latest: Frame | None = None
@@ -77,8 +78,10 @@ class Session:
         self.utt: Utterance | None = None
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
+        self.answer: asyncio.Future[str] | None = None
         self.agent = Agent(self.muse, self.controls, self.grab_now, self.agent_say,
-                           game=settings.game)
+                           game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
+                           language=settings.language)
 
     def spawn(self, coro) -> asyncio.Task:
         """Start a background task and keep a reference so it isn't collected mid-run."""
@@ -91,6 +94,19 @@ class Session:
         frame = await asyncio.to_thread(self.capture.grab)
         self.latest = frame
         return frame
+
+    async def agent_ask(self, question: str, timeout: float = 30.0) -> str:
+        """Ask out loud and wait for the next thing the player says."""
+        self.events.emit("ask", text=question)
+        self.answer = asyncio.get_running_loop().create_future()
+        await self.voice.say(question, interrupt=False)
+        self.voice.cue("listening")
+        try:
+            return await asyncio.wait_for(self.answer, timeout)
+        except TimeoutError:
+            return ""
+        finally:
+            self.answer = None
 
     async def agent_say(self, text: str) -> None:
         self.events.emit("say", text=text, source="agent")
@@ -146,7 +162,8 @@ class Session:
             return
         self.voice.stop()
         self.voice.cue("listening")
-        if self.agent_task and not self.agent_task.done():
+        waiting = self.answer is not None and not self.answer.done()
+        if self.agent_task and not self.agent_task.done() and not waiting:
             self.agent.cancelled = True
         self.utt = Utterance(self.keywords,
                              on_partial=lambda p: self.events.emit("hearing", text=p))
@@ -186,10 +203,15 @@ class Session:
             await self.handle(text)
 
     async def handle(self, text: str) -> None:
+        if self.answer is not None and not self.answer.done():
+            self.answer.set_result(text)
+            return
         for pattern, action in LOCAL:
             if pattern.search(text.strip()):
                 await self.local(action)
                 return
+        if self.agent_task and not self.agent_task.done():
+            self.agent_task.cancel()
         self.agent_task = asyncio.create_task(self._agent(text))
 
     async def _agent(self, text: str) -> None:
@@ -218,11 +240,19 @@ class Session:
         elif action == "describe":
             frame = await self.grab_now()
             self._start_narration(frame, describe=True)
-        elif action in ("quiet", "normal", "detailed"):
+        elif action in ("terse", "quiet", "normal", "detailed"):
             self.narrator.verbosity = action
-            await self.voice.say({"quiet": "Okay, I'll keep it short.",
+            await self.voice.say({"terse": "Terse mode.",
+                                  "quiet": "Okay, I'll keep it short.",
                                   "detailed": "Sure, more detail from now on.",
                                   "normal": "Back to normal."}[action])
+        elif action == "team_up":
+            self.narrator.team_up = True
+            await self.voice.say("Got it. I'll leave the menus to the game's narrator "
+                                 "and cover everything else.")
+        elif action == "solo":
+            self.narrator.team_up = False
+            await self.voice.say("Okay, I'll read the menus too.")
         elif action == "pause":
             self.paused = True
             await self.voice.say("Okay, I'll stay quiet until you say resume.")
@@ -275,8 +305,8 @@ class Session:
                 self.spawn(self.talk_stop())
         elif cmd == "do" and arg:
             self.spawn(self.handle(arg))
-        elif cmd in ("stop", "repeat", "describe", "quiet", "normal", "detailed", "pause",
-                     "resume"):
+        elif cmd in ("stop", "repeat", "describe", "terse", "quiet", "normal", "detailed",
+                     "team_up", "solo", "pause", "resume"):
             self.spawn(self.local(cmd))
         elif cmd == "status":
             u = self.muse.usage

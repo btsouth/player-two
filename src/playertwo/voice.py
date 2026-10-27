@@ -15,6 +15,25 @@ from .config import CACHE_DIR, Settings
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 MODEL_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
 
+# Kokoro's languages: (phonemizer code, default voice).
+LANGUAGES = {
+    "english": ("en-us", "af_heart"),
+    "british english": ("en-gb", "bf_emma"),
+    "spanish": ("es", "ef_dora"),
+    "french": ("fr-fr", "ff_siwis"),
+    "italian": ("it", "if_sara"),
+    "portuguese": ("pt-br", "pf_dora"),
+    "hindi": ("hi", "hf_alpha"),
+    "japanese": ("ja", "jf_alpha"),
+    "chinese": ("cmn", "zf_xiaobei"),
+}
+
+
+def voice_for(language: str, voice: str = "") -> tuple[str, str]:
+    code, default = LANGUAGES.get(language.strip().lower(), LANGUAGES["english"])
+    return code, voice or default
+
+
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+|\n+")
 
 
@@ -55,6 +74,7 @@ class Voice:
         self.kokoro = Kokoro(str(d / MODEL_FILES[0]), str(d / MODEL_FILES[1]))
         self.s = settings
         self.mixer = mixer
+        self.lang, self.voice_name = voice_for(settings.language, settings.voice)
         self._gen = 0
         self._lock = asyncio.Lock()
         self.last_spoken = ""
@@ -70,7 +90,7 @@ class Voice:
 
     def _synth(self, sentence: str) -> np.ndarray:
         samples, _sr = self.kokoro.create(
-            sentence, voice=self.s.voice, speed=self.s.speech_rate, lang=self.s.language
+            sentence, voice=self.voice_name, speed=self.s.speech_rate, lang=self.lang
         )
         return samples
 
