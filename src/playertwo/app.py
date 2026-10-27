@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import re
 import sys
 import time
@@ -13,19 +12,13 @@ from pathlib import Path
 
 from .agent import Agent
 from .audio import Mixer
-from .config import Settings
+from .config import Settings, socket_path
 from .controls import open_controls
 from .listen import Mic, Utterance
 from .muse import Muse
 from .narrator import Narrator
 from .screen import Capture, ChangeWatcher, Frame, auto_capture
 from .voice import Voice
-
-
-def socket_path() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-    return Path(base) / "player-two.sock"
-
 
 LOCAL = [
     (re.compile(r"^(stop|quiet|shush|shut up|be quiet|hush)\b", re.IGNORECASE), "stop"),

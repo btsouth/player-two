@@ -123,16 +123,24 @@ def _run(args) -> None:
 
 
 async def _ctl(args) -> None:
-    from .app import send, socket_path
+    # Kept light on purpose: a talk key press should reach the session instantly.
+    from .config import socket_path
 
-    if args.command == ["events"]:
+    try:
         reader, writer = await asyncio.open_unix_connection(str(socket_path()))
+    except (FileNotFoundError, ConnectionRefusedError):
+        print("Player Two isn't running. Start it with: player-two run", file=sys.stderr)
+        sys.exit(1)
+    if args.command == ["events"]:
         writer.write(b"events\n")
         await writer.drain()
         while line := await reader.readline():
             print(line.decode().rstrip(), flush=True)
         return
-    print(await send(" ".join(args.command)))
+    writer.write((" ".join(args.command) + "\n").encode())
+    await writer.drain()
+    print((await reader.readline()).decode().strip())
+    writer.close()
 
 
 def main(argv: list[str] | None = None) -> None:

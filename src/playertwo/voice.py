@@ -25,9 +25,9 @@ LANGUAGES = {
     "italian": ("it", "if_sara"),
     "portuguese": ("pt-br", "pf_dora"),
     "hindi": ("hi", "hf_alpha"),
-    "japanese": ("ja", "jf_alpha"),
-    "chinese": ("cmn", "zf_xiaobei"),
 }
+# Japanese and Chinese voices exist, but kokoro-onnx's espeak front end garbles them, so they
+# aren't offered. Games in those languages can still be narrated in any language above.
 
 
 def voice_for(language: str, voice: str = "") -> tuple[str, str]:

@@ -14,6 +14,12 @@ CACHE_DIR = Path(
 )
 
 
+def socket_path() -> Path:
+    """The running session's control socket (hotkeys and the window talk to it)."""
+    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    return Path(base) / "player-two.sock"
+
+
 @dataclass
 class Settings:
     model: str = "muse-spark-1.3"
