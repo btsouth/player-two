@@ -13,7 +13,8 @@ from .config import Settings
 
 def _settings(args) -> Settings:
     s = Settings.load()
-    for name in ("game", "verbosity", "voice", "model", "effort"):
+    for name in ("game", "verbosity", "voice", "model", "effort", "window", "language",
+                 "confirm"):
         v = getattr(args, name, None)
         if v:
             setattr(s, name, v)
@@ -140,10 +141,13 @@ def main(argv: list[str] | None = None) -> None:
 
     def common(sp):
         sp.add_argument("--game")
-        sp.add_argument("--verbosity", choices=["quiet", "normal", "detailed"])
+        sp.add_argument("--verbosity", choices=["terse", "quiet", "normal", "detailed"])
         sp.add_argument("--voice")
         sp.add_argument("--model")
         sp.add_argument("--effort")
+        sp.add_argument("--window", help="part of the game window's title or class")
+        sp.add_argument("--language", help="language to speak, e.g. Spanish")
+        sp.add_argument("--confirm", choices=["always", "important", "never"])
 
     n = sub.add_parser("narrate", help="narrate screenshots, one after another")
     common(n)

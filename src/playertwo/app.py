@@ -46,13 +46,27 @@ class Events:
     def __init__(self):
         self.subs: set[asyncio.Queue] = set()
         self.log_path: Path | None = None
+        self.recent: list[dict] = []
+        self.sticky: dict[str, dict] = {}
+
+    def snapshot(self) -> list[dict]:
+        """What a window that just opened needs: the latest state, then recent history."""
+        return list(self.sticky.values()) + self.recent[-30:]
 
     def emit(self, kind: str, **data) -> None:
+        if isinstance(data.get("text"), str):
+            from .voice import tidy
+
+            data["text"] = tidy(data["text"])
         ev = {"t": time.time(), "kind": kind, **data}
+        if kind in ("ready", "status", "frame", "settings"):
+            self.sticky[kind] = ev
+        elif kind in ("say", "heard", "ask", "press", "hold", "error"):
+            self.recent = [*self.recent[-59:], ev]
         for q in list(self.subs):
             if q.qsize() < 200:
                 q.put_nowait(ev)
-        if self.log_path:
+        if self.log_path and kind != "frame":
             with self.log_path.open("a") as f:
                 f.write(json.dumps(ev) + "\n")
 
@@ -64,8 +78,8 @@ class Session:
         self.muse = Muse(settings)
         self.mixer = Mixer(sink)
         self.voice = Voice(settings, self.mixer)
-        self.capture = capture or auto_capture()
-        self.controls = open_controls(controls or settings.controls)
+        self.capture = capture or auto_capture(settings.window)
+        self.controls = open_controls(controls or settings.controls, focus=self.focus_game)
         self.narrator = Narrator(self.muse, settings.verbosity, settings.game,
                                  settings.language, settings.team_up)
         self.watcher = ChangeWatcher()
@@ -79,9 +93,18 @@ class Session:
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
         self.answer: asyncio.Future[str] | None = None
-        self.agent = Agent(self.muse, self.controls, self.grab_now, self.agent_say,
+        self.agent = Agent(self.muse, self.controls, lambda: self.grab_now(show=True),
+                           self.agent_say,
                            game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
-                           language=settings.language)
+                           language=settings.language, on_action=self.on_action)
+        self.status = ""
+
+    def focus_game(self) -> None:
+        target = getattr(self.capture, "target", None)
+        if target and target.get("address"):
+            from .screen import hypr_focus
+
+            hypr_focus(target["address"])
 
     def spawn(self, coro) -> asyncio.Task:
         """Start a background task and keep a reference so it isn't collected mid-run."""
@@ -90,10 +113,52 @@ class Session:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    async def grab_now(self) -> Frame:
+    async def grab_now(self, show: bool = False) -> Frame:
         frame = await asyncio.to_thread(self.capture.grab)
         self.latest = frame
+        if show:
+            self.show(frame)
         return frame
+
+    def show(self, frame: Frame) -> None:
+        """Send a small copy of the frame to the companion window."""
+        import base64
+        import io
+
+        img = frame.image.convert("RGB")
+        img.thumbnail((720, 405))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=72)
+        self.events.emit("frame", jpeg=base64.b64encode(buf.getvalue()).decode())
+
+    def on_action(self, name: str, args: dict) -> None:
+        if name == "press":
+            self.events.emit("press", buttons=args.get("buttons", []))
+        elif name == "hold":
+            self.events.emit("hold", input=args.get("input", ""),
+                             direction=args.get("direction", ""), ms=args.get("ms", 0))
+
+    def current_status(self) -> str:
+        if self.utt is not None:
+            return "listening"
+        if self.agent_task is not None and not self.agent_task.done():
+            waiting = self.answer is not None and not self.answer.done()
+            if not self.mixer.idle.is_set():
+                return "speaking"
+            return "listening" if waiting else "acting"
+        if not self.mixer.idle.is_set():
+            return "speaking"
+        if self.narrating is not None and not self.narrating.done():
+            return "thinking"
+        return "paused" if self.paused else "watching"
+
+    async def track_status(self) -> None:
+        while True:
+            st = self.current_status()
+            if st != self.status:
+                self.status = st
+                self.events.emit("status", state=st)
+            await asyncio.sleep(0.08)
 
     async def agent_ask(self, question: str, timeout: float = 30.0) -> str:
         """Ask out loud and wait for the next thing the player says."""
@@ -152,6 +217,7 @@ class Session:
             busy = self.agent_task is not None and not self.agent_task.done()
             if self.watcher.update(frame) and not self.paused and not busy:
                 self.events.emit("settled", label=frame.label)
+                self.show(frame)
                 self._start_narration(frame)
             await asyncio.sleep(max(0.0, period - (time.monotonic() - t)))
 
@@ -228,8 +294,14 @@ class Session:
         self.watcher.base = None
         self.watcher.prev = None
 
+    def emit_settings(self) -> None:
+        self.events.emit("settings", verbosity=self.narrator.verbosity,
+                         team_up=self.narrator.team_up, paused=self.paused,
+                         language=self.narrator.language)
+
     async def local(self, action: str) -> None:
         self.events.emit("local", action=action)
+        self.spawn(self._after_local())
         if action == "stop":
             self.voice.stop()
             if self.agent_task and not self.agent_task.done():
@@ -304,6 +376,7 @@ class Session:
             else:
                 self.spawn(self.talk_stop())
         elif cmd == "do" and arg:
+            self.events.emit("heard", text=arg, typed=True)
             self.spawn(self.handle(arg))
         elif cmd in ("stop", "repeat", "describe", "terse", "quiet", "normal", "detailed",
                      "team_up", "solo", "pause", "resume"):
@@ -316,11 +389,23 @@ class Session:
             return f"unknown command: {cmd}"
         return "ok"
 
-    async def run(self) -> None:
+    async def _after_local(self) -> None:
+        await asyncio.sleep(0)
+        self.emit_settings()
+
+    async def run(self, ui: bool = True) -> None:
+        from .web import PORT, serve_ui
+
         await asyncio.to_thread(self.voice.warm_up)
-        self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device)
+        self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device,
+                         game=self.s.game or "Ready when you are", talk_key="F8")
+        self.emit_settings()
+        tasks = [self.watch(), self.serve(), self.track_status()]
+        if ui:
+            tasks.append(serve_ui(self))
+            print(f"Player Two window: http://127.0.0.1:{PORT}/", file=sys.stderr)
         await self.voice.say("Player Two is here. Hold the talk key and tell me what you need.")
-        await asyncio.gather(self.watch(), self.serve())
+        await asyncio.gather(*tasks)
 
     def close(self) -> None:
         self.controls.close()

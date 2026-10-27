@@ -36,27 +36,66 @@ class Capture:
         raise NotImplementedError
 
 
+OWN_TITLES = ("Player Two",)
+
+
+def hypr_clients() -> list[dict]:
+    try:
+        return json.loads(subprocess.check_output(["hyprctl", "-j", "clients"], timeout=2))
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return []
+
+
+def hypr_focus(address: str) -> None:
+    """Give a window keyboard focus (Lua config first, then the classic dispatcher)."""
+    lua = f'hl.dispatch(hl.dsp.focus({{ window = "address:{address}" }}))'
+    r = subprocess.run(["hyprctl", "eval", lua], capture_output=True, text=True, timeout=2, check=False)
+    if r.returncode != 0 or "ok" not in r.stdout:
+        subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{address}"],
+                       capture_output=True, timeout=2, check=False)
+
+
 class HyprlandCapture(Capture):
-    """Captures the monitor that has focus (or a named output) with grim."""
+    """Captures the game's own window with grim, even when something covers it.
 
-    def __init__(self, output: str | None = None):
+    The target is the window whose class or title contains `window`, or else the most
+    recently focused window that isn't Player Two's. Falls back to the whole monitor.
+    """
+
+    def __init__(self, window: str = "", output: str | None = None):
+        self.want = window.lower()
         self.output = output
+        self.target: dict | None = None
+        self._checked = 0.0
 
-    def _focused_output(self) -> str | None:
-        try:
-            mons = json.loads(subprocess.check_output(["hyprctl", "-j", "monitors"], timeout=2))
-            for m in mons:
-                if m.get("focused"):
-                    return m["name"]
-        except (subprocess.SubprocessError, OSError, ValueError):
-            return None
-        return None
+    def pick(self) -> dict | None:
+        clients = [c for c in hypr_clients()
+                   if c.get("mapped", True) and c.get("title") not in OWN_TITLES]
+        if self.want:
+            clients = [c for c in clients if self.want in c.get("class", "").lower()
+                       or self.want in c.get("title", "").lower()]
+        clients.sort(key=lambda c: c.get("focusHistoryID", 99))
+        return clients[0] if clients else None
 
     def grab(self) -> Frame:
-        out = self.output or self._focused_output()
-        cmd = ["grim", "-t", "ppm"] + (["-o", out] if out else []) + ["-"]
+        now = time.monotonic()
+        if self.target is None or now - self._checked > 2.0:
+            self.target = self.pick()
+            self._checked = now
+        if self.target is not None:
+            try:
+                data = subprocess.check_output(
+                    ["grim", "-t", "ppm", "-T", str(self.target["stableId"]), "-"],
+                    timeout=3, stderr=subprocess.DEVNULL)
+                if data:
+                    return Frame(Image.open(io.BytesIO(data)), now,
+                                 label=self.target.get("title", ""))
+            except (subprocess.SubprocessError, OSError, KeyError):
+                pass
+            self.target = None
+        cmd = ["grim", "-t", "ppm"] + (["-o", self.output] if self.output else []) + ["-"]
         data = subprocess.check_output(cmd, timeout=3)
-        return Frame(Image.open(io.BytesIO(data)), time.monotonic())
+        return Frame(Image.open(io.BytesIO(data)), now)
 
 
 class MssCapture(Capture):
@@ -112,13 +151,11 @@ def video_frames(path: Path, fps: float) -> Iterator[Frame]:
     proc.wait()
 
 
-def auto_capture() -> Capture:
+def auto_capture(window: str = "") -> Capture:
     if sys.platform == "win32":
         return MssCapture()
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("grim"):
-        return HyprlandCapture()
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("grim"):
-        return HyprlandCapture()
+        return HyprlandCapture(window)
     return MssCapture()
 
 

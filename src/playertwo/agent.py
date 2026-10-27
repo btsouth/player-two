@@ -71,7 +71,8 @@ class Agent:
                  speak: Callable[[str], Awaitable[None]], game: str = "",
                  max_turns: int = 10, settle_s: float = 0.45,
                  ask: Callable[[str], Awaitable[str]] | None = None,
-                 confirm: str = "important", language: str = "English"):
+                 confirm: str = "important", language: str = "English",
+                 on_action: Callable[[str, dict], None] | None = None):
         self.muse = muse
         self.controls = controls
         self.grab = grab
@@ -80,6 +81,7 @@ class Agent:
         self.max_turns = max_turns
         self.settle_s = settle_s
         self.ask = ask
+        self.on_action = on_action
         self.confirm = confirm
         self.language = language
         self.history: list[str] = []
@@ -94,6 +96,8 @@ class Agent:
         return "\n".join(parts)
 
     async def _act(self, name: str, a: dict) -> str:
+        if self.on_action:
+            self.on_action(name, a)
         if name == "press":
             buttons = [b for b in a.get("buttons", []) if b in BUTTONS][:12]
             gap = int(a.get("gap_ms", 150))

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Player Two</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="app" id="app" data-state="watching">
+  <header class="top">
+    <div class="brand">
+      <svg class="ring" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <radialGradient id="core" cx="50%" cy="45%" r="60%">
+            <stop offset="0" stop-color="#2a2f42"/><stop offset="1" stop-color="#151926"/>
+          </radialGradient>
+        </defs>
+        <circle cx="32" cy="32" r="22" fill="url(#core)"/>
+        <g class="quads" fill="none" stroke-width="6" stroke-linecap="round">
+          <path class="q q1" d="M 12.6 24.0 A 21 21 0 0 1 24.0 12.6"/>
+          <path class="q q2" d="M 40.0 12.6 A 21 21 0 0 1 51.4 24.0"/>
+          <path class="q q3" d="M 51.4 40.0 A 21 21 0 0 1 40.0 51.4"/>
+          <path class="q q4" d="M 24.0 51.4 A 21 21 0 0 1 12.6 40.0"/>
+        </g>
+        <text x="32" y="38" text-anchor="middle" class="ring-label">2</text>
+      </svg>
+      <div class="titles">
+        <h1>Player Two</h1>
+        <p class="game" id="game">Ready when you are</p>
+      </div>
+    </div>
+    <div class="status" id="status" role="status" aria-live="polite">
+      <span class="dot"></span><span id="status-text">Watching</span>
+    </div>
+  </header>
+
+  <section class="now" aria-label="What Player Two is saying">
+    <div class="now-meta"><span class="who" id="now-who">Player Two</span>
+      <span class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
+    <p class="caption" id="caption">Hold the talk key and tell me what you need.</p>
+    <p class="hearing" id="hearing" hidden></p>
+  </section>
+
+  <section class="sees" aria-label="What Player Two sees">
+    <h2 class="label">What I see <span class="live">Live</span></h2>
+    <div class="screen" id="screen">
+      <img id="frame" alt="" hidden>
+      <div class="screen-empty" id="screen-empty">Waiting for the game</div>
+      <div class="presses" id="presses" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <section class="feed-wrap" aria-label="Conversation">
+    <h2 class="label">Conversation</h2>
+    <div class="feed-scroll"><ol class="feed" id="feed"></ol></div>
+  </section>
+
+  <footer class="bottom">
+    <button class="talk" id="talk" aria-label="Hold to talk">
+      <svg class="mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" fill="none" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>Hold <kbd id="talk-key">F8</kbd> to talk</span>
+    </button>
+    <div class="modes" role="radiogroup" aria-label="How much I say">
+      <button role="radio" data-mode="terse">Terse</button>
+      <button role="radio" data-mode="quiet">Quiet</button>
+      <button role="radio" data-mode="normal" aria-checked="true">Normal</button>
+      <button role="radio" data-mode="detailed">Detailed</button>
+    </div>
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

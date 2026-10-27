@@ -43,6 +43,8 @@ class Settings:
     # Input backend: "gamepad", "keyboard", or "auto".
     controls: str = "auto"
     capture: str = "auto"
+    # The game's window: part of its title or class. Empty picks the last focused window.
+    window: str = ""
     game: str = ""
     extra: dict = field(default_factory=dict)
 

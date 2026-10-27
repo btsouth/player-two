@@ -90,8 +90,13 @@ def first_chunk_split(sentence: str, limit: int = 60) -> list[str]:
     return [sentence]
 
 
+def tidy(text: str) -> str:
+    """House style for anything shown or spoken: no dashes as punctuation."""
+    return re.sub(r"\s*[\u2014\u2013]\s*", ", ", text)
+
+
 def clean_for_speech(text: str) -> str:
-    text = re.sub(r"[*_#`>]+", "", text)
+    text = tidy(re.sub(r"[*_#`>]+", "", text))
     text = text.replace("HP", "H.P.").replace("SP", "S.P.")
     return re.sub(r"\s+", " ", text).strip()
 

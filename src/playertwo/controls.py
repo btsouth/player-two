@@ -173,12 +173,16 @@ class WaylandKeys(Controls):
            "lb": "q", "rb": "e", "lt": "z", "rt": "c", "ls": "Shift_L", "rs": "v", "guide": "F1"}
     STICK: ClassVar[dict[str, str]] = {"up": "w", "down": "s", "left": "a", "right": "d"}
 
-    def __init__(self, keymap: dict[str, str] | None = None):
+    def __init__(self, keymap: dict[str, str] | None = None, focus=None):
         self.map = {**self.MAP, **(keymap or {})}
+        # Keys go to whatever has focus, so hand focus back to the game first.
+        self.focus = focus
 
     def _run(self, *args: str) -> None:
         import subprocess
 
+        if self.focus:
+            self.focus()
         subprocess.run(["wtype", *args], check=True, timeout=5)
 
     def press(self, button: str, hold_ms: int = 60) -> None:
@@ -192,11 +196,11 @@ class WaylandKeys(Controls):
         self._run(*args)
 
 
-def open_controls(kind: str = "auto") -> Controls:
+def open_controls(kind: str = "auto", focus=None) -> Controls:
     if kind == "dry-run":
         return DryRun()
     if kind == "keyboard":
-        return WaylandKeys()
+        return WaylandKeys(focus=focus)
     if sys.platform == "win32":
         return WindowsPad()
     return LinuxPad()
