@@ -219,3 +219,20 @@ def test_hud_reads_bar_and_warns():
         levels += [a.level for a in watch.update(bar(f), float(i))]
         assert abs(m.history[-1] - f) < 0.05
     assert levels == ["low", "critical", "recovered"]
+
+
+def test_where_questions_and_wording():
+    from playertwo.locate import Match, describe, parse_boxes, where_request
+
+    assert where_request("Where's the door?") == "door"
+    assert where_request("how many enemies on screen") == "enemies"
+    assert where_request("use Zio on the left one") is None
+    boxes = parse_boxes("<0f>0<|box;x1=0;y1=0;x2=100;y2=100;w=1000;h=1000|><|mask;x=0|>,"
+                        "1<|box;x1=800;y1=400;x2=900;y2=600;w=1000;h=1000|>")
+    assert [round(b.cx, 2) for b in boxes] == [0.05, 0.85]
+    assert describe("doors", []) == "I can't find any doors on screen."
+    assert describe("door", [Match(0.1, 0.5, 0.05)]) == "Found it: on the far left."
+    two = [Match(0.7, 0.5, 0.01), Match(0.3, 0.5, 0.01)]
+    assert describe("shadows", two) == "2 shadows: one on the left, one on the right."
+    many = [Match(x, 0.5, 0.01) for x in (0.1, 0.2, 0.5, 0.9)]
+    assert describe("desks", many) == "4 desks: 2 on the left, 1 in the middle, 1 on the right."

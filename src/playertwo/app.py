@@ -276,6 +276,12 @@ class Session:
             if pattern.search(text.strip()):
                 await self.local(action)
                 return
+        from .locate import where_request
+
+        phrase = where_request(text)
+        if phrase:
+            self.spawn(self.where(phrase))
+            return
         if self.agent_task and not self.agent_task.done():
             self.agent_task.cancel()
         self.agent_task = asyncio.create_task(self._agent(text))
@@ -303,6 +309,28 @@ class Session:
             if a.level in ("low", "critical", "recovered") or "stamina" not in a.meter:
                 words = HUD_WORDS[a.level].format(name=a.meter.capitalize())
                 self.spawn(self.voice.say(words, interrupt=a.level == "critical"))
+
+    async def where(self, phrase: str) -> None:
+        """Find things with SAM 3.1, say where they are, and ping each one from its side."""
+        from .locate import describe, locate, point
+
+        if self.narrating and not self.narrating.done():
+            self.narrating.cancel()
+        frame = await self.grab_now(show=True)
+        matches, secs = await locate(self.muse, frame.image, phrase)
+        how = "sam-3.1"
+        if not matches:
+            matches, how = await point(self.muse, frame.image, phrase), "muse-spark"
+        text = describe(phrase, matches)
+        self.events.emit("where", phrase=phrase, via=how, seconds=round(secs, 2),
+                         points=[[round(m.cx, 3), round(m.cy, 3)] for m in matches[:12]])
+        self.events.emit("say", text=text, source="agent")
+        self.narrator.recent.append(text)
+        await self.voice.say(text)
+        await self.voice.wait_idle(10)
+        for m in sorted(matches, key=lambda m: m.cx)[:8]:
+            self.voice.cue("ping", pan=m.pan)
+            await asyncio.sleep(0.28)
 
     async def start_hud(self) -> None:
         from .hud import HudWatch, calibrate

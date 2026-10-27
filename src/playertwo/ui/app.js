@@ -102,6 +102,10 @@ function handle(ev) {
       break;
     case "frame": {
       const img = $("frame");
+      img.onload = () => {
+        // Match the box to the game's shape so markers land where things really are.
+        $("screen").style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+      };
       img.src = `data:image/jpeg;base64,${ev.jpeg}`;
       img.hidden = false;
       $("screen-empty").hidden = true;
@@ -133,6 +137,20 @@ function handle(ev) {
       showPresses([ev.input === "left_stick" ? "ls" : ev.input],
         `${ev.direction || ""} ${(ev.ms / 1000).toFixed(1)}s`.trim());
       break;
+    case "where": {
+      const box = $("marks");
+      box.replaceChildren(...(ev.points || []).map(([x, y], i) => {
+        const dot = document.createElement("span");
+        dot.className = "mark";
+        dot.style.left = `${x * 100}%`;
+        dot.style.top = `${y * 100}%`;
+        dot.style.animationDelay = `${i * 0.28}s`;
+        return dot;
+      }));
+      clearTimeout(window.markTimer);
+      window.markTimer = setTimeout(() => box.replaceChildren(), 6000);
+      break;
+    }
     case "settings":
       document.querySelectorAll(".modes button").forEach((b) =>
         b.setAttribute("aria-checked", String(b.dataset.mode === ev.verbosity)));
