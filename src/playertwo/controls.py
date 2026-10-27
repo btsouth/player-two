@@ -1,0 +1,202 @@
+"""Hands for Player Two: a virtual controller plugged in as player two.
+
+On Linux it is a uinput Xbox 360 pad, which SDL, Steam Input and Proton already know.
+On Windows it uses ViGEm through vgamepad. A keyboard backend covers PC-only games, and
+a dry-run backend records presses for tests.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+BUTTONS = ("a", "b", "x", "y", "lb", "rb", "lt", "rt", "start", "back", "guide", "ls", "rs",
+           "up", "down", "left", "right")
+DIRECTIONS = {
+    "up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0),
+    "up_left": (-0.707, -0.707), "up_right": (0.707, -0.707),
+    "down_left": (-0.707, 0.707), "down_right": (0.707, 0.707),
+}
+
+
+class Controls:
+    kind = "base"
+
+    def press(self, button: str, hold_ms: int = 60) -> None:
+        raise NotImplementedError
+
+    def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
+        raise NotImplementedError
+
+    def sequence(self, buttons: list[str], gap_ms: int = 140, hold_ms: int = 60) -> None:
+        for i, b in enumerate(buttons):
+            self.press(b, hold_ms)
+            if i < len(buttons) - 1:
+                time.sleep(gap_ms / 1000)
+
+    def close(self) -> None:
+        pass
+
+
+@dataclass
+class DryRun(Controls):
+    kind = "dry-run"
+    log: list[str] = field(default_factory=list)
+
+    def press(self, button: str, hold_ms: int = 60) -> None:
+        self.log.append(button)
+
+    def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
+        self.log.append(f"{which}:{direction}:{ms}")
+
+
+class LinuxPad(Controls):
+    kind = "gamepad"
+
+    def __init__(self):
+        from evdev import AbsInfo, UInput
+        from evdev import ecodes as e
+
+        self.e = e
+        stick = AbsInfo(0, -32768, 32767, 16, 128, 0)
+        trig = AbsInfo(0, 0, 255, 0, 0, 0)
+        hat = AbsInfo(0, -1, 1, 0, 0, 0)
+        caps = {
+            e.EV_KEY: [e.BTN_A, e.BTN_B, e.BTN_X, e.BTN_Y, e.BTN_TL, e.BTN_TR, e.BTN_SELECT,
+                       e.BTN_START, e.BTN_MODE, e.BTN_THUMBL, e.BTN_THUMBR],
+            e.EV_ABS: [(e.ABS_X, stick), (e.ABS_Y, stick), (e.ABS_RX, stick),
+                       (e.ABS_RY, stick), (e.ABS_Z, trig), (e.ABS_RZ, trig),
+                       (e.ABS_HAT0X, hat), (e.ABS_HAT0Y, hat)],
+        }
+        # Same ids as a wired Xbox 360 pad, so games pick the right button layout.
+        self.ui = UInput(caps, name="Microsoft X-Box 360 pad", vendor=0x045E,
+                         product=0x028E, version=0x110, bustype=e.BUS_USB)
+        self.keys = {"a": e.BTN_A, "b": e.BTN_B, "x": e.BTN_X, "y": e.BTN_Y, "lb": e.BTN_TL,
+                     "rb": e.BTN_TR, "back": e.BTN_SELECT, "start": e.BTN_START,
+                     "guide": e.BTN_MODE, "ls": e.BTN_THUMBL, "rs": e.BTN_THUMBR}
+        self.hats = {"up": (e.ABS_HAT0Y, -1), "down": (e.ABS_HAT0Y, 1),
+                     "left": (e.ABS_HAT0X, -1), "right": (e.ABS_HAT0X, 1)}
+        self.triggers = {"lt": e.ABS_Z, "rt": e.ABS_RZ}
+
+    def _syn(self) -> None:
+        self.ui.syn()
+
+    def press(self, button: str, hold_ms: int = 60) -> None:
+        e = self.e
+        if button in self.keys:
+            self.ui.write(e.EV_KEY, self.keys[button], 1)
+            self._syn()
+            time.sleep(hold_ms / 1000)
+            self.ui.write(e.EV_KEY, self.keys[button], 0)
+        elif button in self.hats:
+            axis, v = self.hats[button]
+            self.ui.write(e.EV_ABS, axis, v)
+            self._syn()
+            time.sleep(hold_ms / 1000)
+            self.ui.write(e.EV_ABS, axis, 0)
+        elif button in self.triggers:
+            self.ui.write(e.EV_ABS, self.triggers[button], 255)
+            self._syn()
+            time.sleep(hold_ms / 1000)
+            self.ui.write(e.EV_ABS, self.triggers[button], 0)
+        else:
+            raise ValueError(f"unknown button {button}")
+        self._syn()
+
+    def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
+        e = self.e
+        ax, ay = (e.ABS_X, e.ABS_Y) if which == "left" else (e.ABS_RX, e.ABS_RY)
+        dx, dy = DIRECTIONS[direction]
+        v = 32767 * max(0.1, min(1.0, strength))
+        self.ui.write(e.EV_ABS, ax, int(dx * v))
+        self.ui.write(e.EV_ABS, ay, int(dy * v))
+        self._syn()
+        time.sleep(ms / 1000)
+        self.ui.write(e.EV_ABS, ax, 0)
+        self.ui.write(e.EV_ABS, ay, 0)
+        self._syn()
+
+    def close(self) -> None:
+        self.ui.close()
+
+
+class WindowsPad(Controls):
+    kind = "gamepad"
+
+    def __init__(self):
+        import vgamepad as vg
+
+        self.vg = vg
+        self.pad = vg.VX360Gamepad()
+        B = vg.XUSB_BUTTON
+        self.keys = {"a": B.XUSB_GAMEPAD_A, "b": B.XUSB_GAMEPAD_B, "x": B.XUSB_GAMEPAD_X,
+                     "y": B.XUSB_GAMEPAD_Y, "lb": B.XUSB_GAMEPAD_LEFT_SHOULDER,
+                     "rb": B.XUSB_GAMEPAD_RIGHT_SHOULDER, "back": B.XUSB_GAMEPAD_BACK,
+                     "start": B.XUSB_GAMEPAD_START, "guide": B.XUSB_GAMEPAD_GUIDE,
+                     "ls": B.XUSB_GAMEPAD_LEFT_THUMB, "rs": B.XUSB_GAMEPAD_RIGHT_THUMB,
+                     "up": B.XUSB_GAMEPAD_DPAD_UP, "down": B.XUSB_GAMEPAD_DPAD_DOWN,
+                     "left": B.XUSB_GAMEPAD_DPAD_LEFT, "right": B.XUSB_GAMEPAD_DPAD_RIGHT}
+
+    def press(self, button: str, hold_ms: int = 60) -> None:
+        if button in ("lt", "rt"):
+            setter = self.pad.left_trigger if button == "lt" else self.pad.right_trigger
+            setter(255)
+            self.pad.update()
+            time.sleep(hold_ms / 1000)
+            setter(0)
+        else:
+            self.pad.press_button(self.keys[button])
+            self.pad.update()
+            time.sleep(hold_ms / 1000)
+            self.pad.release_button(self.keys[button])
+        self.pad.update()
+
+    def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
+        dx, dy = DIRECTIONS[direction]
+        s = max(0.1, min(1.0, strength))
+        move = self.pad.left_joystick_float if which == "left" else self.pad.right_joystick_float
+        move(dx * s, -dy * s)
+        self.pad.update()
+        time.sleep(ms / 1000)
+        move(0.0, 0.0)
+        self.pad.update()
+
+
+class WaylandKeys(Controls):
+    """Keyboard through the compositor's virtual keyboard (wtype). Safe in a nested session."""
+
+    kind = "keyboard"
+    MAP: ClassVar[dict[str, str]] = {"a": "Return", "b": "Escape", "x": "BackSpace", "y": "Tab", "start": "Escape",
+           "back": "Tab", "up": "Up", "down": "Down", "left": "Left", "right": "Right",
+           "lb": "q", "rb": "e", "lt": "z", "rt": "c", "ls": "Shift_L", "rs": "v", "guide": "F1"}
+    STICK: ClassVar[dict[str, str]] = {"up": "w", "down": "s", "left": "a", "right": "d"}
+
+    def __init__(self, keymap: dict[str, str] | None = None):
+        self.map = {**self.MAP, **(keymap or {})}
+
+    def _run(self, *args: str) -> None:
+        import subprocess
+
+        subprocess.run(["wtype", *args], check=True, timeout=5)
+
+    def press(self, button: str, hold_ms: int = 60) -> None:
+        key = self.map[button]
+        self._run("-P", key, "-s", str(hold_ms), "-p", key)
+
+    def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
+        keys = [self.STICK[d] for d in direction.split("_")]
+        args = [a for k in keys for a in ("-P", k)] + ["-s", str(ms)]
+        args += [a for k in keys for a in ("-p", k)]
+        self._run(*args)
+
+
+def open_controls(kind: str = "auto") -> Controls:
+    if kind == "dry-run":
+        return DryRun()
+    if kind == "keyboard":
+        return WaylandKeys()
+    if sys.platform == "win32":
+        return WindowsPad()
+    return LinuxPad()

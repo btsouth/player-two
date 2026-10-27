@@ -1,0 +1,318 @@
+"""The live session: watch the screen, narrate, listen, act."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+from .agent import Agent
+from .audio import Mixer
+from .config import Settings
+from .controls import open_controls
+from .listen import Mic, Utterance
+from .muse import Muse
+from .narrator import Narrator
+from .screen import Capture, ChangeWatcher, Frame, auto_capture
+from .voice import Voice
+
+
+def socket_path() -> Path:
+    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    return Path(base) / "player-two.sock"
+
+
+LOCAL = [
+    (re.compile(r"^(stop|quiet|shush|shut up|be quiet|hush)\b", re.IGNORECASE), "stop"),
+    (re.compile(r"^(repeat|say that again|what did (you|they|he|she) say|again)\b", re.IGNORECASE),
+     "repeat"),
+    (re.compile(r"^(describe|what'?s on (the )?screen|where am i|look around)\b", re.IGNORECASE),
+     "describe"),
+    (re.compile(r"\b(talk less|less detail|quieter mode)\b", re.IGNORECASE), "quiet"),
+    (re.compile(r"\b(more detail|talk more|tell me more)\b", re.IGNORECASE), "detailed"),
+    (re.compile(r"^(pause|stop narrating)\b", re.IGNORECASE), "pause"),
+    (re.compile(r"^(resume|start narrating|keep going)\b", re.IGNORECASE), "resume"),
+]
+
+
+class Events:
+    """Fan-out of session events to any connected viewer (the overlay, logs)."""
+
+    def __init__(self):
+        self.subs: set[asyncio.Queue] = set()
+        self.log_path: Path | None = None
+
+    def emit(self, kind: str, **data) -> None:
+        ev = {"t": time.time(), "kind": kind, **data}
+        for q in list(self.subs):
+            if q.qsize() < 200:
+                q.put_nowait(ev)
+        if self.log_path:
+            with self.log_path.open("a") as f:
+                f.write(json.dumps(ev) + "\n")
+
+
+class Session:
+    def __init__(self, settings: Settings, capture: Capture | None = None,
+                 controls: str | None = None, sink: str = "device"):
+        self.s = settings
+        self.muse = Muse(settings)
+        self.mixer = Mixer(sink)
+        self.voice = Voice(settings, self.mixer)
+        self.capture = capture or auto_capture()
+        self.controls = open_controls(controls or settings.controls)
+        self.narrator = Narrator(self.muse, settings.verbosity, settings.game)
+        self.watcher = ChangeWatcher()
+        self.events = Events()
+        self.latest: Frame | None = None
+        self.narrating: asyncio.Task | None = None
+        self.agent_task: asyncio.Task | None = None
+        self.paused = False
+        self.mic: Mic | None = None
+        self.utt: Utterance | None = None
+        self.keywords: list[str] = []
+        self._tasks: set[asyncio.Task] = set()
+        self.agent = Agent(self.muse, self.controls, self.grab_now, self.agent_say,
+                           game=settings.game)
+
+    def spawn(self, coro) -> asyncio.Task:
+        """Start a background task and keep a reference so it isn't collected mid-run."""
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    async def grab_now(self) -> Frame:
+        frame = await asyncio.to_thread(self.capture.grab)
+        self.latest = frame
+        return frame
+
+    async def agent_say(self, text: str) -> None:
+        self.events.emit("say", text=text, source="agent")
+        self.narrator.recent.append(text)
+        await self.voice.say(text, interrupt=False)
+
+    # Narration
+
+    async def _narrate(self, frame: Frame) -> None:
+        t = time.monotonic()
+
+        async def deltas():
+            async for d in self.narrator.narrate(frame):
+                yield d
+
+        text = await self.voice.say_stream(deltas())
+        if text:
+            self.events.emit("say", text=text, source="narrator",
+                             latency=round(time.monotonic() - t, 2))
+
+    def _start_narration(self, frame: Frame, describe: bool = False) -> None:
+        if self.narrating and not self.narrating.done():
+            self.narrating.cancel()
+        if describe:
+            async def run():
+                self.voice.stop()
+                text = await self.voice.say_stream(self.narrator.describe(frame))
+                self.events.emit("say", text=text, source="describe")
+            self.narrating = asyncio.create_task(run())
+        else:
+            self.narrating = asyncio.create_task(self._narrate(frame))
+
+    async def watch(self) -> None:
+        period = 1.0 / self.s.watch_fps
+        while True:
+            t = time.monotonic()
+            try:
+                frame = await self.grab_now()
+            except Exception as exc:  # noqa: BLE001  keep watching through hiccups
+                self.events.emit("error", where="capture", message=str(exc))
+                await asyncio.sleep(1.0)
+                continue
+            busy = self.agent_task is not None and not self.agent_task.done()
+            if self.watcher.update(frame) and not self.paused and not busy:
+                self.events.emit("settled", label=frame.label)
+                self._start_narration(frame)
+            await asyncio.sleep(max(0.0, period - (time.monotonic() - t)))
+
+    # Talking
+
+    def talk_start(self) -> None:
+        if self.utt is not None:
+            return
+        self.voice.stop()
+        self.voice.cue("listening")
+        if self.agent_task and not self.agent_task.done():
+            self.agent.cancelled = True
+        self.utt = Utterance(self.keywords,
+                             on_partial=lambda p: self.events.emit("hearing", text=p))
+        self.utt.start()
+        self.mic = Mic()
+        self.mic.start()
+        self.spawn(self._pump(self.mic, self.utt))
+
+    async def _pump(self, mic: Mic, utt: Utterance) -> None:
+        while self.utt is utt:
+            try:
+                frame = await asyncio.wait_for(mic.queue.get(), 0.5)
+            except TimeoutError:
+                continue
+            utt.feed(frame)
+
+    async def talk_stop(self) -> None:
+        utt, mic = self.utt, self.mic
+        if utt is None:
+            return
+        self.utt, self.mic = None, None
+        await asyncio.sleep(0.15)  # keep the tail of the last word
+        if mic:
+            while not mic.queue.empty():
+                utt.feed(mic.queue.get_nowait())
+            mic.stop()
+        utt.finish()
+        try:
+            text = await utt.text()
+        except Exception as exc:  # noqa: BLE001
+            self.voice.cue("error")
+            self.events.emit("error", where="listen", message=str(exc))
+            return
+        self.voice.cue("heard")
+        self.events.emit("heard", text=text)
+        if text:
+            await self.handle(text)
+
+    async def handle(self, text: str) -> None:
+        for pattern, action in LOCAL:
+            if pattern.search(text.strip()):
+                await self.local(action)
+                return
+        self.agent_task = asyncio.create_task(self._agent(text))
+
+    async def _agent(self, text: str) -> None:
+        if self.narrating and not self.narrating.done():
+            self.narrating.cancel()
+        self.voice.cue("working")
+        run = await self.agent.run(text, self.latest)
+        self.events.emit("agent", request=text, outcome=run.outcome,
+                         steps=[{"tool": s.tool, "args": s.args} for s in run.steps],
+                         seconds=round(run.seconds, 2))
+        # The agent already said what happened. Count the result as seen.
+        frame = await self.grab_now()
+        self.watcher.update(frame)
+        self.watcher.base = None
+        self.watcher.prev = None
+
+    async def local(self, action: str) -> None:
+        self.events.emit("local", action=action)
+        if action == "stop":
+            self.voice.stop()
+            if self.agent_task and not self.agent_task.done():
+                self.agent.cancelled = True
+        elif action == "repeat":
+            last = self.narrator.recent[-1] if self.narrator.recent else "Nothing yet."
+            await self.voice.say(last)
+        elif action == "describe":
+            frame = await self.grab_now()
+            self._start_narration(frame, describe=True)
+        elif action in ("quiet", "normal", "detailed"):
+            self.narrator.verbosity = action
+            await self.voice.say({"quiet": "Okay, I'll keep it short.",
+                                  "detailed": "Sure, more detail from now on.",
+                                  "normal": "Back to normal."}[action])
+        elif action == "pause":
+            self.paused = True
+            await self.voice.say("Okay, I'll stay quiet until you say resume.")
+        elif action == "resume":
+            self.paused = False
+            self.watcher.force()
+            await self.voice.say("I'm back.")
+
+    # Control socket: hotkeys and the overlay talk to the session through it.
+
+    async def serve(self) -> None:
+        path = socket_path()
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+
+        async def client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+            try:
+                line = (await reader.readline()).decode().strip()
+                if line == "events":
+                    q: asyncio.Queue = asyncio.Queue()
+                    self.events.subs.add(q)
+                    try:
+                        while True:
+                            writer.write((json.dumps(await q.get()) + "\n").encode())
+                            await writer.drain()
+                    finally:
+                        self.events.subs.discard(q)
+                reply = await self.command(line)
+                writer.write((reply + "\n").encode())
+                await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                pass
+            finally:
+                writer.close()
+
+        server = await asyncio.start_unix_server(client, str(path))
+        async with server:
+            await server.serve_forever()
+
+    async def command(self, line: str) -> str:
+        cmd, _, arg = line.partition(" ")
+        if cmd == "talk-start":
+            self.talk_start()
+        elif cmd == "talk-stop":
+            self.spawn(self.talk_stop())
+        elif cmd == "talk":
+            if self.utt is None:
+                self.talk_start()
+            else:
+                self.spawn(self.talk_stop())
+        elif cmd == "do" and arg:
+            self.spawn(self.handle(arg))
+        elif cmd in ("stop", "repeat", "describe", "quiet", "normal", "detailed", "pause",
+                     "resume"):
+            self.spawn(self.local(cmd))
+        elif cmd == "status":
+            u = self.muse.usage
+            return json.dumps({"calls": u.calls, "cost_usd": round(u.cost_usd(), 4),
+                               "paused": self.paused, "verbosity": self.narrator.verbosity})
+        else:
+            return f"unknown command: {cmd}"
+        return "ok"
+
+    async def run(self) -> None:
+        await self.voice.say("Player Two is here. Hold the talk key and tell me what you need.")
+        await asyncio.gather(self.watch(), self.serve())
+
+    def close(self) -> None:
+        self.controls.close()
+        self.mixer.close()
+
+
+async def send(line: str) -> str:
+    reader, writer = await asyncio.open_unix_connection(str(socket_path()))
+    writer.write((line + "\n").encode())
+    await writer.drain()
+    reply = (await reader.readline()).decode().strip()
+    writer.close()
+    return reply
+
+
+def main_run(settings: Settings, controls: str | None = None, log: str | None = None) -> None:
+    session = Session(settings, controls=controls)
+    if log:
+        session.events.log_path = Path(log)
+    try:
+        asyncio.run(session.run())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        session.close()
+        print(f"\n{session.muse.usage.calls} model calls, ${session.muse.usage.cost_usd():.3f}",
+              file=sys.stderr)

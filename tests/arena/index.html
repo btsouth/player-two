@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Arena</title>
+<!-- A tiny JRPG-style scene for testing Player Two end to end: dialogue, a menu with a
+     cursor, a turn-based battle. Keyboard: arrows move, Enter confirms, Escape goes back. -->
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1020; color: #f2f2f2;
+    font: 28px/1.35 "Inter", "Noto Sans", sans-serif; overflow: hidden; }
+  #scene { position: absolute; inset: 0; background: linear-gradient(#24305e, #0d1020 70%); }
+  .enemy { position: absolute; top: 22%; width: 200px; text-align: center; }
+  .enemy .body { width: 140px; height: 160px; margin: 0 auto; border-radius: 50% 50% 20% 20%;
+    background: #6b2fb3; box-shadow: 0 0 40px #b07cff; }
+  .enemy.hurt .body { background: #b3402f; box-shadow: 0 0 40px #ff8a7c; }
+  .enemy.gone { opacity: 0; }
+  .enemy .hp { margin-top: 10px; font-size: 22px; }
+  #box { position: absolute; left: 6%; right: 6%; bottom: 5%; min-height: 150px;
+    background: rgba(10, 12, 30, .92); border: 3px solid #e8c547; border-radius: 14px;
+    padding: 18px 28px; }
+  #name { color: #e8c547; font-weight: 700; }
+  #menu { position: absolute; right: 7%; bottom: 33%; background: rgba(10, 12, 30, .95);
+    border: 3px solid #4fc3f7; border-radius: 12px; padding: 12px 0; min-width: 260px; }
+  #menu div { padding: 4px 26px; }
+  #menu div.sel { background: #4fc3f7; color: #0d1020; font-weight: 700; }
+  #party { position: absolute; left: 6%; top: 4%; font-size: 24px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="scene">
+  <div id="party">Yu &nbsp; HP <span id="php">120</span>/120 &nbsp; SP <span id="psp">40</span>/40</div>
+  <div class="enemy" id="e0" style="left:22%"><div class="body"></div><div class="hp">Shadow A &nbsp;HP <span>80</span></div></div>
+  <div class="enemy" id="e1" style="left:58%"><div class="body"></div><div class="hp">Shadow B &nbsp;HP <span>80</span></div></div>
+  <div id="menu" class="hidden"></div>
+  <div id="box"><div id="name"></div><div id="text"></div></div>
+</div>
+<script>
+const lines = [
+  ["Teacher", "Welcome back, everyone. Before class starts, one announcement."],
+  ["Teacher", "Shadows have been seen near the school gate. Please be careful."],
+  ["Yosuke", "Did you hear that? Let's go take a look after class."],
+  ["", "Two Shadows block the gate! Battle start."],
+];
+const spells = [["Agi", 4, 45], ["Garu", 3, 30], ["Dia", 3, 0]];
+let state = "talk", line = 0, sel = 0, items = [], target = 0, pendingSpell = null;
+const hp = [80, 80];
+let sp = 40;
+const $ = (id) => document.getElementById(id);
+
+function say(name, text) { $("name").textContent = name; $("text").textContent = text; }
+function menu(list) {
+  items = list; sel = 0; $("menu").classList.remove("hidden"); drawMenu();
+}
+function drawMenu() {
+  $("menu").innerHTML = items.map((t, i) => `<div class="${i === sel ? "sel" : ""}">${t}</div>`).join("");
+}
+function hideMenu() { $("menu").classList.add("hidden"); }
+function alive() { return hp.map((h, i) => h > 0 ? i : -1).filter((i) => i >= 0); }
+function drawEnemies() {
+  hp.forEach((h, i) => {
+    const el = $("e" + i);
+    el.querySelector(".hp span").textContent = Math.max(0, h);
+    el.classList.toggle("hurt", h > 0 && h < 80);
+    el.classList.toggle("gone", h <= 0);
+  });
+  $("psp").textContent = sp;
+}
+function command() {
+  state = "command"; say("", "Yu's turn. Choose a command.");
+  menu(["Attack", "Skill", "Item", "Guard"]);
+}
+function chooseTarget(after) {
+  state = "target"; pendingSpell = after;
+  const live = alive();
+  target = live[0];
+  menu(live.map((i) => "Shadow " + "AB"[i]));
+  say("", "Choose a target.");
+}
+function hit(i, dmg, what) {
+  hp[i] -= dmg; drawEnemies();
+  if (!alive().length) { state = "won"; hideMenu(); say("", "You won! The gate is clear."); return; }
+  say("", `${what} hits Shadow ${"AB"[i]} for ${dmg} damage.`);
+  state = "result"; hideMenu();
+}
+function confirm() {
+  if (state === "talk") {
+    line++;
+    if (line < lines.length) { say(...lines[line]); }
+    if (line === lines.length - 1) { state = "intro"; }
+    return;
+  }
+  if (state === "intro" || state === "result") { command(); return; }
+  if (state === "command") {
+    const c = items[sel];
+    if (c === "Attack") chooseTarget(["Attack", 0, 20]);
+    else if (c === "Skill") { state = "skill"; menu(spells.map((s) => `${s[0]}  ${s[1]} SP`)); say("", "Choose a skill."); }
+    else if (c === "Guard") { say("", "Yu braces for an attack."); state = "result"; hideMenu(); }
+    else say("", "You have no items.");
+    return;
+  }
+  if (state === "skill") {
+    const s = spells[sel];
+    if (s[0] === "Dia") { sp -= s[1]; drawEnemies(); say("", "Yu is already at full health."); state = "result"; hideMenu(); return; }
+    chooseTarget(s); return;
+  }
+  if (state === "target") {
+    const i = alive()[sel];
+    const [name, cost, dmg] = pendingSpell;
+    sp -= cost; hit(i, name === "Attack" ? 20 : dmg, name);
+  }
+}
+function back() {
+  if (state === "skill" || state === "target") command();
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" && !$("menu").classList.contains("hidden")) { sel = (sel + 1) % items.length; drawMenu(); }
+  else if (e.key === "ArrowUp" && !$("menu").classList.contains("hidden")) { sel = (sel + items.length - 1) % items.length; drawMenu(); }
+  else if (e.key === "Enter") confirm();
+  else if (e.key === "Escape") back();
+  e.preventDefault();
+});
+say(...lines[0]); drawEnemies();
+</script>
+</body>
+</html>
