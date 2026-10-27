@@ -5,12 +5,17 @@ set -u
 BIN=/home/bts/Projects/player-two/.venv/bin/player-two
 URL=file:///home/bts/Projects/player-two/tests/arena/index.html
 pass=0; total=0
+# Forward the open-weight brain settings into the box when they're set.
+EXTRA=()
+for v in PLAYER_TWO_BRAIN PLAYER_TWO_OPEN_BASE_URL PLAYER_TWO_OPEN_MODEL MODAL_PROXY_KEY MODAL_PROXY_SECRET; do
+  [ -n "${!v:-}" ] && EXTRA+=(--pass "$v")
+done
 while IFS="|" read -r cmd want <&3; do
   [ -z "$cmd" ] && continue
   total=$((total+1))
   omabox run -- sh -c 'pkill -f "[b]in/player-two run"; pkill -f "[t]ests/arena"; rm -f /tmp/trial.jsonl; true' >/dev/null 2>&1
   omabox run -d --wait -- chromium --kiosk --no-first-run --user-data-dir=/tmp/arena-trial "$URL" >/dev/null 2>&1
-  omabox run -d --pass MODEL_API_KEY -- "$BIN" run --controls keyboard --window Arena \
+  omabox run -d --pass MODEL_API_KEY "${EXTRA[@]}" -- "$BIN" run --controls keyboard --window Arena \
     --game "a small JRPG test scene" --log /tmp/trial.jsonl >/dev/null 2>&1
   omabox wait until --timeout 40 -- sh -c 'grep -q "\"kind\": \"ready\"" /tmp/trial.jsonl' >/dev/null 2>&1
   start=$(date +%s.%N)

@@ -91,15 +91,34 @@ def api_key() -> str:
     )
 
 
-def open_api_key() -> str:
-    """Key for the hosted provider serving Muse Spark Open (Baseten by default)."""
-    for name in ("PLAYER_TWO_OPEN_API_KEY", "BASETEN_API_KEY"):
-        if os.environ.get(name):
-            return os.environ[name].strip()
+def _env_file(path: Path) -> dict[str, str]:
+    out = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            k, sep, v = line.partition("=")
+            if sep and k.strip() and not k.lstrip().startswith("#"):
+                out[k.strip()] = v.strip()
+    return out
+
+
+def open_credentials() -> tuple[str, dict[str, str]]:
+    """API key and extra headers for the provider serving Muse Spark Open.
+
+    Modal shared endpoints authenticate with a proxy token (Modal-Key and Modal-Secret
+    headers, from MODAL_PROXY_KEY/SECRET or ~/.config/player-two/modal.env); Baseten,
+    Fireworks and the rest take a bearer key.
+    """
+    env = {**_env_file(CONFIG_DIR / "modal.env"), **os.environ}
+    if env.get("MODAL_PROXY_KEY") and env.get("MODAL_PROXY_SECRET"):
+        return "modal", {"Modal-Key": env["MODAL_PROXY_KEY"],
+                         "Modal-Secret": env["MODAL_PROXY_SECRET"]}
+    for name in ("PLAYER_TWO_OPEN_API_KEY", "BASETEN_API_KEY", "FIREWORKS_API_KEY"):
+        if env.get(name):
+            return env[name].strip(), {}
     p = CONFIG_DIR / "open-api-key"
     if p.exists():
-        return p.read_text().strip()
+        return p.read_text().strip(), {}
     raise SystemExit(
-        "brain = open needs a provider key. Put it in ~/.config/player-two/open-api-key "
-        "or set BASETEN_API_KEY."
+        "brain = open needs provider credentials: a Modal proxy token in "
+        "~/.config/player-two/modal.env, or a key in ~/.config/player-two/open-api-key."
     )

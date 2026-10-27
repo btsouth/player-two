@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 from PIL import Image
 
-from .config import Settings, api_key, open_api_key
+from .config import Settings, api_key, open_credentials
 
 
 def image_part(img: Image.Image, max_side: int = 1280, quality: int = 82) -> dict:
@@ -57,8 +57,9 @@ class Muse:
         # SAM 3.1 and anything Meta-only always go through Meta Model API.
         self.client = AsyncOpenAI(base_url=settings.base_url, api_key=api_key(), max_retries=2)
         if settings.brain == "open":
-            self.brain = AsyncOpenAI(base_url=settings.open_base_url, api_key=open_api_key(),
-                                     max_retries=2)
+            key, headers = open_credentials()
+            self.brain = AsyncOpenAI(base_url=settings.open_base_url, api_key=key,
+                                     default_headers=headers, max_retries=2)
             self.model = settings.open_model
         else:
             self.brain = self.client
