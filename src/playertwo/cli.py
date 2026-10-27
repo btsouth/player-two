@@ -28,7 +28,7 @@ async def _narrate(args) -> None:
 
     s = _settings(args)
     muse = Muse(s)
-    nar = Narrator(muse, s.verbosity, s.game)
+    nar = Narrator(muse, s.verbosity, s.game, s.language, s.team_up)
     voice = None
     if args.speak or args.wav:
         from .audio import Mixer
@@ -108,7 +108,8 @@ async def _ask(args) -> None:
     async def speak(text: str) -> None:
         print(f"  says: {text}")
 
-    agent = Agent(muse, controls, grab, speak, game=s.game)
+    agent = Agent(muse, controls, grab, speak, game=s.game, confirm=s.confirm,
+                  language=s.language)
     run = await agent.run(" ".join(args.request))
     for st in run.steps:
         print(f"  {st.t:5.2f}s {st.tool} {st.args}")

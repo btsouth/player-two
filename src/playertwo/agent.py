@@ -109,8 +109,7 @@ class Agent:
 
     def system(self) -> str:
         parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]
-        if self.language.lower() not in ("english", "british english"):
-            parts.append(LANGUAGE.format(language=self.language))
+        parts.append(LANGUAGE.format(language=self.language))
         if self.game:
             parts.append(GAME_CONTEXT.format(game=self.game))
         return "\n".join(parts)

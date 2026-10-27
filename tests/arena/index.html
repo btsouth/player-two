@@ -42,6 +42,13 @@ const lines = [
   ["Yosuke", "Did you hear that? Let's go take a look after class."],
   ["", "Two Shadows block the gate! Battle start."],
 ];
+if (new URLSearchParams(location.search).get("lang") === "ja") {
+  lines.splice(0, lines.length,
+    ["先生", "みんな、おかえり。授業の前にひとつお知らせがある。"],
+    ["先生", "校門の近くでシャドウが目撃された。気をつけるように。"],
+    ["陽介", "聞いたか？放課後に見に行こうぜ。"],
+    ["", "シャドウが二体、校門をふさいでいる！戦闘開始。"]);
+}
 const spells = [["Agi", 4, 45], ["Garu", 3, 30], ["Dia", 3, 0]];
 let state = "talk", line = 0, sel = 0, items = [], target = 0, pendingSpell = null;
 const hp = [80, 80];

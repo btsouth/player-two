@@ -33,8 +33,7 @@ class Narrator:
 
     def system(self) -> str:
         parts = [NARRATOR, VERBOSITY.get(self.verbosity, "")]
-        if self.language.lower() not in ("english", "british english"):
-            parts.append(LANGUAGE.format(language=self.language))
+        parts.append(LANGUAGE.format(language=self.language))
         if self.team_up:
             parts.append(TEAM_UP)
         if self.game:

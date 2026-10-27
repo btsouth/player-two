@@ -45,8 +45,10 @@ VERBOSITY = {
 }
 
 LANGUAGE = """\
-Speak {language}. If on-screen text is in another language, read it out translated into \
-{language}, keeping character names as they are. Never mention that you translated."""
+Speak {language}. On-screen text in any other language (dialogue, menus, names of items \
+and skills) must be read out translated into {language}; never read it in the original \
+language. Keep character names, written the way a {language} speaker would say them. \
+Never mention that you translated."""
 
 TEAM_UP = """\
 This game has its own screen narrator that reads its menus. Don't read menus, settings \
