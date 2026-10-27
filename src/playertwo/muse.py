@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 from PIL import Image
 
-from .config import Settings, api_key
+from .config import Settings, api_key, open_api_key
 
 
 def image_part(img: Image.Image, max_side: int = 1280, quality: int = 82) -> dict:
@@ -54,22 +54,49 @@ class Usage:
 class Muse:
     def __init__(self, settings: Settings):
         self.s = settings
+        # SAM 3.1 and anything Meta-only always go through Meta Model API.
         self.client = AsyncOpenAI(base_url=settings.base_url, api_key=api_key(), max_retries=2)
+        if settings.brain == "open":
+            self.brain = AsyncOpenAI(base_url=settings.open_base_url, api_key=open_api_key(),
+                                     max_retries=2)
+            self.model = settings.open_model
+        else:
+            self.brain = self.client
+            self.model = settings.model
         self.usage = Usage()
+        self._effort_ok = True
+
+    def _extra(self, effort: str, key: str) -> dict:
+        """Parameters only some providers accept."""
+        extra: dict = {}
+        if self._effort_ok:
+            extra["reasoning_effort"] = effort
+        if self.s.brain != "open":
+            extra["prompt_cache_key"] = key
+        return extra
+
+    async def _create(self, key: str, effort: str, **kw):
+        from openai import BadRequestError
+
+        try:
+            return await self.brain.chat.completions.create(
+                model=self.model, **kw, **self._extra(effort, key))
+        except BadRequestError:
+            if not self._effort_ok:
+                raise
+            self._effort_ok = False  # this provider doesn't take reasoning_effort
+            return await self.brain.chat.completions.create(
+                model=self.model, **kw, **self._extra(effort, key))
 
     async def stream(
         self, messages: list[dict], effort: str | None = None, max_tokens: int = 1500
     ) -> AsyncIterator[str]:
         """Yield text deltas as they arrive."""
         t = time.monotonic()
-        stream = await self.client.chat.completions.create(
-            model=self.s.model,
-            messages=messages,
-            reasoning_effort=effort or self.s.effort,
-            max_completion_tokens=max_tokens,
-            stream=True,
+        stream = await self._create(
+            "player-two", effort or self.s.effort,
+            messages=messages, max_completion_tokens=max_tokens, stream=True,
             stream_options={"include_usage": True},
-            prompt_cache_key="player-two",
         )
         usage = None
         async for chunk in stream:
@@ -83,13 +110,10 @@ class Muse:
         self, messages: list[dict], effort: str | None = None, max_tokens: int = 3000
     ) -> dict:
         t = time.monotonic()
-        r = await self.client.chat.completions.create(
-            model=self.s.model,
-            messages=messages,
-            reasoning_effort=effort or self.s.effort,
-            max_completion_tokens=max_tokens,
+        r = await self._create(
+            "player-two", effort or self.s.effort,
+            messages=messages, max_completion_tokens=max_tokens,
             response_format={"type": "json_object"},
-            prompt_cache_key="player-two",
         )
         self.usage.add(r.usage, time.monotonic() - t)
         return json.loads(r.choices[0].message.content or "{}")
@@ -100,14 +124,10 @@ class Muse:
     ):
         """One tool-calling turn. Returns the assistant message."""
         t = time.monotonic()
-        r = await self.client.chat.completions.create(
-            model=self.s.model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            reasoning_effort=effort or self.s.agent_effort,
+        r = await self._create(
+            "player-two-agent", effort or self.s.agent_effort,
+            messages=messages, tools=tools, tool_choice="auto",
             max_completion_tokens=max_tokens,
-            prompt_cache_key="player-two-agent",
         )
         self.usage.add(r.usage, time.monotonic() - t)
         return r.choices[0].message

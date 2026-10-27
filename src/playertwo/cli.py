@@ -14,7 +14,7 @@ from .config import Settings
 def _settings(args) -> Settings:
     s = Settings.load()
     for name in ("game", "verbosity", "voice", "model", "effort", "window", "language",
-                 "confirm"):
+                 "confirm", "brain"):
         v = getattr(args, name, None)
         if v:
             setattr(s, name, v)
@@ -157,6 +157,8 @@ def main(argv: list[str] | None = None) -> None:
         sp.add_argument("--window", help="part of the game window's title or class")
         sp.add_argument("--language", help="language to speak, e.g. Spanish")
         sp.add_argument("--confirm", choices=["always", "important", "never"])
+        sp.add_argument("--brain", choices=["meta", "open"],
+                        help="meta: Muse Spark on Meta Model API; open: Muse Spark Open")
 
     n = sub.add_parser("narrate", help="narrate screenshots, one after another")
     common(n)

@@ -28,6 +28,11 @@ class Settings:
     # Agent turns (voice commands) get a little more thought.
     agent_effort: str = "low"
     base_url: str = "https://api.meta.ai/v1"
+    # Which Muse Spark does the thinking: "meta" (Meta Model API) or "open" (the open-weight
+    # Muse Spark Open on a hosted provider, Baseten by default).
+    brain: str = "meta"
+    open_base_url: str = "https://inference.baseten.co/v1"
+    open_model: str = "meta-models/muse-spark-open-1026"
     # Kokoro voice. Empty means the default voice for `language`.
     voice: str = ""
     speech_rate: float = 1.1
@@ -83,4 +88,18 @@ def api_key() -> str:
     raise SystemExit(
         "No Meta Model API key found. Put it in ~/.config/player-two/api-key "
         "or set MODEL_API_KEY."
+    )
+
+
+def open_api_key() -> str:
+    """Key for the hosted provider serving Muse Spark Open (Baseten by default)."""
+    for name in ("PLAYER_TWO_OPEN_API_KEY", "BASETEN_API_KEY"):
+        if os.environ.get(name):
+            return os.environ[name].strip()
+    p = CONFIG_DIR / "open-api-key"
+    if p.exists():
+        return p.read_text().strip()
+    raise SystemExit(
+        "brain = open needs a provider key. Put it in ~/.config/player-two/open-api-key "
+        "or set BASETEN_API_KEY."
     )
