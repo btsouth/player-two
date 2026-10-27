@@ -40,6 +40,10 @@ LOCAL = [
 ]
 
 
+HUD_WORDS = {"low": "{name} low.", "critical": "{name} critical!",
+             "recovered": "{name} back up.", "empty": "Out of {name}."}
+
+
 class Events:
     """Fan-out of session events to any connected viewer (the overlay, logs)."""
 
@@ -93,6 +97,7 @@ class Session:
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
         self.answer: asyncio.Future[str] | None = None
+        self.hud = None
         self.agent = Agent(self.muse, self.controls, lambda: self.grab_now(show=True),
                            self.agent_say,
                            game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
@@ -214,6 +219,8 @@ class Session:
                 self.events.emit("error", where="capture", message=str(exc))
                 await asyncio.sleep(1.0)
                 continue
+            if self.hud is not None:
+                self.on_hud(self.hud.update(frame.image, frame.t))
             busy = self.agent_task is not None and not self.agent_task.done()
             if self.watcher.update(frame) and not self.paused and not busy:
                 self.events.emit("settled", label=frame.label)
@@ -294,6 +301,31 @@ class Session:
         self.watcher.base = None
         self.watcher.prev = None
 
+    def on_hud(self, alerts) -> None:
+        for a in alerts:
+            cue = {"low": "low", "critical": "critical", "empty": "ping"}.get(a.level)
+            if cue:
+                self.voice.cue(cue)
+            self.events.emit("hud", meter=a.meter, level=a.level, value=round(a.value, 2))
+            if a.level in ("low", "critical", "recovered") or "stamina" not in a.meter:
+                words = HUD_WORDS[a.level].format(name=a.meter.capitalize())
+                self.spawn(self.voice.say(words, interrupt=a.level == "critical"))
+
+    async def start_hud(self) -> None:
+        from .hud import HudWatch, calibrate
+
+        frame = await self.grab_now()
+        meters = await calibrate(self.muse, frame.image)
+        if not meters:
+            await self.voice.say("I can't find any health or stamina bars on this screen.")
+            return
+        self.hud = HudWatch(meters)
+        self.s.watch_fps = max(self.s.watch_fps, 12.0)
+        names = ", ".join(m.name for m in meters)
+        await self.voice.say(f"Okay, I'm watching your {names}. I'll warn you when it "
+                             "gets low.")
+        self.events.emit("hud_on", meters=[m.name for m in meters])
+
     def emit_settings(self) -> None:
         self.events.emit("settings", verbosity=self.narrator.verbosity,
                          team_up=self.narrator.team_up, paused=self.paused,
@@ -325,6 +357,11 @@ class Session:
         elif action == "solo":
             self.narrator.team_up = False
             await self.voice.say("Okay, I'll read the menus too.")
+        elif action == "hud":
+            await self.start_hud()
+        elif action == "hud_off":
+            self.hud = None
+            await self.voice.say("Okay, no more health warnings.")
         elif action == "pause":
             self.paused = True
             await self.voice.say("Okay, I'll stay quiet until you say resume.")
@@ -379,7 +416,7 @@ class Session:
             self.events.emit("heard", text=arg, typed=True)
             self.spawn(self.handle(arg))
         elif cmd in ("stop", "repeat", "describe", "terse", "quiet", "normal", "detailed",
-                     "team_up", "solo", "pause", "resume"):
+                     "team_up", "solo", "pause", "resume", "hud", "hud_off"):
             self.spawn(self.local(cmd))
         elif cmd == "status":
             u = self.muse.usage

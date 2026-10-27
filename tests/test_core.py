@@ -200,3 +200,22 @@ class TestNarrator:
         system = nar.system()
         assert "Speak Spanish" in system
         assert "own screen narrator" in system
+
+
+def test_hud_reads_bar_and_warns():
+    from playertwo.hud import HudWatch, Meter
+
+    def bar(fill: float) -> Image.Image:
+        arr = np.full((200, 400, 3), 200, np.uint8)
+        arr[20:30, 40:240] = (60, 60, 60)  # empty track
+        arr[20:30, 40 : 40 + int(200 * fill)] = (170, 40, 40)  # red fill
+        return Image.fromarray(arr)
+
+    m = Meter("health", (0.09, 0.09, 0.61, 0.16), (170, 40, 40), estimate=1.0)
+    m.locate(bar(1.0))
+    watch = HudWatch([m])
+    levels = []
+    for i, f in enumerate([1.0, 0.6, 0.25, 0.1, 0.1, 0.8]):
+        levels += [a.level for a in watch.update(bar(f), float(i))]
+        assert abs(m.history[-1] - f) < 0.05
+    assert levels == ["low", "critical", "recovered"]
