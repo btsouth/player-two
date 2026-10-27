@@ -317,6 +317,8 @@ class Session:
         return "ok"
 
     async def run(self) -> None:
+        await asyncio.to_thread(self.voice.warm_up)
+        self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device)
         await self.voice.say("Player Two is here. Hold the talk key and tell me what you need.")
         await asyncio.gather(self.watch(), self.serve())
 

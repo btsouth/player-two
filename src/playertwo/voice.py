@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -56,6 +57,39 @@ def ensure_models() -> Path:
     return d
 
 
+def load_kokoro():
+    """Kokoro on the GPU when onnxruntime-gpu can use it, otherwise on the CPU."""
+    import onnxruntime as ort
+    from kokoro_onnx import Kokoro
+
+    d = ensure_models()
+    onnx, voices = str(d / MODEL_FILES[0]), str(d / MODEL_FILES[1])
+    ort.set_default_logger_severity(3)
+    if "CUDAExecutionProvider" in ort.get_available_providers():
+        try:
+            if hasattr(ort, "preload_dlls"):
+                ort.preload_dlls()
+            opts = ort.SessionOptions()
+            opts.log_severity_level = 3
+            sess = ort.InferenceSession(
+                onnx, opts, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+            if "CUDAExecutionProvider" in sess.get_providers():
+                return Kokoro.from_session(sess, voices), "gpu"
+        except Exception as exc:  # noqa: BLE001  any CUDA setup problem means CPU
+            print(f"Voice: GPU unavailable ({exc}), using the CPU.", file=sys.stderr)
+    return Kokoro(onnx, voices), "cpu"
+
+
+def first_chunk_split(sentence: str, limit: int = 60) -> list[str]:
+    """Split a long opening sentence at its first comma so speech starts sooner."""
+    if len(sentence) <= limit:
+        return [sentence]
+    i = sentence.find(", ", 12)
+    if 0 < i < limit:
+        return [sentence[: i + 1], sentence[i + 2 :]]
+    return [sentence]
+
+
 def clean_for_speech(text: str) -> str:
     text = re.sub(r"[*_#`>]+", "", text)
     text = text.replace("HP", "H.P.").replace("SP", "S.P.")
@@ -68,10 +102,7 @@ def split_sentences(text: str) -> list[str]:
 
 class Voice:
     def __init__(self, settings: Settings, mixer: Mixer):
-        from kokoro_onnx import Kokoro
-
-        d = ensure_models()
-        self.kokoro = Kokoro(str(d / MODEL_FILES[0]), str(d / MODEL_FILES[1]))
+        self.kokoro, self.device = load_kokoro()
         self.s = settings
         self.mixer = mixer
         self.lang, self.voice_name = voice_for(settings.language, settings.voice)
@@ -79,6 +110,10 @@ class Voice:
         self._lock = asyncio.Lock()
         self.last_spoken = ""
         self.first_audio_ms: list[float] = []
+
+    def warm_up(self) -> None:
+        """The first synthesis is slow (graph setup), so do it before anyone is waiting."""
+        self._synth("Ready.")
 
     def cue(self, name: str, pan: float = 0.0) -> None:
         self.mixer.cue(CUES[name](), pan=pan)
@@ -105,7 +140,10 @@ class Voice:
         self.last_spoken = text
         t0 = time.monotonic()
         first = True
-        for sentence in split_sentences(text):
+        sentences = split_sentences(text)
+        if sentences:
+            sentences = first_chunk_split(sentences[0]) + sentences[1:]
+        for sentence in sentences:
             samples = await asyncio.to_thread(self._synth, sentence)
             if gen != self._gen:
                 return
@@ -138,8 +176,10 @@ class Voice:
             for done in parts[:-1]:
                 done = clean_for_speech(done)
                 if done and done != "<silent>":
+                    chunks = first_chunk_split(done) if not spoken else [done]
                     spoken.append(done)
-                    pending = asyncio.create_task(speak_chunk(done, pending))
+                    for chunk in chunks:
+                        pending = asyncio.create_task(speak_chunk(chunk, pending))
             buf = parts[-1]
         tail = clean_for_speech(buf)
         if tail and tail != "<silent>" and gen == self._gen:
