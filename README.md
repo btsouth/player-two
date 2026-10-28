@@ -41,13 +41,15 @@ strategy, point and click. It does not play fast action games for you; there it 
 | Seeing the screen, deciding what to say, planning button presses, finding HUD bars | **Muse Spark 1.3** (vision, tool calling, structured output, streaming) |
 | Understanding the player's voice, live, with game names as keywords | **Muse Voice Transcribe** (realtime WebSocket) |
 | "Where is it?": exact positions of things on screen, spoken and played as directional sound | **SAM 3.1** |
-| The same narrator and agent on open weights | **Muse Spark Open** (Modal shared endpoint) |
+| The same narrator and agent on open weights (optional) | **Muse Spark Open** (hosted endpoint) |
 
-**Open weights.** The narrator and agent run on **Muse Spark Open**, Meta's open-weight model,
-through a hosted provider (we use a Modal shared endpoint; Baseten and Fireworks work the same
-way). Without provider credentials it uses Muse Spark on Meta Model API instead (`brain = "meta"`
-forces that). SAM 3.1 and speech recognition stay on Meta Model API. On our scored battle trials
-both brains get 8 of 8 right.
+**Open weights, if you want them.** By default the narrator and agent use Muse Spark on Meta Model
+API, which caches the parts of each request that repeat. They also run on **Muse Spark Open**,
+Meta's open-weight model, through a hosted provider (we tested a Modal shared endpoint; Baseten and
+Fireworks work the same way). Once provider credentials are set up, `brain = "auto"` uses it, and
+`brain = "open"` or `"meta"` picks one. SAM 3.1 and speech recognition stay on Meta Model API. On
+our scored battle trials both brains get 8 of 8 right. Hosted open-model endpoints bill every
+token, so they cost more for the same play.
 
 ```toml
 brain = "open"
