@@ -30,6 +30,7 @@ while IFS="|" read -r cmd want <&3; do
   secs=$(python3 -c "import time;print(f'{time.time()-$start:.1f}')")
   title=$(omabox run -- hyprctl -j clients | python3 -c 'import json,sys;print(next((c["title"] for c in json.load(sys.stdin) if c["title"].startswith("Arena")),"?"))')
   if [[ "$title" == *"$want"* ]]; then ok=PASS; pass=$((pass+1)); else ok=FAIL; fi
-  echo "$ok ${secs}s | $cmd | want '$want' got '$title'${q:+ | asked: $q}"
+  split=$(omabox run -- cat /tmp/trial.jsonl 2>/dev/null | python3 "$ROOT/scripts/agent_timing.py")
+  echo "$ok ${secs}s | $cmd | want '$want' got '$title' | $split${q:+ | asked: $q}"
 done 3<&0 </dev/null
 echo "$pass/$total passed"

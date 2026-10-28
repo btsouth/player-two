@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .muse import Muse, image_part
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
-from .screen import Frame
+from .screen import Frame, thumb
 
 # Never the guide button: it opens the Steam overlay or the system menu, not the game.
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
@@ -64,6 +64,11 @@ TOOLS = [
 MOVES = {"up", "down", "left", "right", "lb", "rb"}
 
 
+def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
+    """Fraction of the screen that differs between two frames (small thumbnails)."""
+    return float((abs(thumb(a.image) - thumb(b.image)) > cell).mean())
+
+
 def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
     """Cut a press list just before an `a` that follows cursor movement.
 
@@ -92,12 +97,35 @@ class Run:
     steps: list[Step] = field(default_factory=list)
     outcome: str = ""
     seconds: float = 0.0
+    # Per turn: seconds in the model, acting (presses, waits), and getting the next screen.
+    turns: list[dict] = field(default_factory=list)
+
+
+# Screenshots older than this many turns are dropped from what the model sees again: they
+# make every later turn slower and cost more, and the latest screen is what matters.
+KEEP_IMAGES = 2
+
+
+def trim_images(msgs: list[dict], keep: int = KEEP_IMAGES) -> list[dict]:
+    """A copy of the conversation with all but the newest `keep` screenshots replaced."""
+    seen = 0
+    out: list[dict] = []
+    for m in reversed(msgs):
+        content = m.get("content")
+        if isinstance(content, list) and any(c.get("type") == "image_url" for c in content):
+            seen += 1
+            if seen > keep:
+                m = {**m, "content": [c if c.get("type") != "image_url"
+                                      else {"type": "text", "text": "(an earlier screen)"}
+                                      for c in content]}
+        out.append(m)
+    return out[::-1]
 
 
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
-                 max_turns: int = 24, settle_s: float = 0.45,
+                 max_turns: int = 24, max_settle_s: float = 1.5,
                  ask: Callable[[str], Awaitable[str]] | None = None,
                  confirm: str = "important", language: str = "English",
                  on_action: Callable[[str, dict], None] | None = None,
@@ -108,7 +136,7 @@ class Agent:
         self.speak = speak
         self.game = game
         self.max_turns = max_turns
-        self.settle_s = settle_s
+        self.max_settle_s = max_settle_s
         self.ask = ask
         self.on_action = on_action
         self.look_before_confirm = look_before_confirm
@@ -123,6 +151,30 @@ class Agent:
         if self.game:
             parts.append(GAME_CONTEXT.format(game=self.game))
         return "\n".join(parts)
+
+    async def _noise(self) -> float:
+        """How much the screen changes by itself (fog, idle animation) between two looks."""
+        a = await self.grab()
+        await asyncio.sleep(0.05)
+        return screen_change(a, await self.grab())
+
+    async def _settled(self, noise: float | None) -> Frame:
+        """The screen once it has stopped changing after an action, or after max_settle_s.
+
+        Most menus redraw within a frame or two, so this is usually much quicker than a
+        fixed pause; slow transitions get the time they need.
+        """
+        await asyncio.sleep(0.08)
+        still = max(0.004, (noise or 0.0) * 1.3 + 0.002)
+        prev = await self.grab()
+        end = time.monotonic() + self.max_settle_s
+        while time.monotonic() < end:
+            await asyncio.sleep(0.05)
+            cur = await self.grab()
+            if screen_change(prev, cur) <= still:
+                return cur
+            prev = cur
+        return prev
 
     async def _act(self, name: str, a: dict) -> str:
         if name == "press":
@@ -174,7 +226,10 @@ class Agent:
             if self.cancelled:
                 run.outcome = "cancelled"
                 break
-            msg = await self.muse.tools(msgs, TOOLS)
+            t_model = time.monotonic()
+            msg = await self.muse.tools(trim_images(msgs), TOOLS)
+            turn = {"model_s": round(time.monotonic() - t_model, 2)}
+            run.turns.append(turn)
             calls = msg.tool_calls or []
             msgs.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": [c.model_dump() for c in calls] or None})
@@ -185,6 +240,10 @@ class Agent:
                 break
             acted = False
             finished = None
+            noise = None
+            if any(c.function.name in ("press", "hold") for c in calls):
+                noise = await self._noise()
+            t_act = time.monotonic()
             for c in calls:
                 try:
                     args = json.loads(c.function.arguments or "{}")
@@ -214,9 +273,10 @@ class Agent:
                 await self.speak(finished)
                 run.outcome = finished
                 break
-            if acted:
-                await asyncio.sleep(self.settle_s)
-            frame = await self.grab()
+            turn["act_s"] = round(time.monotonic() - t_act, 2)
+            t_look = time.monotonic()
+            frame = await self._settled(noise) if acted else await self.grab()
+            turn["look_s"] = round(time.monotonic() - t_look, 2)
             msgs.append({"role": "user", "content": [
                 image_part(frame.image, self.muse.s.image_max_side),
                 {"type": "text", "text": "The screen now."},

@@ -350,8 +350,9 @@ class Session:
             await self.voice.say("Sorry, something went wrong on my end. Try that again?")
             return
         self.events.emit("agent", request=text, outcome=run.outcome,
-                         steps=[{"tool": s.tool, "args": s.args} for s in run.steps],
-                         seconds=round(run.seconds, 2))
+                         steps=[{"tool": s.tool, "args": s.args, "t": round(s.t, 2)}
+                                for s in run.steps],
+                         turns=run.turns, seconds=round(run.seconds, 2))
         # The agent already said what happened. Count the result as seen.
         frame = await self.grab_now()
         self.watcher.update(frame)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -125,7 +126,7 @@ class TestAgent:
             asked.append(q)
             return answer
 
-        agent = Agent(muse, pad, grab, speak, ask=ask, settle_s=0)
+        agent = Agent(muse, pad, grab, speak, ask=ask, max_settle_s=0.2)
         return agent, pad, said, asked, muse
 
     def test_presses_then_finishes(self):
@@ -305,3 +306,36 @@ def test_local_commands_only_match_whole_utterances():
     assert local_action("stop attacking and heal Yosuke") is None
     assert local_action("tell me more about Teddie") is None
     assert local_action("describe the enemy on the left") is None
+
+
+def test_trim_images_keeps_only_the_newest_screens():
+    from playertwo.agent import trim_images
+
+    def shot(n):
+        return {"role": "user", "content": [{"type": "image_url", "image_url": {"url": n}},
+                                            {"type": "text", "text": n}]}
+
+    msgs = [{"role": "system", "content": "rules"}, shot("1"), {"role": "assistant",
+            "content": ""}, shot("2"), shot("3")]
+    out = trim_images(msgs, keep=2)
+    urls = [c["image_url"]["url"] for m in out if isinstance(m["content"], list)
+            for c in m["content"] if c["type"] == "image_url"]
+    assert urls == ["2", "3"]
+    assert out[1]["content"][0] == {"type": "text", "text": "(an earlier screen)"}
+    assert msgs[1]["content"][0]["type"] == "image_url"  # the original is untouched
+
+
+def test_screen_change_and_settle_return_quickly_on_a_still_screen():
+    from playertwo.agent import screen_change
+
+    still = frame(blank(), 0)
+    assert screen_change(still, frame(blank(), 1)) == 0.0
+    agent = Agent(FakeMuse([]), DryRun(), None, None, max_settle_s=2.0)
+
+    async def grab():
+        return still
+
+    agent.grab = grab
+    t = time.monotonic()
+    run(agent._settled(0.0))
+    assert time.monotonic() - t < 0.5
