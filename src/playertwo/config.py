@@ -102,7 +102,7 @@ class Settings:
         path = path or CONFIG_DIR / "config.toml"
         data: dict = {}
         if path.exists():
-            data = tomllib.loads(path.read_text())
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
         known = {f.name for f in fields(cls)}
         s = cls(**{k: v for k, v in data.items() if k in known})
         s.extra = {k: v for k, v in data.items() if k not in known}
@@ -128,7 +128,7 @@ def save_settings(changes: dict, path: Path | None = None) -> None:
     import re
 
     path = path or CONFIG_DIR / "config.toml"
-    lines = path.read_text().splitlines() if path.exists() else []
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     todo = dict(changes)
     # Top-level keys end where the first table starts; new ones go just before it.
     end = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
@@ -147,7 +147,7 @@ def save_settings(changes: dict, path: Path | None = None) -> None:
     mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         if hasattr(os, "fchmod"):  # Windows has no fchmod, and no modes to keep
             os.fchmod(f.fileno(), mode)
         f.write("\n".join(lines) + "\n")
@@ -179,7 +179,7 @@ def api_key() -> str:
             return os.environ[name].strip()
     p = CONFIG_DIR / "api-key"
     if p.exists():
-        return p.read_text().strip()
+        return p.read_text(encoding="utf-8").strip()
     raise SystemExit(
         "No Meta Model API key found. Put it in ~/.config/player-two/api-key "
         "or set MODEL_API_KEY."
@@ -189,7 +189,7 @@ def api_key() -> str:
 def _env_file(path: Path) -> dict[str, str]:
     out = {}
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             k, sep, v = line.partition("=")
             if sep and k.strip() and not k.lstrip().startswith("#"):
                 out[k.strip()] = v.strip()
@@ -220,7 +220,7 @@ def open_credentials() -> tuple[str, dict[str, str]]:
             return env[name].strip(), {}
     p = CONFIG_DIR / "open-api-key"
     if p.exists():
-        return p.read_text().strip(), {}
+        return p.read_text(encoding="utf-8").strip(), {}
     raise SystemExit(
         "brain = open needs provider credentials: a Modal proxy token in "
         "~/.config/player-two/modal.env, or a key in ~/.config/player-two/open-api-key."

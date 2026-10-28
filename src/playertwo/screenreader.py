@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import platform
 import shutil
 import subprocess
 import sys
+import sysconfig
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,7 +104,10 @@ NVDA_CLIENT = ("https://download.nvaccess.org/releases/2026.3/nvda_2026.3_contro
 
 def nvda_client() -> Path:
     """Fetch NVDA's controller client DLL once (LGPL 2.1, from NV Access)."""
-    arch = {"AMD64": "x64", "ARM64": "arm64", "x86": "x86"}.get(platform.machine(), "x64")
+    # The DLL has to match this Python, which can differ from Windows itself (x64 Python
+    # on ARM Windows, 32-bit Python on 64-bit Windows).
+    arch = {"win-amd64": "x64", "win-arm64": "arm64", "win32": "x86"}.get(
+        sysconfig.get_platform(), "x64")
     d = CACHE_DIR / "nvda-client"
     dll = d / arch / "nvdaControllerClient.dll"
     if dll.exists():
@@ -137,6 +142,8 @@ class NVDA(Backend):
         except (OSError, RuntimeError) as exc:
             print(f"Can't load NVDA's controller client: {exc}", file=sys.stderr)
             return None
+        for fn in ("speakText", "brailleMessage"):
+            getattr(lib, f"nvdaController_{fn}").argtypes = [ctypes.c_wchar_p]
         return cls(lib) if lib.nvdaController_testIfRunning() == 0 else None
 
     async def speak(self, text: str) -> None:
@@ -156,6 +163,24 @@ class NVDA(Backend):
         return bool(flag.value)
 
 
+_com_lock = threading.Lock()
+_com_pool: ThreadPoolExecutor | None = None
+
+
+def _com() -> ThreadPoolExecutor:
+    """One thread for every COM call. JAWS's COM object belongs to the thread that made
+    it, and a thread has to set COM up before using it."""
+    global _com_pool
+    with _com_lock:
+        if _com_pool is None:
+            import ctypes
+
+            _com_pool = ThreadPoolExecutor(
+                1, "player-two-com",
+                initializer=lambda: ctypes.windll.ole32.CoInitializeEx(None, 2))
+        return _com_pool
+
+
 class OtherWindows(Backend):
     """JAWS and the other Windows screen readers, through accessible_output2."""
 
@@ -164,10 +189,32 @@ class OtherWindows(Backend):
         self.name = type(output).__name__
 
     async def speak(self, text: str) -> None:
-        await asyncio.to_thread(self.out.speak, text, interrupt=False)
+        await asyncio.wrap_future(_com().submit(self.out.speak, text, interrupt=False))
 
     async def stop(self) -> None:
-        await asyncio.to_thread(self.out.silence)
+        await asyncio.wrap_future(_com().submit(self.out.silence))
+
+
+def _other_windows_reader() -> Backend | None:
+    try:
+        from accessible_output2.outputs.auto import Auto
+    except ImportError:
+        return None
+    try:
+        outputs = Auto().outputs
+    except Exception:  # noqa: BLE001  a broken reader install can fail any way
+        return None
+    for out in outputs:
+        # SAPI is Windows' own voice, not a screen reader; our voice is better.
+        name = type(out).__name__.lower()
+        try:
+            if name.startswith("sapi") or name == "nvda" or out.is_system_output():
+                continue
+            if out.is_active():
+                return OtherWindows(out)
+        except Exception:  # noqa: BLE001, S112  a missing reader can fail any way
+            continue
+    return None
 
 
 def find_backend() -> Backend | None:
@@ -176,21 +223,7 @@ def find_backend() -> Backend | None:
         nvda = NVDA.connect()
         if nvda is not None:
             return nvda
-        try:
-            from accessible_output2.outputs.auto import Auto
-        except ImportError:
-            return None
-        for out in Auto().outputs:
-            # SAPI is Windows' own voice, not a screen reader; our voice is better.
-            name = type(out).__name__.lower()
-            if name.startswith("sapi") or name == "nvda" or out.is_system_output():
-                continue
-            try:
-                if out.is_active():
-                    return OtherWindows(out)
-            except Exception:  # noqa: BLE001, S112  a missing reader can fail any way
-                continue
-        return None
+        return _com().submit(_other_windows_reader).result(timeout=20)
     if shutil.which("gdbus"):
         for bus in ORCA:
             r = subprocess.run(bus.call(bus.path, f"{bus.name}.GetVersion"),

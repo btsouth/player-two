@@ -255,8 +255,13 @@ def keyboard(focus=None) -> Controls:
 def pad_problem(exc: BaseException) -> str:
     """Why the virtual controller couldn't be plugged in, said to the player."""
     if sys.platform == "win32":
+        import platform
+
+        if platform.machine().upper() == "ARM64":
+            return ("Virtual controllers don't work on ARM Windows computers, so I'll press "
+                    "keyboard keys instead.")
         return ("I couldn't plug in a virtual controller. It needs the ViGEmBus driver; "
-                "run player-two setup for the link.")
+                "run the Player Two installer again to add it.")
     if isinstance(exc, PermissionError) or "permission" in str(exc).lower():
         return ("I couldn't plug in a virtual controller because I don't have permission "
                 "to. Run player-two setup to fix that.")

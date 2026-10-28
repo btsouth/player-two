@@ -35,6 +35,17 @@ class NoGame(Exception):
     """No window that looks like a game is open yet."""
 
 
+class GameHidden(NoGame):
+    """The game is open but can't be seen right now (minimized, or covered on Windows)."""
+
+
+class BlankScreen(RuntimeError):
+    """The capture has been solid black for a long time."""
+
+    spoken = ("The game looks solid black to me. If it's in exclusive fullscreen, switch it "
+              "to borderless or windowed in its display settings, and I'll see it.")
+
+
 class Capture:
     def grab(self) -> Frame:
         raise NotImplementedError
@@ -154,6 +165,102 @@ class MssCapture(Capture):
         return running_steam_game()
 
 
+class WindowsCapture(Capture):
+    """Captures the game's window on Windows.
+
+    The game is found the way HyprlandCapture finds it (games.pick_game over win32's
+    window list). In front, its part of the screen is copied; behind another window, its
+    own pixels are asked for, and if Windows can't give them, grab raises GameHidden so
+    Player Two never describes some other program as the game.
+
+    Exclusive fullscreen games can't be copied by any of this and come out black; after
+    a while of solid black, grab raises BlankScreen, which says how to fix it.
+    """
+
+    BLANK_S = 20.0
+
+    def __init__(self, window: str = "", whole_screen: bool = False):
+        import mss
+
+        from . import win32
+
+        win32.dpi_aware()
+        self.w = win32
+        self.sct = mss.mss()
+        self.want = window
+        self.whole_screen = whole_screen
+        self.target: dict | None = None
+        self._checked = 0.0
+        self._dark_since: float | None = None
+
+    def pick(self) -> dict | None:
+        from .games import pick_game
+
+        return pick_game(self.w.clients(), self.want)
+
+    def game(self) -> str:
+        from .games import game_name
+
+        return game_name(self.target) if self.target else ""
+
+    def game_key(self) -> str:
+        from .games import game_key
+
+        return game_key(self.target) if self.target else ""
+
+    def focus(self) -> None:
+        if self.target and self.w.alive(self.target["hwnd"]):
+            self.w.focus(self.target["hwnd"])
+
+    def _region(self, rect: tuple[int, int, int, int]) -> Image.Image | None:
+        screen = self.sct.monitors[0]
+        left, top = max(rect[0], screen["left"]), max(rect[1], screen["top"])
+        right = min(rect[2], screen["left"] + screen["width"])
+        bottom = min(rect[3], screen["top"] + screen["height"])
+        if right - left < 16 or bottom - top < 16:
+            return None
+        shot = self.sct.grab({"left": left, "top": top, "width": right - left,
+                              "height": bottom - top})
+        return Image.frombytes("RGB", shot.size, shot.rgb)
+
+    def _blank_check(self, img: Image.Image, now: float) -> None:
+        if img.convert("L").resize((64, 36)).getextrema()[1] > 12:
+            self._dark_since = None
+            return
+        self._dark_since = self._dark_since or now
+        if now - self._dark_since > self.BLANK_S:
+            self._dark_since = now  # say it again only after another while
+            raise BlankScreen("the game's window is solid black")
+
+    def grab(self) -> Frame:
+        now = time.monotonic()
+        if (self.target is None or now - self._checked > 2.0
+                or not self.w.alive(self.target["hwnd"])):
+            self.target = self.pick()
+            self._checked = now
+        t = self.target
+        if t is None:
+            if not self.whole_screen:
+                raise NoGame
+            shot = self.sct.grab(self.sct.monitors[1])
+            return Frame(Image.frombytes("RGB", shot.size, shot.rgb), now)
+        hwnd = t["hwnd"]
+        if self.w.minimized(hwnd):
+            raise GameHidden
+        img = None
+        if self.w.foreground() == hwnd:
+            rect = self.w.frame_rect(hwnd)
+            img = self._region(rect) if rect else None
+        else:
+            img = self.w.print_window(hwnd)
+            if img is None or img.convert("L").getextrema()[1] <= 12:
+                raise GameHidden
+        if img is None:
+            raise GameHidden
+        self._blank_check(img, now)
+        return Frame(img, now, label=t.get("title", ""))
+
+
 class FileCapture(Capture):
     """Replays a folder of screenshots, one per grab. Used for tests and the eval set."""
 
@@ -195,7 +302,7 @@ def video_frames(path: Path, fps: float) -> Iterator[Frame]:
 
 def auto_capture(window: str = "", capture: str = "auto") -> Capture:
     if sys.platform == "win32":
-        return MssCapture()
+        return WindowsCapture(window, whole_screen=capture == "screen")
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("grim"):
         return HyprlandCapture(window, whole_screen=capture == "screen")
     return MssCapture()

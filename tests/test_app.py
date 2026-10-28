@@ -14,9 +14,11 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
     games.steam_libraries.cache_clear()
     games.steam_game_name.cache_clear()
+    games.steam_install_dirs.cache_clear()
     yield tmp_path
     games.steam_libraries.cache_clear()
     games.steam_game_name.cache_clear()
+    games.steam_install_dirs.cache_clear()
 
 
 def client(cls, title, focus, **kw):
@@ -213,3 +215,38 @@ def test_gnome_talk_key_is_added_to_the_existing_shortcuts(monkeypatch):
     assert store[("get", key, "binding")] == "F8"
     desktop.install_gnome_talk_key()  # twice adds it once
     assert store[("get", desktop.GNOME_KEYS, "custom-keybindings")].count("player-two") == 1
+
+
+def test_windows_windows_pick_the_game(home):
+    lib = home / ".local/share/Steam/steamapps"
+    (lib / "common/Hades").mkdir(parents=True)
+    (lib / "appmanifest_1145360.acf").write_text(
+        '"AppState"\n{\n\t"appid"\t\t"1145360"\n\t"name"\t\t"Hades"\n'
+        '\t"installdir"\t\t"Hades"\n}\n')
+    exe = str(lib / "common/Hades/x64/Hades.exe")
+    assert games.steam_app_for_path(exe) == "1145360"
+    assert games.steam_app_for_path(str(home / "Downloads/Hades.exe")) == ""
+
+    def win(cls, title, z, **kw):
+        return client(cls, title, z, **{"fullscreen": 0, "game_dir": False, **kw})
+
+    clients = [
+        win("WindowsTerminal", "player-two", -1),
+        win("msedge", "News", 0, fullscreen=2),
+        win("explorer", "Downloads", 1),
+        win("EpicGamesLauncher", "Epic Games Launcher", 2, game_dir=True),
+        win("Celeste", "Celeste", 3, game_dir=True),
+        win("steam_app_1145360", "Hades", 4),
+    ]
+    assert games.pick_game(clients)["class"] == "steam_app_1145360"
+    assert games.game_name(clients[-1]) == "Hades"
+    assert games.pick_game(clients[:5])["class"] == "Celeste"
+    assert games.pick_game(clients[:4]) is None
+    assert games.pick_game([*clients[:4], win("Indie", "Indie", 5, fullscreen=2)])
+
+
+def test_hidden_or_black_game_is_said_plainly():
+    from playertwo.screen import BlankScreen, GameHidden
+
+    assert "minimized" in trouble_words(GameHidden())[1]
+    assert "borderless" in trouble_words(BlankScreen("black"))[1]

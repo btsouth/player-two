@@ -26,6 +26,12 @@ NOT_GAME_WORDS = {
     "heroic", "bottles", "1password", "bitwarden", "obs", "spotify", "localsend",
     "mpv", "vlc", "celluloid", "totem", "btop", "htop", "thunderbird", "libreoffice",
     "keepassxc", "evince", "zathura", "okular",
+    # Windows programs.
+    "explorer", "windowsterminal", "openconsole", "conhost", "cmd", "powershell", "pwsh",
+    "nvda", "jfw", "narrator", "magnify", "applicationframehost", "textinputhost",
+    "searchhost", "shellexperiencehost", "startmenuexperiencehost", "lockapp",
+    "systemsettings", "taskmgr", "notepad", "epicgameslauncher", "galaxyclient",
+    "eadesktop", "ubisoftconnect", "upc", "playnite", "gamebar", "xboxpcapp",
 }
 # Emulators and game runners: a window of theirs is a game even when it isn't fullscreen.
 GAME_WORDS = {
@@ -70,7 +76,7 @@ def steam_libraries() -> tuple[Path, ...]:
         libs.append(root / "steamapps")
         vdf = root / "steamapps" / "libraryfolders.vdf"
         try:
-            text = vdf.read_text(errors="replace")
+            text = vdf.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for p in _vdf_values(text, "path"):
@@ -84,12 +90,39 @@ def steam_libraries() -> tuple[Path, ...]:
 def steam_game_name(app_id: str) -> str:
     for lib in steam_libraries():
         try:
-            text = (lib / f"appmanifest_{app_id}.acf").read_text(errors="replace")
+            text = (lib / f"appmanifest_{app_id}.acf").read_text(encoding="utf-8",
+                                                                 errors="replace")
         except OSError:
             continue
         names = _vdf_values(text, "name")
         if names:
             return names[0]
+    return ""
+
+
+@cache
+def steam_install_dirs() -> dict[str, str]:
+    """Each Steam game's install folder (lower case) and its app id."""
+    dirs: dict[str, str] = {}
+    for lib in steam_libraries():
+        for acf in lib.glob("appmanifest_*.acf"):
+            try:
+                text = acf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            ids, names = _vdf_values(text, "appid"), _vdf_values(text, "installdir")
+            if ids and names:
+                dirs[str(lib / "common" / names[0]).lower()] = ids[0]
+    return dirs
+
+
+def steam_app_for_path(path: str) -> str:
+    """The Steam app id of the game a program belongs to, from where it's installed."""
+    dirs = steam_install_dirs()
+    for parent in Path(path).parents:
+        app_id = dirs.get(str(parent).lower())
+        if app_id:
+            return app_id
     return ""
 
 
@@ -132,6 +165,8 @@ def looks_like_game(client: dict) -> bool:
         return True
     if set(re.split(r"[.\-_ ]+", low)) & NOT_GAME_WORDS:
         return False
+    if client.get("game_dir"):  # Windows: installed in a games folder
+        return True
     # Hyprland: 2 is fullscreen, 3 fullscreen and maximized (older builds say True).
     return client.get("fullscreen") in (2, 3, True)
 

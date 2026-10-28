@@ -84,7 +84,13 @@ def place_rule(workspace: str | None) -> None:
 
 
 def profile_owner(profile: Path) -> int | None:
-    """The browser process already running this profile (Chromium's lock names it)."""
+    """The browser process already running this profile (Chromium's lock names it).
+
+    Linux only: Windows Chromium keeps no such lock, and there os.kill(pid, 0) would end
+    the process instead of checking it.
+    """
+    if sys.platform == "win32":
+        return None
     try:
         pid = int(os.readlink(profile / "SingletonLock").rsplit("-", 1)[1])
         os.kill(pid, 0)
@@ -171,7 +177,7 @@ def talk_key_bound(settings=None) -> bool:
     if settings is not None and settings.talk_key_set:
         return True
     for p in (omarchy_bindings(), hyprland_conf()):
-        if p and "ctl talk-start" in p.read_text(errors="replace"):
+        if p and "ctl talk-start" in p.read_text(encoding="utf-8", errors="replace"):
             return True
     return gnome() and gnome_talk_key_bound()
 
@@ -239,33 +245,64 @@ def install_talk_key() -> str:
         return ("I couldn't find a Hyprland config. Bind a key to run "
                 f"'{player_two_cmd()} ctl talk-start' on press and "
                 f"'{player_two_cmd()} ctl talk-stop' on release.")
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     if "ctl talk-start" in text:
         return f"{TALK_KEY} is already your talk key."
     backup = target.with_name(f"{target.name}.bak.player-two-{time.strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(target, backup)
-    target.write_text(text.rstrip("\n") + "\n" + bind_lines(player_two_cmd(), lua))
+    target.write_text(text.rstrip("\n") + "\n" + bind_lines(player_two_cmd(), lua), encoding="utf-8")
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         hypr("reload")
     return f"Done. Hold {TALK_KEY} to talk. Your old config is saved as {backup.name}."
 
 
 class WindowsTalkKey:
-    """Watches F8 on Windows, wherever focus is, and calls back on press and release."""
+    """F8 on Windows, wherever focus is: calls back on press and release.
+
+    A registered hot key, so the press goes to Player Two and not also to the game. If
+    another program already owns F8, it falls back to watching the key, which works but
+    lets the game see it too.
+    """
 
     VK: ClassVar[dict[str, int]] = {"F8": 0x77, "F9": 0x78, "F10": 0x79}
+    WM_HOTKEY = 0x0312
+    MOD_NOREPEAT = 0x4000
 
     def __init__(self, on_press, on_release, key: str = TALK_KEY):
         self.on_press, self.on_release, self.vk = on_press, on_release, self.VK[key]
         self.running = True
+        self.swallowed = False
+
+    def _held(self) -> bool:
+        import ctypes
+
+        return bool(ctypes.windll.user32.GetAsyncKeyState(self.vk) & 0x8000)
 
     def run(self) -> None:
         import ctypes
+        from ctypes import wintypes
 
-        state = ctypes.windll.user32.GetAsyncKeyState
+        user32 = ctypes.windll.user32
+        if not user32.RegisterHotKey(None, 1, self.MOD_NOREPEAT, self.vk):
+            self._poll()
+            return
+        self.swallowed = True
+        msg = wintypes.MSG()
+        try:
+            while self.running and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message != self.WM_HOTKEY:
+                    continue
+                self.on_press()
+                while self.running and self._held():
+                    time.sleep(0.015)
+                self.on_release()
+        finally:
+            user32.UnregisterHotKey(None, 1)
+
+    def _poll(self) -> None:
         down = False
         while self.running:
-            now = bool(state(self.vk) & 0x8000)
+            now = self._held()
             if now != down:
                 down = now
                 (self.on_press if down else self.on_release)()
@@ -310,14 +347,22 @@ def install_desktop_entry() -> list[Path]:
 
 
 def install_windows_shortcut() -> Path:
-    """A Start menu shortcut, written with PowerShell's WScript.Shell."""
+    """A Start menu shortcut, written with PowerShell's WScript.Shell.
+
+    Its console window starts minimized, so launching Player Two doesn't take focus from
+    the game; Player Two talks, so the console isn't needed.
+    """
     start = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs"
     link = start / "Player Two.lnk"
     exe = shutil.which("player-two") or sys.executable
     args = "" if exe != sys.executable else "-m playertwo.cli"
     ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:P2_LINK);"
-          "$s.TargetPath=$env:P2_EXE;$s.Arguments=$env:P2_ARGS;"
+          "$s.TargetPath=$env:P2_EXE;$s.Arguments=$env:P2_ARGS;$s.WindowStyle=7;"
           "$s.Description='Player Two';$s.Save()")
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True,
-                   env={**os.environ, "P2_LINK": str(link), "P2_EXE": exe, "P2_ARGS": args})
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                       capture_output=True, text=True, timeout=60, check=False,
+                       env={**os.environ, "P2_LINK": str(link), "P2_EXE": exe,
+                            "P2_ARGS": args})
+    if r.returncode != 0 or not link.exists():
+        raise OSError(f"PowerShell couldn't make the shortcut: {r.stderr.strip()[:200]}")
     return link

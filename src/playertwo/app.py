@@ -17,7 +17,7 @@ from .controls import open_controls
 from .listen import Mic, Utterance
 from .muse import Muse
 from .narrator import Narrator
-from .screen import Capture, ChangeWatcher, Frame, NoGame, auto_capture
+from .screen import BlankScreen, Capture, ChangeWatcher, Frame, GameHidden, NoGame, auto_capture
 from .screenreader import open_voice
 
 # Short commands handled without the model. They must be the whole utterance: "keep going,
@@ -114,6 +114,10 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
         return "slow", "The model is taking too long right now. I'll keep trying."
     if isinstance(exc, TimeoutError):
         return "timeout", "That took too long. Try again?"
+    if isinstance(exc, GameHidden):
+        return "nogame", "The game is minimized or hidden. Bring it back and I'll look again."
+    if isinstance(exc, BlankScreen):
+        return "blank", exc.spoken
     if isinstance(exc, NoGame):
         return "nogame", "I don't see a game yet. Start one and I'll find it."
     if isinstance(exc, openai.RateLimitError):
@@ -472,8 +476,17 @@ class Session:
             t = time.monotonic()
             try:
                 frame = await self.grab_now()
+            except GameHidden:
+                self.update_game()  # still open: no "the game closed"
+                await asyncio.sleep(1.0)
+                continue
             except NoGame:
                 self.set_game(False)
+                await asyncio.sleep(1.0)
+                continue
+            except BlankScreen as exc:
+                self.events.emit("error", where="capture", message=str(exc))
+                self.announce(exc.spoken)
                 await asyncio.sleep(1.0)
                 continue
             except Exception as exc:  # noqa: BLE001  keep watching through hiccups
@@ -956,6 +969,8 @@ class Session:
             frame = await self.grab_now(show=True)
             self.update_game(announce=False)
             self.watcher.update(frame)
+        except GameHidden:
+            self.update_game(announce=False)
         except NoGame:
             self.set_game(False, announce=False)
         except Exception as exc:  # noqa: BLE001  the watch loop will report it
