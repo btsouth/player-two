@@ -52,7 +52,8 @@ ORCA = [
 class Backend:
     name = ""
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str) -> bool:
+        """Hand the line to the screen reader; False if it didn't take it."""
         raise NotImplementedError
 
     async def stop(self) -> None:
@@ -64,9 +65,16 @@ class Backend:
 
 
 async def _run(cmd: list[str]) -> bool:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-    return await proc.wait() == 0
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    except OSError:
+        return False
+    try:
+        return await asyncio.wait_for(proc.wait(), 5) == 0
+    except TimeoutError:
+        proc.kill()
+        return False
 
 
 class Orca(Backend):
@@ -75,10 +83,10 @@ class Orca(Backend):
     def __init__(self, bus: Bus):
         self.bus = bus
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str) -> bool:
         # Orca queues messages at speech-dispatcher's "message" priority, so sentences
         # sent one after another play in order instead of cutting each other off.
-        await _run(self.bus.call(self.bus.path, f"{self.bus.name}.PresentMessage", text))
+        return await _run(self.bus.call(self.bus.path, f"{self.bus.name}.PresentMessage", text))
 
     async def stop(self) -> None:
         if self.bus.speech_path:
@@ -89,8 +97,8 @@ class Orca(Backend):
 class SpeechDispatcher(Backend):
     name = "speech-dispatcher"
 
-    async def speak(self, text: str) -> None:
-        await _run(["spd-say", "--application-name", "player-two", "-P", "message", "--", text])
+    async def speak(self, text: str) -> bool:
+        return await _run(["spd-say", "--application-name", "player-two", "-P", "message", "--", text])
 
     async def stop(self) -> None:
         await _run(["spd-say", "-C"])
@@ -116,7 +124,8 @@ def nvda_client() -> Path:
 
     d.mkdir(parents=True, exist_ok=True)
     zpath = d / "client.zip"
-    urllib.request.urlretrieve(NVDA_CLIENT[0], zpath)
+    with urllib.request.urlopen(NVDA_CLIENT[0], timeout=20) as r:
+        zpath.write_bytes(r.read())
     if hashlib.sha256(zpath.read_bytes()).hexdigest() != NVDA_CLIENT[1]:
         zpath.unlink()
         raise RuntimeError("NVDA controller client download didn't match its checksum")
@@ -133,23 +142,38 @@ class NVDA(Backend):
     def __init__(self, lib):
         self.lib = lib
 
+    @staticmethod
+    def running() -> bool:
+        """NVDA's process is up (checked before fetching its client DLL)."""
+        try:
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq nvda.exe", "/NH"],
+                                 capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return True  # can't tell: try the DLL, which can
+        return "nvda.exe" in out.stdout.lower()
+
     @classmethod
     def connect(cls) -> NVDA | None:
         import ctypes
 
+        if not (CACHE_DIR / "nvda-client").exists() and not cls.running():
+            return None
         try:
             lib = ctypes.windll.LoadLibrary(str(nvda_client()))
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             print(f"Can't load NVDA's controller client: {exc}", file=sys.stderr)
             return None
         for fn in ("speakText", "brailleMessage"):
             getattr(lib, f"nvdaController_{fn}").argtypes = [ctypes.c_wchar_p]
         return cls(lib) if lib.nvdaController_testIfRunning() == 0 else None
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str) -> bool:
         # NVDA queues these behind whatever it's saying, and shows them on a braille display.
-        await asyncio.to_thread(self.lib.nvdaController_speakText, text)
-        await asyncio.to_thread(self.lib.nvdaController_brailleMessage, text)
+        # Non-zero: NVDA quit, or sleep mode is on for the game and it says nothing.
+        ok = await asyncio.to_thread(self.lib.nvdaController_speakText, text) == 0
+        if ok:
+            await asyncio.to_thread(self.lib.nvdaController_brailleMessage, text)
+        return ok
 
     async def stop(self) -> None:
         await asyncio.to_thread(self.lib.nvdaController_cancelSpeech)
@@ -188,8 +212,12 @@ class OtherWindows(Backend):
         self.out = output
         self.name = type(output).__name__
 
-    async def speak(self, text: str) -> None:
-        await asyncio.wrap_future(_com().submit(self.out.speak, text, interrupt=False))
+    async def speak(self, text: str) -> bool:
+        try:
+            await asyncio.wrap_future(_com().submit(self.out.speak, text, interrupt=False))
+        except Exception:  # noqa: BLE001  the reader quit or its COM object broke
+            return False
+        return True
 
     async def stop(self) -> None:
         await asyncio.wrap_future(_com().submit(self.out.silence))
@@ -223,11 +251,17 @@ def find_backend() -> Backend | None:
         nvda = NVDA.connect()
         if nvda is not None:
             return nvda
-        return _com().submit(_other_windows_reader).result(timeout=20)
+        try:
+            return _com().submit(_other_windows_reader).result(timeout=20)
+        except Exception:  # noqa: BLE001  a hung reader: use our own voice
+            return None
     if shutil.which("gdbus"):
         for bus in ORCA:
-            r = subprocess.run(bus.call(bus.path, f"{bus.name}.GetVersion"),
-                               capture_output=True, timeout=3, check=False)
+            try:
+                r = subprocess.run(bus.call(bus.path, f"{bus.name}.GetVersion"),
+                                   capture_output=True, timeout=3, check=False)
+            except (OSError, subprocess.SubprocessError):
+                continue
             if r.returncode == 0:
                 return Orca(bus)
     if shutil.which("spd-say"):
@@ -253,13 +287,28 @@ class ScreenReaderVoice:
         self._gen = 0
         self._busy_until = 0.0
         self._stopping: asyncio.Task | None = None
+        # Player Two's own voice, for lines the screen reader won't take.
+        self._own = None
+        self._own_lock = asyncio.Lock()
 
     def warm_up(self) -> None:
         pass
 
     def idle(self) -> bool:
         """Whether it's probably done talking (screen readers can't always say)."""
+        if self._own is not None and not self._own.idle():
+            return False
         return asyncio.get_running_loop().time() >= self._busy_until
+
+    async def _own_voice(self):
+        async with self._own_lock:
+            if self._own is None:
+                from .voice import Voice
+
+                self._own = await asyncio.to_thread(Voice, self.s, self.mixer)
+                await self._own.say(f"{self.backend.name} isn't taking my lines, so I'll use "
+                                    "my own voice until it does.", interrupt=False)
+            return self._own
 
     def cue(self, name: str, pan: float = 0.0) -> None:
         self.mixer.cue(CUES[name](), pan=pan)
@@ -267,6 +316,8 @@ class ScreenReaderVoice:
     def stop(self) -> None:
         self._gen += 1
         self._busy_until = 0.0
+        if self._own is not None:
+            self._own.stop()
         self._stopping = asyncio.get_running_loop().create_task(self.backend.stop())
 
     async def _send(self, text: str) -> None:
@@ -279,7 +330,17 @@ class ScreenReaderVoice:
         loop = asyncio.get_running_loop()
         start = max(loop.time(), self._busy_until)
         self._busy_until = start + max(0.5, len(text.split()) * self.SECONDS_PER_WORD)
-        await self.backend.speak(text)
+        if await self.backend.speak(text):
+            return
+        self._busy_until = 0.0
+        gen = self._gen
+        try:
+            own = await self._own_voice()
+        except Exception as exc:  # noqa: BLE001  nothing left to speak with
+            print(f"Couldn't speak: {exc}", file=sys.stderr)
+            return
+        if gen == self._gen:
+            await own.say(text, interrupt=False)
 
     async def say(self, text: str, interrupt: bool = True) -> None:
         text = clean_for_speech(text)
@@ -317,6 +378,8 @@ class ScreenReaderVoice:
     async def wait_idle(self, timeout: float = 30.0) -> None:
         loop = asyncio.get_running_loop()
         end = loop.time() + timeout
+        if self._own is not None:
+            await self._own.wait_idle(timeout)
         if await self.backend.speaking() is None:
             await asyncio.sleep(min(timeout, max(0.0, self._busy_until - loop.time())))
             return

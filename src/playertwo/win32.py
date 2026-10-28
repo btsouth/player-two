@@ -250,13 +250,16 @@ def print_window(hwnd: int) -> Image.Image | None:
     try:
         if not user32.PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT):
             return None
+        gdi32.SelectObject(mem, old)  # GetDIBits needs the bitmap deselected
+        old = None
         bmi = BITMAPINFOHEADER(biSize=ctypes.sizeof(BITMAPINFOHEADER), biWidth=w,
                                biHeight=-h, biPlanes=1, biBitCount=32)
         buf = ctypes.create_string_buffer(w * h * 4)
         if gdi32.GetDIBits(mem, bmp, 0, h, buf, ctypes.byref(bmi), 0) != h:
             return None
     finally:
-        gdi32.SelectObject(mem, old)
+        if old is not None:
+            gdi32.SelectObject(mem, old)
         gdi32.DeleteObject(bmp)
         gdi32.DeleteDC(mem)
         user32.ReleaseDC(hwnd, wdc)

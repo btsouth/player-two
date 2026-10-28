@@ -140,6 +140,39 @@ class TestAgent:
         assert said == ["Done."]
         assert result.outcome == "Done."
 
+    def test_holding_the_talk_key_pauses_presses_until_released(self):
+        agent, pad, said, _, _ = self.make([
+            [("press", {"buttons": ["down", "down", "right"]})],
+            [("finish", {"text": "Done."})],
+        ])
+
+        async def go():
+            agent.hold()
+            task = asyncio.create_task(agent.run("buy two potions"))
+            await asyncio.sleep(0.3)
+            assert pad.log == [] and said == []  # nothing while the player talks
+            agent.resume()  # they asked "what?", not stop
+            return await task
+
+        result = run(go())
+        assert pad.log == ["down", "down", "right"] and result.outcome == "Done."
+
+    def test_cancel_while_held_stops_without_pressing(self):
+        agent, pad, said, _, _ = self.make([
+            [("press", {"buttons": ["down", "a"]})],
+            [("finish", {"text": "Done."})],
+        ])
+
+        async def go():
+            agent.hold()
+            task = asyncio.create_task(agent.run("attack"))
+            await asyncio.sleep(0.2)
+            agent.cancel()
+            return await task
+
+        result = run(go())
+        assert pad.log == [] and said == [] and result.outcome == "cancelled"
+
     def test_ask_player_waits_for_answer(self):
         agent, pad, _, asked, muse = self.make([
             [("ask_player", {"question": "Shadow B. Go?"})],
@@ -282,6 +315,7 @@ async def test_screen_reader_streams_sentences_in_order():
 
         async def speak(self, text):
             self.said.append(text)
+            return True
 
         async def stop(self):
             self.stops += 1
@@ -312,7 +346,8 @@ def test_local_commands_only_match_whole_utterances():
     assert local_action("Stop.") == "stop"
     assert local_action("hey, repeat that please") == "repeat"
     assert local_action("What's on screen?") == "describe"
-    assert local_action("resume") == "resume"
+    assert local_action("resume narration") == "resume"
+    assert local_action("pause") is None  # the game's pause: the agent's job
     assert local_action("keep going, but don't leave, I want to stay here") is None
     assert local_action("stop attacking and heal Yosuke") is None
     assert local_action("tell me more about Teddie") is None
@@ -350,3 +385,36 @@ def test_screen_change_and_settle_return_quickly_on_a_still_screen():
     t = time.monotonic()
     run(agent._settled(0.0))
     assert time.monotonic() - t < 0.5
+
+
+async def test_screen_reader_that_refuses_lines_falls_back_to_our_voice(monkeypatch):
+    from playertwo import voice as voice_mod
+    from playertwo.audio import Mixer
+    from playertwo.config import Settings
+    from playertwo.screenreader import Backend, ScreenReaderVoice
+
+    class Asleep(Backend):
+        name = "NVDA"
+
+        async def speak(self, text):
+            return False
+
+    class Own:
+        def __init__(self, s, mixer):
+            self.said = []
+
+        async def say(self, text, interrupt=True):
+            self.said.append(text)
+
+        def idle(self):
+            return True
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(voice_mod, "Voice", Own)
+    v = ScreenReaderVoice(Settings(), Mixer("file"), Asleep())
+    await v.say("Shadow ahead.")
+    await v.say("It's weak to fire.", interrupt=False)
+    assert v._own.said[0].startswith("NVDA isn't taking my lines")
+    assert v._own.said[1:] == ["Shadow ahead.", "It's weak to fire."]

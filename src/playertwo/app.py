@@ -17,7 +17,7 @@ from .controls import open_controls
 from .listen import Mic, Utterance
 from .muse import Muse
 from .narrator import Narrator
-from .screen import BlankScreen, Capture, ChangeWatcher, Frame, GameHidden, NoGame, auto_capture
+from .screen import Capture, ChangeWatcher, Frame, GameHidden, NoGame, auto_capture
 from .screenreader import open_voice
 
 # Short commands handled without the model. They must be the whole utterance: "keep going,
@@ -42,8 +42,9 @@ LOCAL = [
     ((r"watch my (health|hp|stamina)|health warnings( on)?|warn me (about|when) (my )?"
       r"(health|hp) (is )?(gets )?low"), "hud"),
     (r"stop watching my (health|hp|stamina)|(no|stop) (the )?health warnings", "hud_off"),
-    (r"pause|stop narrating|pause narration", "pause"),
-    (r"resume|start narrating|keep narrating|resume narration|unpause", "resume"),
+    # Bare "pause" and "unpause" are about the game, so they go to the agent.
+    (r"stop narrating|pause (the )?narration|pause narrating|stop describing", "pause"),
+    (r"start narrating|keep narrating|resume (the )?narration|resume narrating", "resume"),
     (r"(show|open) (the |your )?(player two )?window", "show"),
     ((r"good ?bye|bye( bye)?|(quit|exit|close|turn off|shut down)"
       r" (player two|yourself)|turn yourself off|that'?s all for (now|today)"), "quit"),
@@ -64,10 +65,10 @@ def local_action(text: str) -> str | None:
     return None
 
 
-HELP = ("Hold the talk key and ask me anything about the game, or tell me what to do, like: "
+HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
         "open the menu, or: use a potion on Yosuke. You can also say: describe, repeat, "
-        "stop, help, terse, more detail, slower, faster, pause, resume, watch my health, "
-        "or goodbye.")
+        "stop, help, terse, more detail, slower, faster, pause narration, resume "
+        "narration, watch my health, or goodbye.")
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
                "window, where you can type to me instead.")
@@ -116,8 +117,6 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
         return "timeout", "That took too long. Try again?"
     if isinstance(exc, GameHidden):
         return "nogame", "The game is minimized or hidden. Bring it back and I'll look again."
-    if isinstance(exc, BlankScreen):
-        return "blank", exc.spoken
     if isinstance(exc, NoGame):
         return "nogame", "I don't see a game yet. Start one and I'll find it."
     if isinstance(exc, openai.RateLimitError):
@@ -159,7 +158,7 @@ class Events:
 
             data["text"] = tidy(data["text"])
         ev = {"t": time.time(), "kind": kind, **data}
-        if kind in ("say", "ask") and data.get("text"):
+        if kind in ("say", "ask") and data.get("text") and not data.get("status"):
             self.last_said = data["text"]
         if kind in ("ready", "status", "frame", "settings", "game"):
             self.sticky[kind] = ev
@@ -226,6 +225,7 @@ class Session:
         self.no_game_since: float | None = None
         self.troubled: dict[str, float] = {}
         self.window = None
+        self.ui = True  # the window's web server runs (not with --no-ui)
         self.main: asyncio.Task | None = None
 
     def focus_game(self) -> None:
@@ -236,10 +236,26 @@ class Session:
         self.watcher.force()
         self.soft_until = time.monotonic() + 3.0
 
-    def announce(self, text: str, interrupt: bool = False) -> asyncio.Task:
-        """Say a line of Player Two's own (not narration) and caption it in the window."""
-        self.events.emit("say", text=text, source="p2")
-        return self.spawn(self.voice.say(text, interrupt=interrupt))
+    def listening(self) -> bool:
+        """The player is talking, or what they said is being worked out."""
+        return self.utt is not None or self.transcribing
+
+    def announce(self, text: str, interrupt: bool = False, status: bool = False,
+                 wait_turn: bool = False) -> asyncio.Task:
+        """Say a line of Player Two's own (not narration) and caption it in the window.
+
+        A `status` line (an error, "didn't catch that") isn't what "repeat" replays.
+        With `wait_turn` (news nobody asked for), it waits until the player has finished
+        talking instead of speaking over them.
+        """
+        self.events.emit("say", text=text, source="p2", status=status)
+
+        async def run():
+            while wait_turn and self.listening():
+                await asyncio.sleep(0.1)
+            await self.voice.say(text, interrupt=interrupt)
+
+        return self.spawn(run())
 
     def update_game(self, announce: bool = True) -> None:
         """Check which game the capture is looking at (cheap: called on every frame)."""
@@ -273,12 +289,12 @@ class Session:
         if not announce or before is None:
             return
         if found is False:
-            self.announce("The game closed. I'll wait for the next one.")
+            self.announce("The game closed. I'll wait for the next one.", wait_turn=True)
             return
         # A different game: start fresh, as if Player Two had just sat down.
         self.narrator.recent.clear()
         self.fresh_look()
-        self.announce(f"I can see {name}." if name else "I can see your game.")
+        self.announce(f"I can see {name}." if name else "I can see your game.", wait_turn=True)
 
     def trouble(self, exc: BaseException, where: str, answer: bool = False) -> None:
         """Say what went wrong, once a minute per kind of problem, and log it.
@@ -292,16 +308,18 @@ class Session:
         if now - self.troubled.get(kind, -1e9) < 60:
             if answer:
                 self.voice.cue("error")
-                self.announce("Sorry, that didn't work.", interrupt=True)
+                self.announce("Sorry, that didn't work.", interrupt=True, status=True)
             return
+        if kind == "key" and kind in self.troubled and not answer:
+            return  # a rejected key won't fix itself: said once until they ask again
         self.troubled[kind] = now
         self.voice.cue("error")
-        self.announce(words)
+        self.announce(words, status=True, wait_turn=not answer)
 
     def recovered(self) -> None:
         if self.troubled.pop("net", None) is not None or self.troubled.pop("server", None):
             self.troubled.clear()
-            self.announce("I'm back online.")
+            self.announce("I'm back online.", status=True, wait_turn=True)
 
     def spawn(self, coro) -> asyncio.Task:
         """Start a background task and keep a reference so it isn't collected mid-run."""
@@ -337,6 +355,9 @@ class Session:
         self.events.emit("frame", jpeg=base64.b64encode(buf.getvalue()).decode())
 
     def on_action(self, name: str, args: dict) -> None:
+        # Most games ignore controllers and keys while another window has focus.
+        with contextlib.suppress(Exception):
+            self.focus_game()
         if name == "press":
             self.events.emit("press", buttons=args.get("buttons", []))
         elif name == "hold":
@@ -439,6 +460,8 @@ class Session:
         """
         if self.pending is None or (self.narrating and not self.narrating.done()):
             return
+        if self.listening():
+            return  # never over the player; the newest screen waits until they're done
         if time.monotonic() < self.error_until:
             return
         frame, change = self.pending
@@ -484,22 +507,22 @@ class Session:
                 self.set_game(False)
                 await asyncio.sleep(1.0)
                 continue
-            except BlankScreen as exc:
-                self.events.emit("error", where="capture", message=str(exc))
-                self.announce(exc.spoken)
-                await asyncio.sleep(1.0)
-                continue
             except Exception as exc:  # noqa: BLE001  keep watching through hiccups
                 self.capture_failures += 1
                 if self.capture_failures == 5:  # a few seconds of it: say so, once
                     self.events.emit("error", where="capture", message=str(exc)[:300])
                     self.voice.cue("error")
-                    self.announce("I can't see the screen right now. I'll keep trying.")
+                    self.announce("I can't see the screen right now. I'll keep trying.",
+                                  status=True, wait_turn=True)
                 await asyncio.sleep(1.0)
                 continue
             if self.capture_failures >= 5:
-                self.announce("I can see the screen again.")
+                self.announce("I can see the screen again.", status=True, wait_turn=True)
             self.capture_failures = 0
+            notice, self.capture.notice = self.capture.notice, ""
+            if notice:
+                self.events.emit("error", where="capture", message=notice)
+                self.announce(notice, status=True, wait_turn=True)
             self.update_game()
             if self.hud is not None:
                 self.on_hud(self.hud.update(frame.image, frame.t))
@@ -522,14 +545,16 @@ class Session:
         self.voice.cue("listening")
         waiting = self.answer is not None and not self.answer.done()
         if self.agent_task and not self.agent_task.done() and not waiting:
-            self.agent.cancelled = True
+            self.agent.hold()  # until it's clear what they want; see talk_stop
         mic = Mic()
         try:
             mic.start()
         except Exception as exc:  # noqa: BLE001  no microphone: say so, don't crash
+            self.agent.resume()
             self.voice.cue("error")
             self.events.emit("error", where="mic", message=str(exc)[:300])
-            self.announce(MIC_PROBLEM, interrupt=True)
+            self.announce(MIC_PROBLEM, interrupt=True, status=True)
+            self.open_window(refocus=False)
             return
         self.mic = mic
         self.talk_started = time.monotonic()
@@ -567,26 +592,34 @@ class Session:
         try:
             text = await utt.text()
         except Exception as exc:  # noqa: BLE001
+            self.agent.resume()
             self.trouble(exc, "listen", answer=True)
             return
         finally:
             self.transcribing = False
         self.voice.cue("heard")
         self.events.emit("heard", text=text)
-        if text:
-            await self.handle(text)
-        else:
-            await self.announce("Sorry, I didn't catch that.", interrupt=True)
+        try:
+            if text:
+                await self.handle(text)
+            else:
+                await self.announce("Sorry, I didn't catch that.", interrupt=True, status=True)
+        finally:
+            # Whatever they said that wasn't stop or a new request (a repeat, a question,
+            # nothing), the action they asked for earlier carries on.
+            self.agent.resume()
 
     async def handle(self, text: str) -> None:
         action = local_action(text)
+        if action is None and self.paused and local_action(f"{text} narration") == "resume":
+            action = "resume"  # "resume" right after pausing narration means narration
         if self.answer is not None and not self.answer.done():
             if action == "repeat":
                 await self.voice.say(self.asked or "Sorry, say that again?")
                 self.voice.cue("listening")
                 return
             if action == "stop":
-                self.agent.cancelled = True
+                self.agent.cancel()
                 self.answer.set_result("")
                 await self.announce("Okay, I won't.", interrupt=True)
                 return
@@ -609,6 +642,7 @@ class Session:
         self.agent_task = asyncio.create_task(self._agent(text))
 
     async def _agent(self, text: str) -> None:
+        self.stopped_agent = False
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         self.pending = None
@@ -649,6 +683,8 @@ class Session:
             if cue:
                 self.voice.cue(cue)
             self.events.emit("hud", meter=a.meter, level=a.level, value=round(a.value, 2))
+            if self.listening():
+                continue  # the tone says it; words would land in what they're saying
             if a.level in ("low", "critical", "recovered") or "stamina" not in a.meter:
                 words = HUD_WORDS[a.level].format(name=a.meter.capitalize())
                 self.spawn(self.voice.say(words, interrupt=a.level == "critical"))
@@ -754,8 +790,10 @@ class Session:
         self.spawn(self._after_local())
         if action == "stop":
             self.voice.stop()
+            if self.answer is not None and not self.answer.done():
+                self.answer.set_result("")
             if self.agent_task and not self.agent_task.done():
-                self.agent.cancelled = True
+                self.agent.cancel()
                 self.stopped_agent = True
         elif action == "repeat":
             await self.voice.say(self.events.last_said or "I haven't said anything yet.")
@@ -767,7 +805,13 @@ class Session:
                 return
             self._start_narration(frame, describe=True)
         elif action == "help":
-            await self.announce(HELP, interrupt=True)
+            from .desktop import talk_key_bound
+
+            talk = ("Press the talk key, speak, and press it again,"
+                    if self.s.talk_toggle and talk_key_bound(self.s)
+                    else "Hold the talk key while you speak," if talk_key_bound(self.s)
+                    else "Type in the Player Two window, or use its talk button,")
+            await self.announce(HELP.format(talk=talk), interrupt=True)
         elif action in ("slower", "faster"):
             if not hasattr(self.voice, "lang"):
                 await self.announce("Your screen reader sets my speed. Change it there.")
@@ -776,20 +820,26 @@ class Session:
             rate = round(min(2.0, max(0.8, self.s.speech_rate + step)), 2)
             await self.set_setting("speech_rate", str(rate))
         elif action == "show":
-            self.open_window()
+            self.open_window(refocus=False)
             await self.announce("Okay, the Player Two window is open.")
         elif action in ("terse", "quiet", "normal", "detailed"):
-            self.narrator.verbosity = action
+            self.narrator.verbosity = self.s.verbosity = action
+            save_settings({"verbosity": action})
+            self.emit_settings()
             await self.announce({"terse": "Terse mode.",
                                   "quiet": "Okay, I'll keep it short.",
                                   "detailed": "Sure, more detail from now on.",
                                   "normal": "Back to normal."}[action])
         elif action == "team_up":
-            self.narrator.team_up = True
+            self.narrator.team_up = self.s.team_up = True
+            save_settings({"team_up": True})
+            self.emit_settings()
             await self.announce("Got it. I'll leave the menus to the game's narrator "
                                  "and cover everything else.")
         elif action == "solo":
-            self.narrator.team_up = False
+            self.narrator.team_up = self.s.team_up = False
+            save_settings({"team_up": False})
+            self.emit_settings()
             await self.announce("Okay, I'll read the menus too.")
         elif action == "hud":
             await self.start_hud()
@@ -798,7 +848,8 @@ class Session:
             await self.announce("Okay, no more health warnings.")
         elif action == "pause":
             self.paused = True
-            await self.announce("Okay, I'll stay quiet until you say resume.")
+            await self.announce("Okay, no narration until you say resume narration. "
+                                "Questions still work.")
         elif action == "resume":
             self.paused = False
             self.fresh_look()
@@ -866,7 +917,7 @@ class Session:
             return await self.set_setting(key, value)
         elif cmd == "show":
             if arg != "again" or self.want_window():
-                self.open_window()
+                self.open_window(refocus=arg == "again")
             if arg == "again":
                 self.announce("I'm already running.")
         elif cmd == "status":
@@ -916,16 +967,19 @@ class Session:
             return True
         return self.s.companion == "auto" and bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
 
-    def open_window(self) -> None:
+    def open_window(self, refocus: bool = True) -> None:
+        """Open the companion window. With `refocus`, hand focus back to the game after,
+        in case the window took it; not when the player asked for the window or typing
+        there is their only way in."""
         from .desktop import CompanionWindow
         from .web import PORT
 
-        if self.window is not None and self.window.alive():
+        if not self.ui or (self.window is not None and self.window.alive()):
             return
         self.window = CompanionWindow()
         self.window.open(f"http://127.0.0.1:{PORT}/", getattr(self.capture, "target", None))
-        # Hand focus back to the game in case the window took it anyway.
-        self.spawn(self._refocus_game())
+        if refocus:
+            self.spawn(self._refocus_game())
 
     async def _refocus_game(self) -> None:
         await asyncio.sleep(1.5)
@@ -943,6 +997,7 @@ class Session:
         threading.Thread(target=key.run, daemon=True).start()
 
     async def run(self, ui: bool = True) -> None:
+        self.ui = ui
         from .listen import mic_ok
         from .web import PORT, serve_ui
 
@@ -978,9 +1033,9 @@ class Session:
         # Without a mic or a talk key, typing in the window is the only way to reach me.
         from .desktop import talk_key_bound as _bound
 
-        if ui and (self.want_window() or MIC_PROBLEM in self.problems
-                   or not _bound(self.s)):
-            self.open_window()
+        typing_only = MIC_PROBLEM in self.problems or not _bound(self.s)
+        if ui and (self.want_window() or typing_only):
+            self.open_window(refocus=not typing_only)
         from .desktop import TALK_KEY, talk_key_bound
 
         self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device,
@@ -1006,6 +1061,11 @@ class Session:
         self.mixer.close()
         with contextlib.suppress(OSError):
             socket_path().unlink()
+        if sys.platform == "win32":
+            from .config import STATE_DIR
+
+            with contextlib.suppress(OSError):
+                (STATE_DIR / "control").unlink()
 
 
 async def send(line: str) -> str:

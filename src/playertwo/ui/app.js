@@ -303,16 +303,20 @@ function talkStop() { if (talking) { talking = false; send("talk-stop"); } }
 talk.addEventListener("pointerdown", talkStart);
 talk.addEventListener("pointerup", talkStop);
 talk.addEventListener("pointerleave", talkStop);
+let keyHeld = false;
 talk.addEventListener("keydown", (e) => {
-  if ((e.key === " " || e.key === "Enter") && !e.repeat) { talkStart(); e.preventDefault(); }
+  if (e.key !== " " && e.key !== "Enter") return;
+  e.preventDefault(); // every repeat too, or the browser turns it into a click
+  keyHeld = true;
+  if (!e.repeat) talkStart();
 });
 talk.addEventListener("keyup", (e) => {
-  if (e.key === " " || e.key === "Enter") { talkStop(); e.preventDefault(); }
+  if (e.key === " " || e.key === "Enter") { keyHeld = false; talkStop(); e.preventDefault(); }
 });
 // Screen readers in browse mode send a click with no press and release: let a click
 // start talking and the next one stop.
 talk.addEventListener("click", (e) => {
-  if (e.detail !== 0) return;
+  if (e.detail !== 0 || keyHeld) return;
   if (talking) talkStop(); else talkStart();
 });
 addEventListener("keydown", (e) => {
@@ -374,7 +378,7 @@ $("output").addEventListener("change", (e) => setSoon("output", e.target.value))
 $("speech-rate").addEventListener("input", (e) => {
   $("rate-out").textContent = `${Number(e.target.value).toFixed(2)}×`;
 });
-$("speech-rate").addEventListener("change", (e) => setSetting("speech_rate", e.target.value));
+$("speech-rate").addEventListener("change", (e) => setSoon("speech_rate", e.target.value));
 $("team-up").addEventListener("change", (e) => setSetting("team_up", e.target.checked));
 $("companion").addEventListener("change", (e) => setSetting("companion", e.target.checked ? "on" : "off"));
 $("paused").addEventListener("change", (e) => send(e.target.checked ? "pause" : "resume"));

@@ -209,9 +209,12 @@ class WindowsKeys(Controls):
         "c": 0x2E, "Shift_L": 0x2A, "v": 0x2F, "F1": 0x3B, "w": 0x11, "a": 0x1E, "s": 0x1F,
         "d": 0x20}
 
-    def __init__(self, keymap: dict[str, str] | None = None):
+    def __init__(self, keymap: dict[str, str] | None = None, focus=None):
         import ctypes
         from ctypes import wintypes
+
+        # Keys go to whatever has focus, so hand focus back to the game first.
+        self.focus = focus
 
         class KEYBDINPUT(ctypes.Structure):
             _fields_: ClassVar = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
@@ -235,12 +238,16 @@ class WindowsKeys(Controls):
 
     def press(self, button: str, hold_ms: int = 100) -> None:
         key = self.map[button]
+        if self.focus:
+            self.focus()
         self._key(key, False)
         time.sleep(hold_ms / 1000)
         self._key(key, True)
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         keys = [WaylandKeys.STICK[d] for d in direction.split("_")]
+        if self.focus:
+            self.focus()
         for k in keys:
             self._key(k, False)
         time.sleep(ms / 1000)
@@ -249,7 +256,7 @@ class WindowsKeys(Controls):
 
 
 def keyboard(focus=None) -> Controls:
-    return WindowsKeys() if sys.platform == "win32" else WaylandKeys(focus=focus)
+    return WindowsKeys(focus=focus) if sys.platform == "win32" else WaylandKeys(focus=focus)
 
 
 def pad_problem(exc: BaseException) -> str:

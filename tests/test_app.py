@@ -245,8 +245,7 @@ def test_windows_windows_pick_the_game(home):
     assert games.pick_game([*clients[:4], win("Indie", "Indie", 5, fullscreen=2)])
 
 
-def test_hidden_or_black_game_is_said_plainly():
-    from playertwo.screen import BlankScreen, GameHidden
+def test_hidden_game_is_said_plainly():
+    from playertwo.screen import GameHidden
 
     assert "minimized" in trouble_words(GameHidden())[1]
-    assert "borderless" in trouble_words(BlankScreen("black"))[1]

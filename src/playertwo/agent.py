@@ -144,6 +144,25 @@ class Agent:
         self.language = language
         self.history: list[str] = []
         self.cancelled = False
+        # Cleared while the player holds the talk key: no presses or speech until it's
+        # known whether they said stop, asked something else, or just wanted a repeat.
+        self.go = asyncio.Event()
+        self.go.set()
+
+    def hold(self) -> None:
+        self.go.clear()
+
+    def resume(self) -> None:
+        self.go.set()
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self.go.set()
+
+    async def _speak(self, text: str) -> None:
+        await self.go.wait()
+        if not self.cancelled:
+            await self.speak(text)
 
     def system(self) -> str:
         parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]
@@ -188,6 +207,7 @@ class Agent:
             # One press at a time, so "stop" takes effect between presses.
             pressed = []
             for i, b in enumerate(buttons):
+                await self.go.wait()
                 if self.cancelled:
                     return f"stopped by the player after {' '.join(pressed) or 'no presses'}"
                 await asyncio.to_thread(self.controls.press, b)
@@ -206,6 +226,9 @@ class Agent:
             await asyncio.sleep(secs)
             return f"waited {secs:g} s"
         if name == "hold":
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
             ms = max(50, min(int(a.get("ms") or 500), 5000))
             inp = a.get("input") or "left_stick"
             if not (inp in ("left_stick", "right_stick") or inp in AGENT_BUTTONS):
@@ -240,12 +263,16 @@ class Agent:
             msg = await self.muse.tools(trim_images(msgs), TOOLS)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
+            await self.go.wait()
+            if self.cancelled:
+                run.outcome = "cancelled"
+                break
             calls = msg.tool_calls or []
             msgs.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": [c.model_dump() for c in calls] or None})
             if not calls:
                 if msg.content:
-                    await self.speak(msg.content)
+                    await self._speak(msg.content)
                 run.outcome = msg.content or "done"
                 break
             acted = False
@@ -265,12 +292,12 @@ class Agent:
                     args = {}
                 run.steps.append(Step(c.function.name, args, time.monotonic() - t0))
                 if c.function.name == "say":
-                    await self.speak(args.get("text", ""))
+                    await self._speak(args.get("text", ""))
                     result = "said"
                 elif c.function.name == "ask_player":
                     question = args.get("question", "")
                     if self.ask is None:
-                        await self.speak(question)
+                        await self._speak(question)
                         result = "The player can't answer right now. Don't do it; finish."
                     else:
                         answer = await self.ask(question)
@@ -290,7 +317,7 @@ class Agent:
                 run.outcome = "cancelled"
                 break
             if finished is not None:
-                await self.speak(finished)
+                await self._speak(finished)
                 run.outcome = finished
                 break
             turn["act_s"] = round(time.monotonic() - t_act, 2)
@@ -302,7 +329,7 @@ class Agent:
                 {"type": "text", "text": "The screen now."},
             ]})
         else:
-            await self.speak("I couldn't finish that one. Want me to try another way?")
+            await self._speak("I couldn't finish that one. Want me to try another way?")
             run.outcome = "gave up"
         run.seconds = time.monotonic() - t0
         self.history.append(f"{request} -> {run.outcome}")

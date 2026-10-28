@@ -39,14 +39,14 @@ class GameHidden(NoGame):
     """The game is open but can't be seen right now (minimized, or covered on Windows)."""
 
 
-class BlankScreen(RuntimeError):
-    """The capture has been solid black for a long time."""
-
-    spoken = ("The game looks solid black to me. If it's in exclusive fullscreen, switch it "
-              "to borderless or windowed in its display settings, and I'll see it.")
+BLANK = ("Your game looks solid black to me. If it's in exclusive fullscreen, switch it "
+         "to borderless or windowed in its display settings, and I'll see it.")
 
 
 class Capture:
+    # Something to tell the player about the capture itself, once (the watch loop says it).
+    notice = ""
+
     def grab(self) -> Frame:
         raise NotImplementedError
 
@@ -173,8 +173,9 @@ class WindowsCapture(Capture):
     own pixels are asked for, and if Windows can't give them, grab raises GameHidden so
     Player Two never describes some other program as the game.
 
-    Exclusive fullscreen games can't be copied by any of this and come out black; after
-    a while of solid black, grab raises BlankScreen, which says how to fix it.
+    Exclusive fullscreen games can't be copied by any of this and come out black. When a
+    game has shown nothing but black for a while, `notice` says how to fix it, once per
+    game window (a loading screen in a game that has shown pictures isn't that).
     """
 
     BLANK_S = 20.0
@@ -192,6 +193,7 @@ class WindowsCapture(Capture):
         self.target: dict | None = None
         self._checked = 0.0
         self._dark_since: float | None = None
+        self._seen: set[int] = set()  # windows that have shown a picture, or been warned
 
     def pick(self) -> dict | None:
         from .games import pick_game
@@ -223,22 +225,30 @@ class WindowsCapture(Capture):
                               "height": bottom - top})
         return Image.frombytes("RGB", shot.size, shot.rgb)
 
-    def _blank_check(self, img: Image.Image, now: float) -> None:
+    def _blank_check(self, img: Image.Image, hwnd: int, now: float) -> None:
+        if hwnd in self._seen:
+            return
         if img.convert("L").resize((64, 36)).getextrema()[1] > 12:
+            self._seen.add(hwnd)
             self._dark_since = None
             return
         self._dark_since = self._dark_since or now
         if now - self._dark_since > self.BLANK_S:
-            self._dark_since = now  # say it again only after another while
-            raise BlankScreen("the game's window is solid black")
+            self._seen.add(hwnd)
+            self.notice = BLANK
 
     def grab(self) -> Frame:
         now = time.monotonic()
-        if (self.target is None or now - self._checked > 2.0
-                or not self.w.alive(self.target["hwnd"])):
-            self.target = self.pick()
-            self._checked = now
         t = self.target
+        alive = t is not None and self.w.alive(t["hwnd"])
+        # A minimized game stays the game: minimized, it no longer covers its screen,
+        # which may be all that made it look like one.
+        if not alive or (now - self._checked > 2.0 and not self.w.minimized(t["hwnd"])):
+            picked = self.pick()
+            self._checked = now
+            if (picked and picked["hwnd"]) != (t and t["hwnd"]):
+                self._dark_since = None
+            self.target = t = picked
         if t is None:
             if not self.whole_screen:
                 raise NoGame
@@ -257,7 +267,7 @@ class WindowsCapture(Capture):
                 raise GameHidden
         if img is None:
             raise GameHidden
-        self._blank_check(img, now)
+        self._blank_check(img, hwnd, now)
         return Frame(img, now, label=t.get("title", ""))
 
 

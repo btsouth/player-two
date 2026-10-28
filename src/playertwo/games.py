@@ -32,7 +32,14 @@ NOT_GAME_WORDS = {
     "searchhost", "shellexperiencehost", "startmenuexperiencehost", "lockapp",
     "systemsettings", "taskmgr", "notepad", "epicgameslauncher", "galaxyclient",
     "eadesktop", "ubisoftconnect", "upc", "playnite", "gamebar", "xboxpcapp",
+    "riotclientservices", "riotclientux", "riotclient", "itch", "launchbox", "bigbox",
+    "battlenet", "goggalaxy", "amazongames", "rockstarlauncher", "wallpaper32",
+    "wallpaper64", "losslessscaling", "rtss", "msiafterburner", "nvcontainer",
 }
+# Steam "apps" that aren't games, so a Steam window of theirs isn't picked as the game:
+# redistributables, Wallpaper Engine, SteamVR, Lossless Scaling, Proton and runtimes.
+STEAM_TOOLS = {"228980", "431960", "250820", "993090", "1070560", "1391110", "1628350",
+               "1493710", "2180100", "2805730", "3658110", "961940", "1245040"}
 # Emulators and game runners: a window of theirs is a game even when it isn't fullscreen.
 GAME_WORDS = {
     "retroarch", "dolphin-emu", "pcsx2", "rpcs3", "ppsspp", "duckstation", "citra", "lime3ds",
@@ -51,6 +58,13 @@ def steam_roots() -> list[Path]:
     if sys.platform == "win32":
         roots.insert(0, Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
                      / "Steam")
+        try:  # Steam installed anywhere else (D:\Steam) says where in the registry
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
+                roots.insert(0, Path(winreg.QueryValueEx(k, "SteamPath")[0]))
+        except OSError:
+            pass
     seen, out = set(), []
     for r in roots:
         try:
@@ -154,8 +168,9 @@ def looks_like_game(client: dict) -> bool:
     that isn't a known non-game and is fullscreen. A game in a small window that's none of
     these is found with `window = "..."` instead."""
     cls = client.get("class", "") or client.get("initialClass", "")
-    if STEAM_CLASS.match(cls):
-        return True
+    m = STEAM_CLASS.match(cls)
+    if m:
+        return m.group(1) not in STEAM_TOOLS
     if is_own(client) or not cls:
         return False
     low = cls.lower()
@@ -190,7 +205,8 @@ def pick_game(clients: list[dict], want: str = "") -> dict | None:
         return next((c for c in clients if w in c.get("class", "").lower()
                      or w in c.get("title", "").lower()
                      or w in game_name(c).lower()), None)
-    steam = [c for c in clients if STEAM_CLASS.match(c.get("class", ""))]
+    steam = [c for c in clients if (m := STEAM_CLASS.match(c.get("class", "")))
+             and m.group(1) not in STEAM_TOOLS]
     if steam:
         return steam[0]
     return next((c for c in clients if looks_like_game(c)), None)

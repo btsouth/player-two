@@ -23,8 +23,15 @@ def socket_path() -> Path:
     return Path(base) / "player-two.sock"
 
 
-# Windows has no Unix sockets in asyncio; there the control channel is a loopback port.
+# Windows has no Unix sockets in asyncio; there the control channel is a loopback port,
+# which every user on the PC can reach. So the session writes its port and a secret to a
+# file in the user's own profile, and a client has to send the secret first. A second
+# user's session takes another port instead of finding the first user's.
 CONTROL_PORT = 47821
+
+
+def _control_file() -> Path:
+    return STATE_DIR / "control"
 
 
 async def open_control(limit: int = 1 << 16):
@@ -33,7 +40,13 @@ async def open_control(limit: int = 1 << 16):
     import sys
 
     if sys.platform == "win32":
-        return await asyncio.open_connection("127.0.0.1", CONTROL_PORT, limit=limit)
+        try:
+            port, token = _control_file().read_text(encoding="utf-8").split()
+        except (OSError, ValueError) as exc:
+            raise ConnectionRefusedError("Player Two isn't running") from exc
+        reader, writer = await asyncio.open_connection("127.0.0.1", int(port), limit=limit)
+        writer.write(f"{token}\n".encode())
+        return reader, writer
     return await asyncio.open_unix_connection(str(socket_path()), limit=limit)
 
 
@@ -43,7 +56,28 @@ async def start_control(client):
     import sys
 
     if sys.platform == "win32":
-        return await asyncio.start_server(client, "127.0.0.1", CONTROL_PORT)
+        import secrets
+
+        token = secrets.token_hex(16)
+
+        async def checked(reader, writer):
+            try:
+                line = await asyncio.wait_for(reader.readline(), 5)
+            except (TimeoutError, OSError, ValueError):
+                line = b""
+            if not secrets.compare_digest(line.strip(), token.encode()):
+                writer.close()
+                return
+            await client(reader, writer)
+
+        try:
+            server = await asyncio.start_server(checked, "127.0.0.1", CONTROL_PORT)
+        except OSError:  # taken, by another user's Player Two or anything else
+            server = await asyncio.start_server(checked, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _control_file().write_text(f"{port} {token}\n", encoding="utf-8")
+        return server
     path = socket_path()
     with contextlib.suppress(FileNotFoundError):
         path.unlink()

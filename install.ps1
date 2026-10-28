@@ -20,12 +20,8 @@ function Install-PlayerTwo {
 
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         Say "Step 1 of 3: installing uv, the Python tool installer."
-        try {
-            Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression *> $null
-        } catch {
-            Say "Installing uv failed: $($_.Exception.Message). Check the internet connection and run this again."
-            return
-        }
+        # In its own PowerShell, so a failure inside uv's installer can't close this window.
+        & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" *> $null
         $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
         if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
             Say "Installing uv failed. Check the internet connection and run this again."
