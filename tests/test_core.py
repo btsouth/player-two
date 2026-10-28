@@ -236,3 +236,40 @@ def test_where_questions_and_wording():
     assert describe("shadows", two) == "2 shadows: one on the left, one on the right."
     many = [Match(x, 0.5, 0.01) for x in (0.1, 0.2, 0.5, 0.9)]
     assert describe("desks", many) == "4 desks: 2 on the left, 1 in the middle, 1 on the right."
+
+
+async def test_screen_reader_streams_sentences_in_order():
+    from playertwo.audio import Mixer
+    from playertwo.config import Settings
+    from playertwo.screenreader import Backend, ScreenReaderVoice
+
+    class Fake(Backend):
+        name = "Fake"
+
+        def __init__(self):
+            self.said, self.stops = [], 0
+
+        async def speak(self, text):
+            self.said.append(text)
+
+        async def stop(self):
+            self.stops += 1
+
+    async def deltas():
+        for d in ["Yosuke: Dude, ", "that was close. Your HP", " is low."]:
+            yield d
+
+    fake = Fake()
+    v = ScreenReaderVoice(Settings(), Mixer("file"), fake)
+    out = await v.say_stream(deltas())
+    await asyncio.sleep(0)
+    assert fake.said == ["Yosuke: Dude, that was close.", "Your H.P. is low."]
+    assert out == v.last_spoken and fake.stops == 1
+
+    fake.said.clear()
+
+    async def silent():
+        yield "<silent>"
+
+    assert await v.say_stream(silent(), interrupt=False) == ""
+    assert fake.said == []

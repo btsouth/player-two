@@ -14,7 +14,7 @@ from .config import Settings
 def _settings(args) -> Settings:
     s = Settings.load()
     for name in ("game", "verbosity", "voice", "model", "effort", "window", "language",
-                 "confirm", "brain"):
+                 "confirm", "brain", "output"):
         v = getattr(args, name, None)
         if v:
             setattr(s, name, v)
@@ -75,12 +75,16 @@ async def _narrate(args) -> None:
 
 async def _say(args) -> None:
     from .audio import Mixer
-    from .voice import Voice
+    from .screenreader import open_voice
 
     s = _settings(args)
-    voice = Voice(s, Mixer("file" if args.wav else "device"))
+    file_sink = args.wav or s.output == "screen-reader"
+    voice = open_voice(s, Mixer("file" if file_sink else "device"))
     await voice.say(" ".join(args.text))
     await voice.wait_idle()
+    if not voice.first_audio_ms:
+        print(f"sent to {voice.voice_name}")
+        return
     if args.wav:
         import numpy as np
         import soundfile as sf
@@ -157,6 +161,8 @@ def main(argv: list[str] | None = None) -> None:
         sp.add_argument("--window", help="part of the game window's title or class")
         sp.add_argument("--language", help="language to speak, e.g. Spanish")
         sp.add_argument("--confirm", choices=["always", "important", "never"])
+        sp.add_argument("--output", choices=["voice", "screen-reader"],
+                        help="speak with Player Two's voice or through your screen reader")
         sp.add_argument("--brain", choices=["auto", "meta", "open"],
                         help="open: Muse Spark Open; meta: Muse Spark on Meta Model API; "
                         "auto: open when its credentials are set up")

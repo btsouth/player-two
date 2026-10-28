@@ -18,7 +18,7 @@ from .listen import Mic, Utterance
 from .muse import Muse
 from .narrator import Narrator
 from .screen import Capture, ChangeWatcher, Frame, auto_capture
-from .voice import Voice
+from .screenreader import open_voice
 
 LOCAL = [
     (re.compile(r"^(stop|quiet|shush|shut up|be quiet|hush)\b", re.IGNORECASE), "stop"),
@@ -74,7 +74,7 @@ class Session:
         self.s = settings
         self.muse = Muse(settings)
         self.mixer = Mixer(sink)
-        self.voice = Voice(settings, self.mixer)
+        self.voice = open_voice(settings, self.mixer)
         self.capture = capture or auto_capture(settings.window)
         self.controls = open_controls(controls or settings.controls, focus=self.focus_game)
         self.narrator = Narrator(self.muse, settings.verbosity, settings.game,

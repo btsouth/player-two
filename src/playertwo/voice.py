@@ -101,6 +101,11 @@ def clean_for_speech(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def speakable(text: str) -> bool:
+    """False for empty text and the narrator's <silent> marker (cleaning eats its ">")."""
+    return bool(text) and text.strip("<>/ ").lower() != "silent"
+
+
 def split_sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE.split(text) if s.strip()]
 
@@ -180,14 +185,14 @@ class Voice:
             parts = _SENTENCE.split(buf)
             for done in parts[:-1]:
                 done = clean_for_speech(done)
-                if done and done != "<silent>":
+                if speakable(done):
                     chunks = first_chunk_split(done) if not spoken else [done]
                     spoken.append(done)
                     for chunk in chunks:
                         pending = asyncio.create_task(speak_chunk(chunk, pending))
             buf = parts[-1]
         tail = clean_for_speech(buf)
-        if tail and tail != "<silent>" and gen == self._gen:
+        if speakable(tail) and gen == self._gen:
             spoken.append(tail)
             pending = asyncio.create_task(speak_chunk(tail, pending))
         if pending is not None:

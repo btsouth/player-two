@@ -24,6 +24,9 @@ developer has to build.
   asks instead of guessing: "Garu on Shadow A, the left one. Go?"
 - **Warns you in real-time games.** It finds your health and stamina bars once, then reads them on
   every frame with plain pixel math and plays a sound when they get low.
+- **Speaks through your screen reader if you like.** With `output = "screen-reader"` its words go
+  to Orca (also shown on a braille display) or speech-dispatcher on Linux, or to NVDA or JAWS on
+  Windows, at the voice and speed you already use. Sound cues still come from Player Two.
 - **Fits how you play.** Terse mode for fast screen reader users, narration in English, Spanish,
   French, Italian, Portuguese or Hindi (it translates on-screen text, so a Japanese-only game can
   be played in English), and a team-up mode for games that already narrate their own menus.
@@ -125,6 +128,7 @@ voice = "af_heart"        # Kokoro voice
 speech_rate = 1.1
 verbosity = "normal"      # terse, quiet, normal, detailed
 language = "English"      # or British English, Spanish, French, Italian, Portuguese, Hindi
+output = "voice"          # or "screen-reader": Orca, speech-dispatcher, NVDA, JAWS
 confirm = "important"     # always, important, never
 team_up = false
 window = ""               # part of the game window's title; empty means the last focused window
@@ -139,6 +143,8 @@ controls = "auto"         # gamepad, keyboard
   can't read something instead of guessing.
 - On Windows, the virtual controller needs the ViGEmBus driver. Its maintainer has retired it; it
   still installs and works, and Player Two falls back to keyboard input without it.
+- Screen reader output is tested with Orca 51 and speech-dispatcher on Linux. The Windows path
+  (NVDA and JAWS through accessible_output2, in the `windows` extra) is not tested yet.
 - Each described screen costs about a third of a cent in Muse Spark usage.
 
 ## Development

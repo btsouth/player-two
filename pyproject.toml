@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-windows = ["mss>=9", "vgamepad>=0.1"]
+windows = ["mss>=9", "vgamepad>=0.1", "accessible_output2>=0.17"]
 # CUDA and cuDNN as pip wheels, for NVIDIA cards without a system CUDA install.
 cuda = ["onnxruntime-gpu[cuda,cudnn]>=1.23"]
 
