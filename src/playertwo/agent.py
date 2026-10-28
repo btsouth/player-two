@@ -32,6 +32,13 @@ TOOLS = [
             "ms": {"type": "integer", "description": "How long, in milliseconds (max 5000)."},
         }, "required": ["input", "ms"]}}},
     {"type": "function", "function": {
+        "name": "wait",
+        "description": "Wait without pressing anything: loading screens, fades, movies, "
+                       "animations. You get a new screenshot after.",
+        "parameters": {"type": "object", "properties": {
+            "seconds": {"type": "number", "description": "How long, 0.5 to 8."},
+        }, "required": ["seconds"]}}},
+    {"type": "function", "function": {
         "name": "say",
         "description": "Say something short to the player out loud.",
         "parameters": {"type": "object", "properties": {"text": {"type": "string"}},
@@ -87,7 +94,7 @@ class Run:
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
-                 max_turns: int = 10, settle_s: float = 0.45,
+                 max_turns: int = 16, settle_s: float = 0.45,
                  ask: Callable[[str], Awaitable[str]] | None = None,
                  confirm: str = "important", language: str = "English",
                  on_action: Callable[[str, dict], None] | None = None,
@@ -131,6 +138,10 @@ class Agent:
             return done
         if self.on_action:
             self.on_action(name, a)
+        if name == "wait":
+            secs = max(0.5, min(float(a.get("seconds", 2)), 8.0))
+            await asyncio.sleep(secs)
+            return f"waited {secs:g} s"
         if name == "hold":
             ms = max(50, min(int(a.get("ms", 500)), 5000))
             inp = a.get("input", "left_stick")

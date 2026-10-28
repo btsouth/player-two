@@ -83,6 +83,11 @@ class Session:
         self.events = Events()
         self.latest: Frame | None = None
         self.narrating: asyncio.Task | None = None
+        # Newest settled screen not yet narrated, and a back-off while screens keep
+        # settling with nothing new to say (animated menus, fog, idle cutscenes).
+        self.pending: tuple[Frame, float] | None = None
+        self.silent_streak = 0
+        self.quiet_until = 0.0
         self.agent_task: asyncio.Task | None = None
         self.paused = False
         self.mic: Mic | None = None
@@ -185,10 +190,34 @@ class Session:
             async for d in self.narrator.narrate(frame):
                 yield d
 
-        text = await self.voice.say_stream(deltas())
+        text = await self.voice.say_stream(deltas(), interrupt=False)
         if text:
+            self.silent_streak = 0
+            self.quiet_until = 0.0
             self.events.emit("say", text=text, source="narrator",
                              latency=round(time.monotonic() - t, 2))
+        else:
+            self.silent_streak += 1
+            self.quiet_until = time.monotonic() + min(16.0, 2.0 ** self.silent_streak)
+
+    # A settled screen this different from the last one is a new scene, back-off or not.
+    SCENE_CUT = 0.3
+
+    def _maybe_narrate(self) -> None:
+        """Narrate the newest settled screen once the last narration has finished.
+
+        Never cancels a narration in flight: on busy screens that would restart the
+        model call every second, say nothing and pay for all of it.
+        """
+        if self.pending is None or (self.narrating and not self.narrating.done()):
+            return
+        if not self.mixer.idle.is_set():
+            return  # let the last line finish; we'll narrate the newest screen after
+        frame, change = self.pending
+        if change < self.SCENE_CUT and time.monotonic() < self.quiet_until:
+            return
+        self.pending = None
+        self.narrating = asyncio.create_task(self._narrate(frame))
 
     def _start_narration(self, frame: Frame, describe: bool = False) -> None:
         if self.narrating and not self.narrating.done():
@@ -216,9 +245,12 @@ class Session:
                 self.on_hud(self.hud.update(frame.image, frame.t))
             busy = self.agent_task is not None and not self.agent_task.done()
             if self.watcher.update(frame) and not self.paused and not busy:
-                self.events.emit("settled", label=frame.label)
+                self.events.emit("settled", label=frame.label,
+                                 change=round(self.watcher.last_change, 3))
                 self.show(frame)
-                self._start_narration(frame)
+                self.pending = (frame, self.watcher.last_change)
+            if not self.paused and not busy:
+                self._maybe_narrate()
             await asyncio.sleep(max(0.0, period - (time.monotonic() - t)))
 
     # Talking

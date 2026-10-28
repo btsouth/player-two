@@ -170,20 +170,31 @@ class ChangeWatcher:
     and ignored, so they neither trigger narration nor stop the screen from settling.
     """
 
+    # Tuned on Persona 4 Golden's TV World, where fog drifts over half the screen: small
+    # frame-to-frame steps (motion_step) are what reveal slow, constant motion.
     def __init__(self, change: float = 0.02, still: float = 0.004, settle_s: float = 0.3,
-                 max_wait_s: float = 1.6, cell_delta: float = 0.06):
+                 max_wait_s: float = 1.6, cell_delta: float = 0.06,
+                 motion_step: float = 0.02, motion_rate: float = 0.1,
+                 motion_cut: float = 0.25, motion_period_s: float = 0.5):
         self.change, self.still = change, still
         self.settle_s, self.max_wait_s = settle_s, max_wait_s
         self.cell_delta = cell_delta
+        self.motion_step, self.motion_rate, self.motion_cut = motion_step, motion_rate, motion_cut
+        # Motion is measured over a fixed time, not frame to frame, so slow drift counts the
+        # same whether we capture at 2 or 10 frames a second.
+        self.motion_period_s = motion_period_s
+        self.motion_ref: tuple[float, np.ndarray] | None = None
         self.base: np.ndarray | None = None
         self.prev: np.ndarray | None = None
         self.motion = np.zeros(THUMB[::-1], np.float32)
         self.pending_since: float | None = None
         self.still_since: float | None = None
+        # How different the last settled screen was from the one before (0 to 1).
+        self.last_change = 0.0
 
     def _frac(self, a: np.ndarray, b: np.ndarray) -> float:
         moving = np.abs(a - b) > self.cell_delta
-        mask = self.motion < 0.5
+        mask = self.motion < self.motion_cut
         return float((moving & mask).sum() / max(mask.sum(), 1))
 
     def force(self) -> None:
@@ -199,8 +210,12 @@ class ChangeWatcher:
             self.pending_since = now
             self.still_since = now
             return False
-        step = np.abs(th - self.prev) > self.cell_delta
-        self.motion = 0.97 * self.motion + 0.03 * step
+        if self.motion_ref is None:
+            self.motion_ref = (now, th)
+        elif now - self.motion_ref[0] >= self.motion_period_s:
+            step = np.abs(th - self.motion_ref[1]) > self.motion_step
+            self.motion = (1 - self.motion_rate) * self.motion + self.motion_rate * step
+            self.motion_ref = (now, th)
         moved = self._frac(th, self.prev)
         self.prev = th
         changed = self.base is None or self._frac(th, self.base) > self.change
@@ -215,6 +230,7 @@ class ChangeWatcher:
         settled = self.still_since is not None and now - self.still_since >= self.settle_s
         timed_out = now - self.pending_since >= self.max_wait_s
         if settled or timed_out:
+            self.last_change = 1.0 if self.base is None else self._frac(th, self.base)
             self.base = th
             self.pending_since = None
             self.still_since = None
