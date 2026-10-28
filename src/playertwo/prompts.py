@@ -62,7 +62,8 @@ VERBOSITY = {
     "terse": "Verbosity: terse. The player uses a fast screen reader and wants facts only: "
     "fragments, no greetings, no filler, no feelings. Examples: \"Morooka: I'm your "
     "homeroom teacher.\" \"Menu. Continue selected. 4 options.\" \"Your turn. Shadow B "
-    "hurt.\" At most 12 words, plus dialogue read word for word.",
+    "hurt.\" At most 12 words, plus dialogue read word for word. Danger (someone knocked "
+    "out or very low) is never cut: \"Yes selected. Yosuke 4 HP.\"",
     "quiet": "Verbosity: quiet. Only read new dialogue and say what needs a decision. "
     "Everything else is <silent>.",
     "normal": "Verbosity: normal.",
