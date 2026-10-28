@@ -78,6 +78,9 @@ seen that the right option is highlighted. Advancing dialogue with a is fine any
 between saves.
 - Prefer the controller: a confirms, b goes back, start opens the menu, the d-pad moves \
 menu cursors. In 3D movement, hold the left stick in a direction for a duration.
+- When the player names a spell, element or effect ("fire", "the wind one", "heal"), \
+open the skill or magic menu and find the option on screen that does that; a plain \
+attack is only for "attack" or "hit". If no option clearly matches, ask.
 - If the request is ambiguous, or you can't read what you need (which enemy is which, \
 a value, a name), don't guess: say what you can see and ask with ask_player.
 - If the screen doesn't match what you expected after acting, stop and say what happened.

@@ -28,9 +28,9 @@ class Settings:
     # Agent turns (voice commands) get a little more thought.
     agent_effort: str = "low"
     base_url: str = "https://api.meta.ai/v1"
-    # Which Muse Spark does the thinking: "meta" (Meta Model API) or "open" (the open-weight
-    # Muse Spark Open on a hosted provider, Baseten by default).
-    brain: str = "meta"
+    # Which Muse Spark does the thinking: "open" (the open-weight Muse Spark Open on a hosted
+    # provider), "meta" (Meta Model API), or "auto" (open when its credentials are set up).
+    brain: str = "auto"
     open_base_url: str = "https://inference.baseten.co/v1"
     open_model: str = "meta-models/muse-spark-open-1026"
     # Kokoro voice. Empty means the default voice for `language`.
@@ -99,6 +99,14 @@ def _env_file(path: Path) -> dict[str, str]:
             if sep and k.strip() and not k.lstrip().startswith("#"):
                 out[k.strip()] = v.strip()
     return out
+
+
+def has_open_credentials() -> bool:
+    try:
+        open_credentials()
+    except SystemExit:
+        return False
+    return True
 
 
 def open_credentials() -> tuple[str, dict[str, str]]:

@@ -40,9 +40,11 @@ strategy, point and click. It does not play fast action games for you; there it 
 | "Where is it?": exact positions of things on screen, spoken and played as directional sound | **SAM 3.1** |
 | The same narrator and agent on open weights | **Muse Spark Open** (Modal shared endpoint) |
 
-**Open weights.** Set `brain = "open"` and the same narrator and agent run on **Muse Spark Open**,
-Meta's open-weight model, through a hosted provider (we use a Modal shared endpoint; Baseten and
-Fireworks work the same way). SAM 3.1 and speech recognition stay on Meta Model API.
+**Open weights.** The narrator and agent run on **Muse Spark Open**, Meta's open-weight model,
+through a hosted provider (we use a Modal shared endpoint; Baseten and Fireworks work the same
+way). Without provider credentials it uses Muse Spark on Meta Model API instead (`brain = "meta"`
+forces that). SAM 3.1 and speech recognition stay on Meta Model API. On our scored battle trials
+both brains get 8 of 8 right.
 
 ```toml
 brain = "open"
