@@ -206,7 +206,6 @@ class Session:
         self.talk_started = 0.0
         self.capture_failures = 0
         self.asked = ""
-        self.stopped_agent = False
         self._last_show = 0.0
         self.agent_task: asyncio.Task | None = None
         self.paused = False
@@ -609,7 +608,7 @@ class Session:
         finally:
             self.transcribing = False
         self.voice.cue("heard")
-        self.events.emit("heard", text=text)
+        self.events.emit("heard", text=text or "")
         try:
             if text:
                 await self.handle(text)
@@ -653,7 +652,6 @@ class Session:
         self.agent_task = asyncio.create_task(self._agent(text))
 
     async def _agent(self, text: str) -> None:
-        self.stopped_agent = False
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         self.pending = None
@@ -673,9 +671,6 @@ class Session:
                          steps=[{"tool": s.tool, "args": s.args, "t": round(s.t, 2)}
                                 for s in run.steps],
                          turns=run.turns, seconds=round(run.seconds, 2))
-        if run.outcome == "cancelled" and self.stopped_agent:
-            self.stopped_agent = False
-            await self.announce("Okay, stopped.", interrupt=True)
         # The agent already said what happened: count the screen it left as seen, so the
         # narrator doesn't talk over its last line about the same thing.
         with contextlib.suppress(Exception):
@@ -804,8 +799,10 @@ class Session:
             if self.answer is not None and not self.answer.done():
                 self.answer.set_result("")
             if self.agent_task and not self.agent_task.done():
+                # Said now, not when the model's reply comes back: no more presses or
+                # words come from the run after this.
                 self.agent.cancel()
-                self.stopped_agent = True
+                await self.announce("Okay, stopped.", interrupt=True)
         elif action == "repeat":
             await self.voice.say(self.events.last_said or "I haven't said anything yet.")
         elif action == "describe":
