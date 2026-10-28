@@ -24,13 +24,13 @@ DIRECTIONS = {
 class Controls:
     kind = "base"
 
-    def press(self, button: str, hold_ms: int = 60) -> None:
+    def press(self, button: str, hold_ms: int = 100) -> None:
         raise NotImplementedError
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         raise NotImplementedError
 
-    def sequence(self, buttons: list[str], gap_ms: int = 140, hold_ms: int = 60) -> None:
+    def sequence(self, buttons: list[str], gap_ms: int = 140, hold_ms: int = 100) -> None:
         for i, b in enumerate(buttons):
             self.press(b, hold_ms)
             if i < len(buttons) - 1:
@@ -45,7 +45,7 @@ class DryRun(Controls):
     kind = "dry-run"
     log: list[str] = field(default_factory=list)
 
-    def press(self, button: str, hold_ms: int = 60) -> None:
+    def press(self, button: str, hold_ms: int = 100) -> None:
         self.log.append(button)
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
@@ -83,7 +83,7 @@ class LinuxPad(Controls):
     def _syn(self) -> None:
         self.ui.syn()
 
-    def press(self, button: str, hold_ms: int = 60) -> None:
+    def press(self, button: str, hold_ms: int = 100) -> None:
         e = self.e
         if button in self.keys:
             self.ui.write(e.EV_KEY, self.keys[button], 1)
@@ -139,7 +139,7 @@ class WindowsPad(Controls):
                      "up": B.XUSB_GAMEPAD_DPAD_UP, "down": B.XUSB_GAMEPAD_DPAD_DOWN,
                      "left": B.XUSB_GAMEPAD_DPAD_LEFT, "right": B.XUSB_GAMEPAD_DPAD_RIGHT}
 
-    def press(self, button: str, hold_ms: int = 60) -> None:
+    def press(self, button: str, hold_ms: int = 100) -> None:
         if button in ("lt", "rt"):
             setter = self.pad.left_trigger if button == "lt" else self.pad.right_trigger
             setter(255)
@@ -185,7 +185,7 @@ class WaylandKeys(Controls):
             self.focus()
         subprocess.run(["wtype", *args], check=True, timeout=5)
 
-    def press(self, button: str, hold_ms: int = 60) -> None:
+    def press(self, button: str, hold_ms: int = 100) -> None:
         key = self.map[button]
         self._run("-P", key, "-s", str(hold_ms), "-p", key)
 

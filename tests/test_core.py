@@ -195,6 +195,14 @@ class TestNarrator:
         assert out == "Your turn. Shadow B is hurt."
         assert nar.recent[-1] == "Your turn. Shadow B is hurt."
 
+    def test_same_opening_twice_is_silent(self):
+        nar = Narrator(FakeMuse(stream_text='Teddie says: "Sensei, are you leaving?" Press A.'))
+        first = run(self._gather(nar))
+        nar.muse.stream_text = 'Teddie says: "Sensei, are you leaving?" Still the stage.'
+        second = run(self._gather(nar))
+        assert first.startswith("Teddie") and second == ""
+        assert len(nar.recent) == 1
+
     def test_language_and_team_up_in_prompt(self):
         nar = Narrator(FakeMuse(), language="Spanish", team_up=True)
         system = nar.system()
@@ -273,3 +281,16 @@ async def test_screen_reader_streams_sentences_in_order():
 
     assert await v.say_stream(silent(), interrupt=False) == ""
     assert fake.said == []
+
+
+def test_local_commands_only_match_whole_utterances():
+    from playertwo.app import local_action
+
+    assert local_action("Stop.") == "stop"
+    assert local_action("hey, repeat that please") == "repeat"
+    assert local_action("What's on screen?") == "describe"
+    assert local_action("resume") == "resume"
+    assert local_action("keep going, but don't leave, I want to stay here") is None
+    assert local_action("stop attacking and heal Yosuke") is None
+    assert local_action("tell me more about Teddie") is None
+    assert local_action("describe the enemy on the left") is None

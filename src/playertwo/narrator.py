@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 from collections.abc import AsyncIterator
@@ -10,6 +11,17 @@ from dataclasses import dataclass
 from .muse import Muse, image_part
 from .prompts import DESCRIBE, GAME_CONTEXT, LANGUAGE, NARRATOR, TEAM_UP, VERBOSITY
 from .screen import Frame
+
+_SENTENCE_END = re.compile(r"[.!?][\"'\u201d\u2019)]*(\s|$)")
+
+
+def _first_sentence(text: str) -> str:
+    end = _SENTENCE_END.search(text)
+    return text[: end.end()] if end else text
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
 
 
 @dataclass
@@ -49,27 +61,48 @@ class Narrator:
         return [{"role": "system", "content": self.system()},
                 {"role": "user", "content": content}]
 
+    def repeats(self, sentence: str) -> bool:
+        """True when this opening sentence is how the last narration opened too.
+
+        Idle animations (a character bobbing, drifting fog) can make a screen look new when
+        nothing changed, and the model doesn't always answer <silent> then.
+        """
+        if not self.recent:
+            return False
+        return _words(sentence) == _words(_first_sentence(self.recent[-1]))
+
     async def narrate(self, frame: Frame) -> AsyncIterator[str]:
         """Stream what to say about a newly settled frame. Yields nothing when silent."""
         t = time.monotonic()
         text = ""
         head = ""
         silent = None
-        async for delta in self.muse.stream(self.messages(frame)):
-            text += delta
-            if silent is None:
-                head += delta
-                stripped = head.lstrip()
-                if len(stripped) >= 8 or not "<silent>".startswith(stripped):
-                    silent = stripped.startswith("<silent>")
-                    if not silent:
-                        yield head
-                continue
-            if not silent:
+        stream = self.muse.stream(self.messages(frame))
+        try:
+            async for delta in stream:
+                text += delta
+                if silent is None:
+                    head += delta
+                    stripped = head.lstrip()
+                    if stripped.startswith("<silent>"):
+                        silent = True
+                        break
+                    if len(stripped) < 8 and "<silent>".startswith(stripped):
+                        continue
+                    end = _SENTENCE_END.search(stripped)
+                    if end is None:
+                        continue
+                    silent = self.repeats(stripped[: end.end()])
+                    if silent:
+                        break
+                    yield head
+                    continue
                 yield delta
+        finally:
+            await stream.aclose()
         text = text.strip()
         if silent is None:
-            silent = text.startswith("<silent>") or not text
+            silent = not text or text.startswith("<silent>") or self.repeats(text)
             if not silent:
                 yield head
         if not silent:

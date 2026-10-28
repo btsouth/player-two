@@ -20,17 +20,32 @@ from .narrator import Narrator
 from .screen import Capture, ChangeWatcher, Frame, auto_capture
 from .screenreader import open_voice
 
+# Short commands handled without the model. They must be the whole utterance: "keep going,
+# but don't leave" or "stop attacking and heal" are requests for the agent, not commands.
 LOCAL = [
-    (re.compile(r"^(stop|quiet|shush|shut up|be quiet|hush)\b", re.IGNORECASE), "stop"),
-    (re.compile(r"^(repeat|say that again|what did (you|they|he|she) say|again)\b", re.IGNORECASE),
+    (r"stop|quiet|shush|shut up|be quiet|hush|stop talking|cancel|never ?mind", "stop"),
+    (r"repeat|repeat that|say that again|what did (you|they|he|she) say|again|come again",
      "repeat"),
-    (re.compile(r"^(describe|what'?s on (the )?screen|where am i|look around)\b", re.IGNORECASE),
-     "describe"),
-    (re.compile(r"\b(talk less|less detail|quieter mode)\b", re.IGNORECASE), "quiet"),
-    (re.compile(r"\b(more detail|talk more|tell me more)\b", re.IGNORECASE), "detailed"),
-    (re.compile(r"^(pause|stop narrating)\b", re.IGNORECASE), "pause"),
-    (re.compile(r"^(resume|start narrating|keep going)\b", re.IGNORECASE), "resume"),
+    ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
+      r"|what do you see"), "describe"),
+    (r"talk less|less detail|quieter|be quieter|quiet mode", "quiet"),
+    (r"more detail|more details|talk more", "detailed"),
+    (r"pause|stop narrating|pause narration", "pause"),
+    (r"resume|start narrating|keep narrating|resume narration", "resume"),
 ]
+LOCAL_RE = [(re.compile(p), action) for p, action in LOCAL]
+
+
+def local_action(text: str) -> str | None:
+    """The local command this utterance is, if the whole thing is one."""
+    t = re.sub(r"[^\w' ]+", " ", text.lower())
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"^((hey|ok|okay|please|player two|can you|could you) )+", "", t)
+    t = re.sub(r"( (please|now|for me))+$", "", t)
+    for pattern, action in LOCAL_RE:
+        if pattern.fullmatch(t):
+            return action
+    return None
 
 
 HUD_WORDS = {"low": "{name} low.", "critical": "{name} critical!",
@@ -304,10 +319,10 @@ class Session:
         if self.answer is not None and not self.answer.done():
             self.answer.set_result(text)
             return
-        for pattern, action in LOCAL:
-            if pattern.search(text.strip()):
-                await self.local(action)
-                return
+        action = local_action(text)
+        if action:
+            await self.local(action)
+            return
         from .locate import where_request
 
         phrase = where_request(text)

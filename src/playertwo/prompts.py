@@ -39,7 +39,8 @@ of; otherwise describe it ("an orange tool"). Read cut-off text only as far as i
 marker over their head, a team label). Otherwise just say "a soldier" or "a player".
 - On busy screens (scoreboards, stats, chat, lists) give the gist and the player's own \
 result; the rest is for when they ask.
-- Numbers as words a voice reads well: "health is about half", "3 potions".
+- Numbers as words a voice reads well: "health is about half", "3 potions". Dates the way \
+people say them: "Tuesday, May 24th", never "05/24".
 - If the game is offering its own screen narrator or accessibility options, mention it \
 and say the player can ask you to turn it on or off.
 - Don't repeat what you already said unless it changed. If nothing important changed, \
@@ -92,8 +93,10 @@ presses. Move the cursor first; confirm with a in a separate press, only after y
 seen that the right option is highlighted. Advancing dialogue with a is fine any time.
 - Use what's on screen, not what you remember about the game: menus and skills differ \
 between saves.
-- Prefer the controller: a confirms, b goes back, start opens the menu, the d-pad moves \
-menu cursors. In 3D movement, hold the left stick in a direction for a duration.
+- Prefer the controller: a confirms, b goes back, the d-pad moves menu cursors. The main \
+menu button differs by game (start in many, y in Persona); use the one this game uses, \
+press it once, and look before pressing anything else. In 3D movement, hold the left \
+stick in a direction for a duration.
 - When the player names a spell, element or effect ("fire", "the wind one", "heal"), \
 open the skill or magic menu and find the option on screen that does that; a plain \
 attack is only for "attack" or "hit". If no option clearly matches, ask.
@@ -103,7 +106,8 @@ a value, a name), don't guess: say what you can see and ask with ask_player.
 during a load can skip things or pick something the player didn't mean.
 - If the screen doesn't match what you expected after acting, stop and say what happened.
 - Keep say short and friendly; it's spoken aloud. Talk only when it helps.
-- When the request is done, call finish with one short sentence for the player.
+- When the request is done, call finish with one or two short spoken sentences for the \
+player: no lists, headings or line breaks.
 """
 
 CONFIRM = {

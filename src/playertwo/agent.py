@@ -13,12 +13,15 @@ from .muse import Muse, image_part
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame
 
+# Never the guide button: it opens the Steam overlay or the system menu, not the game.
+AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
+
 TOOLS = [
     {"type": "function", "function": {
         "name": "press",
         "description": "Press controller buttons in order. d-pad is up/down/left/right.",
         "parameters": {"type": "object", "properties": {
-            "buttons": {"type": "array", "items": {"type": "string", "enum": list(BUTTONS)},
+            "buttons": {"type": "array", "items": {"type": "string", "enum": AGENT_BUTTONS},
                         "description": "Buttons to press one after another."},
             "gap_ms": {"type": "integer", "description": "Pause between presses, default 150."},
         }, "required": ["buttons"]}}},
@@ -27,7 +30,7 @@ TOOLS = [
         "description": "Hold a button, or push a stick in a direction, for a while. Use "
                        "the left stick to walk.",
         "parameters": {"type": "object", "properties": {
-            "input": {"type": "string", "enum": ["left_stick", "right_stick", *BUTTONS]},
+            "input": {"type": "string", "enum": ["left_stick", "right_stick", *AGENT_BUTTONS]},
             "direction": {"type": "string", "enum": list(DIRECTIONS)},
             "ms": {"type": "integer", "description": "How long, in milliseconds (max 5000)."},
         }, "required": ["input", "ms"]}}},
@@ -123,7 +126,7 @@ class Agent:
 
     async def _act(self, name: str, a: dict) -> str:
         if name == "press":
-            buttons = [b for b in a.get("buttons", []) if b in BUTTONS][:12]
+            buttons = [b for b in a.get("buttons", []) if b in AGENT_BUTTONS][:12]
             held_back = ""
             if self.look_before_confirm:
                 buttons, held_back = split_before_confirm(buttons)
