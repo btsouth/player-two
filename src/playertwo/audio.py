@@ -28,8 +28,14 @@ class Mixer:
         self.sink = sink
         self.recorded: list[np.ndarray] = []
         self._stream = None
+        # No speaker or headset yet (a USB headset not plugged in): start anyway, quiet,
+        # and check() picks the device up when one appears.
+        self.lost = False
         if sink == "device":
-            self._open()
+            try:
+                self._open()
+            except Exception:  # noqa: BLE001
+                self._stream, self.lost = None, True
 
     def _open(self) -> None:
         import sounddevice as sd
@@ -40,16 +46,18 @@ class Mixer:
         )
         self._stream.start()
 
+    def playing(self) -> bool:
+        return self.sink != "device" or (self._stream is not None and self._stream.active)
+
     def check(self) -> bool:
         """Reopen the sound device if it went away (a headset unplugged, a device change).
 
         While there's no device, queued speech is dropped so nothing waits on it forever.
-        Returns whether sound is playing again.
+        Returns True only when sound has just come back after being lost.
         """
-        if self.sink != "device":
-            return True
-        if self._stream is not None and self._stream.active:
-            return True
+        if self.playing():
+            return False
+        self.lost = True
         self.clear_speech()
         try:
             if self._stream is not None:
@@ -62,14 +70,16 @@ class Mixer:
         except Exception:  # noqa: BLE001  try again on the next check
             self._stream = None
             return False
+        self.lost = False
         return True
 
     def close(self) -> None:
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+            self._stream.close(ignore_errors=True)
 
     def push_speech(self, mono: np.ndarray) -> None:
+        if not self.playing():
+            return  # nowhere to play it; queueing would leave everyone waiting on it
         with self._lock:
             self._speech.append(np.asarray(mono, dtype=np.float32))
             self.idle.clear()

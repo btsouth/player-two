@@ -44,31 +44,62 @@ function Install-PlayerTwo {
     & uv tool update-shell *> $null
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 
-    if ($arm) {
-        Say "Step 3 of 3: skipped. The controller driver doesn't support ARM computers, so I'll press keyboard keys instead."
-    } elseif (Get-Service ViGEmBus -ErrorAction SilentlyContinue) {
-        Say "Step 3 of 3: the controller driver is already installed."
-    } else {
-        Say "Step 3 of 3: installing the ViGEmBus controller driver, so I can press buttons as a second controller. Windows will ask for permission; choose Yes."
+    # Step 3: what needs administrator rights, behind a single Windows permission prompt.
+    # The Visual C++ runtime, which Player Two's voice needs and clean PCs often lack, and
+    # the ViGEmBus driver for the virtual controller (not on ARM, which it doesn't support).
+    $needVc = -not (Test-Path "$env:WINDIR\System32\msvcp140.dll") -or
+              -not (Test-Path "$env:WINDIR\System32\msvcp140_1.dll") -or
+              -not (Test-Path "$env:WINDIR\System32\vcruntime140_1.dll")
+    $needPad = -not $arm -and -not (Get-Service ViGEmBus -ErrorAction SilentlyContinue)
+    $msi = $null
+    if ($needPad) {
         $tools = (& uv tool dir).Trim()
         $msi = Get-ChildItem "$tools\player-two" -Recurse -Filter "ViGEmBusSetup_x64.msi" -ErrorAction SilentlyContinue |
             Select-Object -First 1
-        if (-not $msi) {
-            Say "I couldn't find the controller driver installer. I'll press keyboard keys instead."
-        } else {
-            try {
-                $p = Start-Process msiexec.exe -Verb RunAs -Wait -PassThru `
-                    -ArgumentList "/i `"$($msi.FullName)`" /passive /norestart"
-                if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) {
-                    Say "The controller driver is installed."
-                } else {
-                    Say "The controller driver didn't install (code $($p.ExitCode)). I'll press keyboard keys instead."
-                }
-            } catch {
-                Say "The controller driver wasn't installed, because permission wasn't given. I'll press keyboard keys instead. Run this installer again to add it later."
-            }
+        if (-not $msi) { $needPad = $false; Say "I couldn't find the controller driver installer. I'll press keyboard keys instead." }
+    }
+    $vcExe = Join-Path $env:TEMP "vc_redist.exe"
+    if ($needVc) {
+        $vcArch = if ($arm) { "arm64" } else { "x64" }
+        try {
+            Invoke-WebRequest "https://aka.ms/vs/17/release/vc_redist.$vcArch.exe" -OutFile $vcExe -UseBasicParsing
+        } catch {
+            $needVc = $false
+            Say "I couldn't download the Visual C++ runtime. If my voice doesn't work, install it from aka.ms/vs/17/release/vc_redist.$vcArch.exe."
         }
     }
+    if (-not $needVc -and -not $needPad) {
+        Say "Step 3 of 3: nothing else to install."
+    } else {
+        $what = @()
+        if ($needVc) { $what += "the Visual C++ runtime my voice needs" }
+        if ($needPad) { $what += "the ViGEmBus driver, so I can press buttons as a second controller" }
+        Say "Step 3 of 3: installing $($what -join ', and '). Windows will ask for permission once; choose Yes."
+        $codes = Join-Path $env:TEMP "player-two-codes.txt"
+        Remove-Item $codes -ErrorAction SilentlyContinue
+        $lines = @('$c = @()')
+        if ($needVc) { $lines += "`$c += 'vc ' + (Start-Process '$vcExe' -ArgumentList '/install','/quiet','/norestart' -Wait -PassThru).ExitCode" }
+        if ($needPad) { $lines += "`$c += 'pad ' + (Start-Process msiexec.exe -ArgumentList '/i','`"$($msi.FullName)`"','/passive','/norestart' -Wait -PassThru).ExitCode" }
+        $lines += "Set-Content -Path '$codes' -Value `$c"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($lines -join "`n"))
+        try {
+            Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden `
+                -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-EncodedCommand",$encoded
+            $results = @{}
+            Get-Content $codes -ErrorAction Stop | ForEach-Object { $k, $v = $_ -split " "; $results[$k] = [int]$v }
+            if ($needVc) {
+                if ($results["vc"] -in 0, 1638, 3010) { Say "The Visual C++ runtime is installed." }
+                else { Say "The Visual C++ runtime didn't install (code $($results["vc"])). If my voice doesn't work, run this installer again." }
+            }
+            if ($needPad) {
+                if ($results["pad"] -in 0, 3010) { Say "The controller driver is installed." }
+                else { Say "The controller driver didn't install (code $($results["pad"])). I'll press keyboard keys instead." }
+            }
+        } catch {
+            Say "Nothing was installed, because permission wasn't given. Run this installer again to add it later. Until then, I'll press keyboard keys instead of a controller, and my voice may not work."
+        }
+    }
+    if ($arm) { Say "The controller driver doesn't support ARM computers, so I'll press keyboard keys instead." }
 
     Say "Done. Now a few questions to set things up."
     & player-two setup

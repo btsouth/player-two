@@ -1,8 +1,11 @@
 """The app around the core loop: finding the game, settings, the talk key, start-up."""
 
+import sys
 import tomllib
 
 import pytest
+
+linux_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes, Linux desktops")
 
 from playertwo import config, desktop, games
 from playertwo.app import local_action, parse_setting, trouble_words
@@ -11,6 +14,7 @@ from playertwo.app import local_action, parse_setting, trouble_words
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
     games.steam_libraries.cache_clear()
     games.steam_game_name.cache_clear()
@@ -55,6 +59,7 @@ def test_pick_game_prefers_steam_and_skips_terminals_browsers_and_itself(home):
     assert games.pick_game(clients, "retro")["class"] == "retroarch"
 
 
+@linux_only
 def test_save_settings_keeps_comments_tables_and_the_file_mode(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('# mine\nverbosity = "normal"  \nbrain = "open"\n\n[keys]\nverbosity = 1\n')
@@ -87,6 +92,7 @@ def test_quit_is_only_for_player_two():
     assert local_action("quit") is None
 
 
+@linux_only
 def test_talk_key_bind_is_added_once_with_a_backup(home):
     hypr = home / ".config/hypr"
     hypr.mkdir(parents=True)
@@ -103,6 +109,7 @@ def test_talk_key_bind_is_added_once_with_a_backup(home):
     assert (hypr / "bindings.lua").read_text() == text
 
 
+@linux_only
 def test_talk_key_bind_for_plain_hyprland(home):
     hypr = home / ".config/hypr"
     hypr.mkdir(parents=True)
@@ -112,6 +119,7 @@ def test_talk_key_bind_for_plain_hyprland(home):
     assert "bind = , F8, exec," in text and "bindr = , F8, exec," in text
 
 
+@linux_only
 def test_desktop_entry_and_icon(home, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(home / "data"))
     entry, icon = desktop.install_desktop_entry()
@@ -132,6 +140,7 @@ def test_network_trouble_is_said_plainly():
     assert kind == "key" and "setup" in words
 
 
+@linux_only
 def test_save_settings_keeps_inline_comments_and_writes_through_symlinks(tmp_path):
     real = tmp_path / "dotfiles" / "config.toml"
     real.parent.mkdir()

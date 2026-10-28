@@ -220,7 +220,8 @@ class OtherWindows(Backend):
         return True
 
     async def stop(self) -> None:
-        await asyncio.wrap_future(_com().submit(self.out.silence))
+        with contextlib.suppress(Exception):  # a broken reader has nothing to stop
+            await asyncio.wrap_future(_com().submit(self.out.silence))
 
 
 def _other_windows_reader() -> Backend | None:
@@ -243,6 +244,26 @@ def _other_windows_reader() -> Backend | None:
         except Exception:  # noqa: BLE001, S112  a missing reader can fail any way
             continue
     return None
+
+
+def system_voice() -> Backend | None:
+    """The computer's own speech, for when Player Two's voice can't start."""
+    if sys.platform == "win32":
+        def sapi() -> Backend | None:
+            try:
+                from accessible_output2.outputs.sapi5 import SAPI5
+
+                out = OtherWindows(SAPI5())
+            except Exception:  # noqa: BLE001
+                return None
+            out.name = "the Windows voice"
+            return out
+
+        try:
+            return _com().submit(sapi).result(timeout=20)
+        except Exception:  # noqa: BLE001
+            return None
+    return SpeechDispatcher() if shutil.which("spd-say") else None
 
 
 def find_backend() -> Backend | None:
@@ -289,6 +310,7 @@ class ScreenReaderVoice:
         self._stopping: asyncio.Task | None = None
         # Player Two's own voice, for lines the screen reader won't take.
         self._own = None
+        self._own_failed = False
         self._own_lock = asyncio.Lock()
 
     def warm_up(self) -> None:
@@ -333,10 +355,13 @@ class ScreenReaderVoice:
         if await self.backend.speak(text):
             return
         self._busy_until = 0.0
+        if self._own_failed:
+            return
         gen = self._gen
         try:
             own = await self._own_voice()
         except Exception as exc:  # noqa: BLE001  nothing left to speak with
+            self._own_failed = True
             print(f"Couldn't speak: {exc}", file=sys.stderr)
             return
         if gen == self._gen:
@@ -406,4 +431,11 @@ def open_voice(settings: Settings, mixer: Mixer):
               "using Player Two's own voice.", file=sys.stderr)
     from .voice import Voice
 
-    return Voice(settings, mixer)
+    try:
+        return Voice(settings, mixer)
+    except Exception as exc:
+        backend = system_voice()
+        if backend is None:
+            raise
+        print(f"My voice couldn't start ({exc}); using {backend.name} instead.", file=sys.stderr)
+        return ScreenReaderVoice(settings, mixer, backend)

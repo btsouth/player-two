@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -143,6 +144,7 @@ class Agent:
         self.confirm = confirm
         self.language = language
         self.history: list[str] = []
+        self.said: list[str] = []
         self.cancelled = False
         # Cleared while the player holds the talk key: no presses or speech until it's
         # known whether they said stop, asked something else, or just wanted a repeat.
@@ -161,8 +163,20 @@ class Agent:
 
     async def _speak(self, text: str) -> None:
         await self.go.wait()
-        if not self.cancelled:
+        if not self.cancelled and text.strip():
+            self.said.append(text)
             await self.speak(text)
+
+    def _already_said(self, text: str) -> bool:
+        """Whether this run already said it (a finish that restates the last say)."""
+        words = set(re.findall(r"[a-z0-9']+", text.lower()))
+        for said in self.said:
+            if re.findall(r"\d+", said) != re.findall(r"\d+", text):
+                continue
+            before = set(re.findall(r"[a-z0-9']+", said.lower()))
+            if words and (words <= before or len(words & before) / len(words | before) >= 0.5):
+                return True
+        return False
 
     def system(self) -> str:
         parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]
@@ -245,6 +259,7 @@ class Agent:
         t0 = time.monotonic()
         run = Run(request)
         self.cancelled = False
+        self.said: list[str] = []
         frame = frame or await self.grab()
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
         msgs: list[dict] = [
@@ -317,7 +332,8 @@ class Agent:
                 run.outcome = "cancelled"
                 break
             if finished is not None:
-                await self._speak(finished)
+                if not self._already_said(finished):
+                    await self._speak(finished)
                 run.outcome = finished
                 break
             turn["act_s"] = round(time.monotonic() - t_act, 2)

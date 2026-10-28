@@ -94,15 +94,24 @@ Meta's API has no text-to-speech model, so the narrator voice is
 
 ## Quick start
 
+On Windows, paste this into PowerShell. It installs everything, including the virtual controller
+driver (Windows asks for permission once), then starts setup:
+
+```powershell
+irm https://raw.githubusercontent.com/btsouth/player-two/main/install.ps1 | iex
+```
+
+On Linux, with [uv](https://docs.astral.sh/uv/):
+
 ```bash
 git clone https://github.com/btsouth/player-two && cd player-two
-uv tool install .        # Windows: uv tool install ".[windows]"
+uv tool install . --excludes uv-excludes.txt   # keeps the GPU build of the voice model
 player-two setup         # key, voice, microphone, controller, talk key, launcher: one question at a time
 ```
 
 Then start your game and run `player-two`, or pick **Player Two** in your app launcher. It finds
 the game window by itself (a Steam game is named from its Steam library), says hello, and starts
-narrating. Hold **F8** and talk.
+narrating. Hold **F8** and talk. Say "help" any time to hear what you can say.
 
 Setup is plain questions and answers, so it reads well in a screen reader. It:
 
@@ -111,9 +120,10 @@ Setup is plain questions and answers, so it reads well in a screen reader. It:
   Player Two says, and its speaking speed
 - checks your microphone and the virtual controller, and offers the one-line udev rule if
   `/dev/uinput` needs it
-- adds F8 as a hold-to-talk key to your Omarchy or Hyprland config (with a backup). On Windows,
-  Player Two watches F8 itself. On other desktops, bind `player-two ctl talk-start` to a key press
-  and `player-two ctl talk-stop` to its release.
+- adds F8 as a hold-to-talk key to your Omarchy or Hyprland config (with a backup). On GNOME it
+  adds F8 as a shortcut you press once to start talking and again to stop. On Windows, Player Two
+  takes F8 itself, so the game doesn't also get it. Elsewhere, bind `player-two ctl talk-start` to
+  a key press and `player-two ctl talk-stop` to its release.
 - adds Player Two to your app launcher
 
 When something is wrong (no key, no microphone, no controller, no network), Player Two says so out
@@ -126,11 +136,14 @@ loud and says how to fix it, instead of printing it where you can't see it.
 | anything about the game | Player Two looks and answers, or does it |
 | "describe" / "what's on screen" | a full spoken tour of the screen |
 | "repeat" | says the last line again |
-| "stop" / "quiet" | stops talking (and cancels a running command) |
+| "stop" / "quiet" / "cancel that" | stops talking (and cancels a running command) |
+| "help" | lists what you can say |
+| "slower" / "faster" | changes its speaking speed |
 | "terse", "less detail", "more detail", "back to normal" | how much it says |
 | "the game reads the menus" / "team up" | leaves menus to the game's own narrator |
 | "watch my health" | starts health and stamina warnings |
-| "pause" / "resume" | stops and restarts narration |
+| "pause narration" / "resume narration" | stops and restarts narration ("pause" alone pauses the game) |
+| "show the window" | opens the companion window, where you can also type |
 | "goodbye" | Player Two says bye and quits |
 
 ## Settings
@@ -143,10 +156,10 @@ voice = "af_heart"        # Kokoro voice
 speech_rate = 1.1
 verbosity = "normal"      # terse, quiet, normal, detailed
 language = "English"      # or British English, Spanish, French, Italian, Portuguese, Hindi
-output = "voice"          # or "screen-reader": Orca, speech-dispatcher, NVDA, JAWS
+output = "auto"           # your screen reader when one is running, else the voice; or "voice", "screen-reader"
 confirm = "important"     # always, important, never
 team_up = false
-window = ""               # part of the game window's title; empty means the last focused window
+window = ""               # part of the game window's title; empty means find the game
 controls = "auto"         # gamepad, keyboard
 companion = "auto"        # the window: auto (on Hyprland), on, off
 ```

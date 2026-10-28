@@ -54,13 +54,19 @@ def ensure_models() -> Path:
             tmp = p.with_suffix(".part")
             said = [0]
 
-            def progress(blocks, size, total):
-                pct = int(blocks * size * 100 / total) if total > 0 else 0
-                if pct >= said[0] + 25 and pct < 100:
-                    said[0] = pct - pct % 25
-                    print(f"{said[0]} percent", flush=True)
-
-            urllib.request.urlretrieve(MODEL_URL + name, tmp, progress)
+            # A read timeout, so a stalled connection fails instead of hanging setup.
+            with urllib.request.urlopen(MODEL_URL + name, timeout=60) as r, tmp.open("wb") as f:
+                total = int(r.headers.get("Content-Length") or 0)
+                done = 0
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+                    done += len(chunk)
+                    pct = done * 100 // total if total else 0
+                    if pct >= said[0] + 25 and pct < 100:
+                        said[0] = pct - pct % 25
+                        print(f"{said[0]} percent", flush=True)
+            if total and tmp.stat().st_size != total:
+                raise OSError(f"the download of {name} was cut short")
             tmp.replace(p)
     return d
 

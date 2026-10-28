@@ -139,7 +139,8 @@ def step_key(s: Settings) -> None:
 
 
 def _enter_key() -> bool:
-    key = getpass.getpass("Key: ").strip()
+    # Piped in, read it plainly: Windows' hidden prompt reads only the keyboard.
+    key = (getpass.getpass("Key: ") if sys.stdin.isatty() else sys.stdin.readline()).strip()
     if key:
         write_secret("api-key", key)
         say("Saved.")

@@ -140,6 +140,20 @@ class TestAgent:
         assert said == ["Done."]
         assert result.outcome == "Done."
 
+    def test_finish_doesnt_repeat_what_say_just_said(self):
+        agent, _, said, _, _ = self.make([
+            [("say", {"text": "Your HP is 42 out of 50."}),
+             ("finish", {"text": "That's 42 out of 50."})],
+        ])
+        run(agent.run("what's my HP?"))
+        assert said == ["Your HP is 42 out of 50."]
+        agent, _, said, _, _ = self.make([
+            [("say", {"text": "Your HP is 42 out of 50."}),
+             ("finish", {"text": "You also have 3 potions."})],
+        ])
+        run(agent.run("what's my HP?"))
+        assert said == ["Your HP is 42 out of 50.", "You also have 3 potions."]
+
     def test_holding_the_talk_key_pauses_presses_until_released(self):
         agent, pad, said, _, _ = self.make([
             [("press", {"buttons": ["down", "down", "right"]})],

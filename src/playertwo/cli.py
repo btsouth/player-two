@@ -152,6 +152,9 @@ COMMANDS = ("run", "setup", "install-desktop", "narrate", "say", "ask", "ctl")
 
 
 def main(argv: list[str] | None = None) -> None:
+    import truststore
+
+    truststore.inject_into_ssl()
     argv = sys.argv[1:] if argv is None else list(argv)
     # Plain "player-two" (or with run's flags) starts a session.
     if not argv or (argv[0] not in COMMANDS and argv[0] not in ("-h", "--help")):

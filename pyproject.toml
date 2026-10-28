@@ -13,6 +13,9 @@ dependencies = [
     "kokoro-onnx>=0.4",
     "sounddevice>=0.5",
     "soundfile>=0.12",
+    # Downloads check certificates against the system's own store (Python on Windows
+    # doesn't, and would fail behind any TLS-inspecting antivirus or proxy too).
+    "truststore>=0.10",
     "evdev>=1.7; sys_platform == 'linux'",
     # The GPU build also runs on the CPU. Linux x86_64 gets it (install with
     # --excludes uv-excludes.txt so the CPU build doesn't land on top); Windows and

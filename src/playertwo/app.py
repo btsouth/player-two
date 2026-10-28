@@ -72,6 +72,8 @@ HELP = ("{talk} and ask me anything about the game, or tell me what to do, like:
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
                "window, where you can type to me instead.")
+SOUND_PROBLEM = ("I can't find a speaker or headset. I'll start talking as soon as one is "
+                 "connected.")
 TALK_KEY_PROBLEM = ("Your talk key isn't set up yet. Run player-two setup in a terminal to "
                     "set it up. Until then, I opened the Player Two window: type to me "
                     "there, or use its talk button.")
@@ -183,6 +185,8 @@ class Session:
         self.controls = open_controls(controls or settings.controls, focus=self.focus_game)
         # Things the player should hear about at start-up (no controller, no mic).
         self.problems: list[str] = [self.controls.problem] if self.controls.problem else []
+        if self.mixer.lost:
+            self.problems.append(SOUND_PROBLEM)
         self.narrator = Narrator(self.muse, settings.verbosity, settings.game,
                                  settings.language, settings.team_up)
         self.watcher = ChangeWatcher()
@@ -385,7 +389,8 @@ class Session:
         while True:
             if time.monotonic() - checked > 2.0 and self.utt is None:
                 checked = time.monotonic()
-                await asyncio.to_thread(self.mixer.check)
+                if await asyncio.to_thread(self.mixer.check):
+                    self.announce("My sound is back.", status=True, wait_turn=True)
             st = self.current_status()
             if st != self.status:
                 self.status = st
@@ -1034,7 +1039,7 @@ class Session:
         from .desktop import talk_key_bound as _bound
 
         typing_only = MIC_PROBLEM in self.problems or not _bound(self.s)
-        if ui and (self.want_window() or typing_only):
+        if ui and (self.want_window() or typing_only or SOUND_PROBLEM in self.problems):
             self.open_window(refocus=not typing_only)
         from .desktop import TALK_KEY, talk_key_bound
 

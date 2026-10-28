@@ -820,6 +820,7 @@ dependencies = [
     { name = "pillow" },
     { name = "sounddevice" },
     { name = "soundfile" },
+    { name = "truststore" },
     { name = "websockets" },
 ]
 
@@ -854,6 +855,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=10" },
     { name = "sounddevice", specifier = ">=0.5" },
     { name = "soundfile", specifier = ">=0.12" },
+    { name = "truststore", specifier = ">=0.10" },
     { name = "vgamepad", marker = "extra == 'windows'", specifier = ">=0.1" },
     { name = "websockets", specifier = ">=13" },
 ]
