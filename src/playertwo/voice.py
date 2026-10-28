@@ -50,10 +50,18 @@ def ensure_models() -> Path:
         if not p.exists() or p.stat().st_size == 0:
             import urllib.request
 
-            print(f"Downloading voice model {name} (one time)...")
+            print(f"Downloading voice file {name} (one time)...", flush=True)
             tmp = p.with_suffix(".part")
-            urllib.request.urlretrieve(MODEL_URL + name, tmp)
-            tmp.rename(p)
+            said = [0]
+
+            def progress(blocks, size, total):
+                pct = int(blocks * size * 100 / total) if total > 0 else 0
+                if pct >= said[0] + 25 and pct < 100:
+                    said[0] = pct - pct % 25
+                    print(f"{said[0]} percent", flush=True)
+
+            urllib.request.urlretrieve(MODEL_URL + name, tmp, progress)
+            tmp.replace(p)
     return d
 
 

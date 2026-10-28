@@ -192,3 +192,24 @@ def test_spoken_commands_people_actually_say():
     }
     for said, action in cases.items():
         assert local_action(said) == action, said
+
+
+def test_gnome_talk_key_is_added_to_the_existing_shortcuts(monkeypatch):
+    store = {("get", desktop.GNOME_KEYS, "custom-keybindings"): "['/custom0/']"}
+
+    def fake(*args):
+        if args[0] == "set":
+            store[("get", *args[1:3])] = args[3]
+            return ""
+        return store.get(args, "")
+
+    monkeypatch.setattr(desktop, "_gsettings", fake)
+    said = desktop.install_gnome_talk_key()
+    assert said.startswith("Done.")
+    paths = store[("get", desktop.GNOME_KEYS, "custom-keybindings")]
+    assert "/custom0/" in paths and desktop.GNOME_PATH in paths
+    key = f"{desktop.GNOME_KEYS}.custom-keybinding:{desktop.GNOME_PATH}"
+    assert store[("get", key, "command")].endswith("ctl talk")
+    assert store[("get", key, "binding")] == "F8"
+    desktop.install_gnome_talk_key()  # twice adds it once
+    assert store[("get", desktop.GNOME_KEYS, "custom-keybindings")].count("player-two") == 1

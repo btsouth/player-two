@@ -165,13 +165,58 @@ def player_two_cmd() -> str:
     return shlex.quote(exe) if exe else f"{shlex.quote(sys.executable)} -m playertwo.cli"
 
 
-def talk_key_bound() -> bool:
+def talk_key_bound(settings=None) -> bool:
     if sys.platform == "win32":
         return True  # Player Two watches the key itself
+    if settings is not None and settings.talk_key_set:
+        return True
     for p in (omarchy_bindings(), hyprland_conf()):
         if p and "ctl talk-start" in p.read_text(errors="replace"):
             return True
-    return False
+    return gnome() and gnome_talk_key_bound()
+
+
+# GNOME's shortcuts run a command on press only, so there the key toggles listening.
+GNOME_KEYS = "org.gnome.settings-daemon.plugins.media-keys"
+GNOME_PATH = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/player-two/"
+
+
+def gnome() -> bool:
+    return "gnome" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower() and bool(
+        shutil.which("gsettings"))
+
+
+def _gsettings(*args: str) -> str:
+    try:
+        return subprocess.run(["gsettings", *args], capture_output=True, text=True,
+                              timeout=5, check=False).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def gnome_talk_key_bound() -> bool:
+    return GNOME_PATH in _gsettings("get", GNOME_KEYS, "custom-keybindings") and "ctl talk" in (
+        _gsettings("get", f"{GNOME_KEYS}.custom-keybinding:{GNOME_PATH}", "command"))
+
+
+def install_gnome_talk_key() -> str:
+    import ast
+
+    raw = _gsettings("get", GNOME_KEYS, "custom-keybindings")
+    try:
+        paths = ast.literal_eval(raw.removeprefix("@as ")) if raw else []
+    except (ValueError, SyntaxError):
+        return "I couldn't read your GNOME keyboard shortcuts, so I left them alone."
+    if GNOME_PATH not in paths:
+        paths.append(GNOME_PATH)
+    key = f"{GNOME_KEYS}.custom-keybinding:{GNOME_PATH}"
+    _gsettings("set", key, "name", "Player Two: talk")
+    _gsettings("set", key, "command", f"{player_two_cmd()} ctl talk")
+    _gsettings("set", key, "binding", TALK_KEY)
+    _gsettings("set", GNOME_KEYS, "custom-keybindings", str(paths))
+    if gnome_talk_key_bound():
+        return f"Done. Press {TALK_KEY} to talk, and again when you're done."
+    return "That didn't work. Add the shortcut by hand in Settings, Keyboard, Shortcuts."
 
 
 def bind_lines(cmd: str, lua: bool) -> str:

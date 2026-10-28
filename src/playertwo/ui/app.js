@@ -33,6 +33,7 @@ let pressTimer = null;
 let lastPress = 0;
 let liveTimer = null;
 let talkKey = "F8";
+let talkToggle = false;
 
 // What a screen reader hears from this window: the talk turns, not every flicker between
 // watching and speaking (the voice already covers those).
@@ -185,6 +186,8 @@ function handle(ev) {
     case "ready":
       setGame(ev.game, ev.found !== false);
       if (ev.talk_key) { talkKey = ev.talk_key; $("talk-key").textContent = ev.talk_key; }
+      talkToggle = Boolean(ev.talk_toggle);
+      $("talk-verb").textContent = talkToggle ? "Press" : "Hold";
       if (ev.first_run && !localStorage.getItem("p2-welcomed")) {
         notice("welcome", "hello", "Hi, I'm Player Two", [
           `I tell you what's happening in your game, and I play when you ask. Hold ${talkKey} and talk, then let go. Some things to try:`,
@@ -195,8 +198,9 @@ function handle(ev) {
       for (const [i, p] of (ev.problems || []).entries()) notice(`problem-${i}`, "warn", "Needs a fix", [p]);
       if (ev.talk_key_bound === false) {
         notice("talk-key", "warn", "No talk key yet", [
-          "Run player-two setup in a terminal to make F8 your talk key. Until then, hold the talk button below, or type.",
+          "Run player-two setup in a terminal to make F8 your talk key. Until then, type to me in the box below, or use the talk button.",
         ]);
+        $("type-box").focus();
       }
       break;
     case "game":
@@ -305,6 +309,12 @@ talk.addEventListener("keydown", (e) => {
 talk.addEventListener("keyup", (e) => {
   if (e.key === " " || e.key === "Enter") { talkStop(); e.preventDefault(); }
 });
+// Screen readers in browse mode send a click with no press and release: let a click
+// start talking and the next one stop.
+talk.addEventListener("click", (e) => {
+  if (e.detail !== 0) return;
+  if (talking) talkStop(); else talkStart();
+});
 addEventListener("keydown", (e) => {
   if (e.key === talkKey && !e.repeat) { talkStart(); e.preventDefault(); }
 });
@@ -352,8 +362,15 @@ for (const group of document.querySelectorAll(".seg[data-setting]")) {
     next.click();
   });
 }
-$("language").addEventListener("change", (e) => setSetting("language", e.target.value));
-$("output").addEventListener("change", (e) => setSetting("output", e.target.value));
+// Arrowing through a closed select fires a change per step in Chromium on Windows; wait
+// for the player to settle on one before switching (a voice switch takes a moment).
+const settle = {};
+function setSoon(key, value) {
+  clearTimeout(settle[key]);
+  settle[key] = setTimeout(() => setSetting(key, value), 900);
+}
+$("language").addEventListener("change", (e) => setSoon("language", e.target.value));
+$("output").addEventListener("change", (e) => setSoon("output", e.target.value));
 $("speech-rate").addEventListener("input", (e) => {
   $("rate-out").textContent = `${Number(e.target.value).toFixed(2)}×`;
 });

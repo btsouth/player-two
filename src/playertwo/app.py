@@ -69,10 +69,11 @@ HELP = ("Hold the talk key and ask me anything about the game, or tell me what t
         "stop, help, terse, more detail, slower, faster, pause, resume, watch my health, "
         "or goodbye.")
 
-MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. You can type to me in the "
-               "Player Two window instead.")
-TALK_KEY_PROBLEM = ("Your talk key isn't set up yet. Run player-two setup in a terminal, "
-                    "or use the talk button in the Player Two window.")
+MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
+               "window, where you can type to me instead.")
+TALK_KEY_PROBLEM = ("Your talk key isn't set up yet. Run player-two setup in a terminal to "
+                    "set it up. Until then, I opened the Player Two window: type to me "
+                    "there, or use its talk button.")
 
 # Settings the companion window can change while playing. Each is saved to config.toml.
 SETTABLE: dict[str, tuple] = {
@@ -881,13 +882,15 @@ class Session:
         elif name:
             parts.append(f"I can see {name}.")
         parts += self.problems
-        if not talk_key_bound():
+        how = (f"Press {TALK_KEY} to talk, and again when you're done" if self.s.talk_toggle
+               else f"Hold {TALK_KEY} to talk")
+        if not talk_key_bound(self.s):
             parts.append(TALK_KEY_PROBLEM)
         elif new:
-            parts.append(f"Hold {TALK_KEY} and tell me what you need. Say stop any time to "
-                         "cut me off.")
+            parts.append(f"{how}, and tell me what you need. Say help to hear what else "
+                         "you can say, and stop any time to cut me off.")
         elif not terse:
-            parts.append(f"Hold {TALK_KEY} to talk.")
+            parts.append(f"{how}.")
         if terse and not new:
             parts = [p for p in parts if p != "Player Two here."] or ["Ready."]
             parts.insert(0, "Player Two.")
@@ -957,13 +960,18 @@ class Session:
             self.set_game(False, announce=False)
         except Exception as exc:  # noqa: BLE001  the watch loop will report it
             self.events.emit("error", where="capture", message=str(exc)[:300])
-        if ui and self.want_window():
+        # Without a mic or a talk key, typing in the window is the only way to reach me.
+        from .desktop import talk_key_bound as _bound
+
+        if ui and (self.want_window() or MIC_PROBLEM in self.problems
+                   or not _bound(self.s)):
             self.open_window()
         from .desktop import TALK_KEY, talk_key_bound
 
         self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device,
                          game=self.narrator.game, found=self.game is not False,
-                         talk_key=TALK_KEY, talk_key_bound=talk_key_bound(),
+                         talk_key=TALK_KEY, talk_key_bound=talk_key_bound(self.s),
+                         talk_toggle=self.s.talk_toggle,
                          brain=self.muse.model, first_run=first_run(),
                          problems=self.problems)
         self.emit_settings()

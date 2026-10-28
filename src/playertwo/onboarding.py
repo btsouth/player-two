@@ -121,18 +121,29 @@ def step_key(s: Settings) -> None:
     if env:
         say(f"Note: {env} is set in your environment, and it wins over the saved key. "
             "That's the one I'll check.")
-    say("Checking the key...")
-    problem = check_key(s)
-    say(problem or "The key works.")
+    for _ in range(3):
+        say("Checking the key...")
+        problem = check_key(s)
+        if problem is None:
+            say("The key works.")
+            break
+        say(problem)
+        if env or "turned that key down" not in problem:
+            say("You can keep going with setup and check the key later.")
+            break
+        say("Paste the key again, or press Enter to keep going without changing it.")
+        if not _enter_key():
+            break
     if has_open_credentials():
         say("Your Muse Spark Open provider is set up too, so I'll think with the open model.")
 
 
-def _enter_key() -> None:
+def _enter_key() -> bool:
     key = getpass.getpass("Key: ").strip()
     if key:
         write_secret("api-key", key)
         say("Saved.")
+    return bool(key)
 
 
 def step_speech(s: Settings, changes: dict) -> None:
@@ -204,11 +215,15 @@ def step_mic() -> None:
         import numpy as np
         import sounddevice as sd
 
+        from .audio import tone
         from .listen import RATE
 
-        ask("Press Enter, then say a few words. I'll listen for three seconds.", "")
+        ask("Press Enter, then say a few words after the beep. I'll listen for three "
+            "seconds, until the second beep.", "")
+        sd.play(tone(880, 120), RATE, blocking=True)
         rec = sd.rec(int(3 * RATE), samplerate=RATE, channels=1, dtype="int16")
         sd.wait()
+        sd.play(tone(660, 160), RATE, blocking=True)
     except Exception as exc:  # noqa: BLE001
         say(f"I couldn't open a microphone ({exc}). You can still type to me in the Player "
             "Two window.")
@@ -235,8 +250,9 @@ def step_controller() -> None:
     except Exception as exc:  # noqa: BLE001
         problem = exc
     if sys.platform == "win32":
-        say("The virtual controller needs the ViGEmBus driver. Install it from "
-            f"{VIGEM_URL}, then run setup again. Until then I'll press keyboard keys.")
+        say("The virtual controller needs the ViGEmBus driver. Run the Player Two "
+            "installer again to add it, or get it from "
+            f"{VIGEM_URL}. Until then I'll press keyboard keys.")
         return
     say(f"I can't create a virtual controller yet ({problem}). A udev rule gives you "
         "access to /dev/uinput, the same one Steam uses for its controller support:")
@@ -254,8 +270,15 @@ def step_controller() -> None:
             say("That didn't work. Until it's fixed I'll press keyboard keys instead.")
 
 
-def step_talk_key() -> None:
-    from .desktop import TALK_KEY, install_talk_key, player_two_cmd, talk_key_bound
+def step_talk_key(changes: dict) -> None:
+    from .desktop import (
+        TALK_KEY,
+        gnome,
+        install_gnome_talk_key,
+        install_talk_key,
+        player_two_cmd,
+        talk_key_bound,
+    )
 
     say("\nStep 5 of 6: the talk key.")
     if sys.platform == "win32":
@@ -266,29 +289,48 @@ def step_talk_key() -> None:
         return
     hyprland = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or os.path.exists(
         os.path.expanduser("~/.config/hypr"))
-    if hyprland and ask_yes(f"Make {TALK_KEY} your hold-to-talk key? I'll add it to your "
-                            "Hyprland config and keep a backup."):
-        say(install_talk_key())
+    if hyprland:
+        if ask_yes(f"Make {TALK_KEY} your hold-to-talk key? I'll add it to your Hyprland "
+                   "config and keep a backup."):
+            say(install_talk_key())
         return
-    say(f"In your desktop's keyboard shortcut settings, bind a key to run "
-        f"'{player_two_cmd()} ctl talk-start' when pressed and "
-        f"'{player_two_cmd()} ctl talk-stop' when released. Or use the talk button in the "
-        "Player Two window.")
+    if gnome():
+        if ask_yes(f"Make {TALK_KEY} your talk key? Press it once to talk and again when "
+                   "you're done. I'll add it to your GNOME keyboard shortcuts."):
+            say(install_gnome_talk_key())
+            changes["talk_toggle"] = True
+        return
+    say(f"In your desktop's keyboard shortcut settings, bind {TALK_KEY} to run "
+        f"'{player_two_cmd()} ctl talk'. Press it once to talk and again when you're "
+        "done.")
+    if ask_yes("Is that set up now?", False):
+        changes["talk_toggle"] = True
+        changes["talk_key_set"] = True
+    else:
+        say("Okay. Until then, type to me in the Player Two window. Say 'show the "
+            "window', or run player-two ctl show.")
 
 
 def step_app(s: Settings, changes: dict) -> None:
     from .desktop import install_desktop_entry
 
     say("\nStep 6 of 6: the app.")
-    show = ask_yes("Open the Player Two window when I start? It shows big captions, what I "
-                   "see, and what I press, without taking focus from the game.",
-                   s.companion != "off")
-    # "auto" only opens it on Hyprland, where it can open without taking focus.
-    hyprland = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
-    changes["companion"] = ("auto" if hyprland else "on") if show else "off"
+    # Only Hyprland can open the window without taking focus from the game; elsewhere
+    # it stays closed unless asked for.
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        show = ask_yes("Open the Player Two window when I start? It shows big captions, "
+                       "what I see, and what I press, without taking focus from the game.",
+                       s.companion != "off")
+        changes["companion"] = "auto" if show else "off"
+    else:
+        say("There's also a Player Two window with big captions and settings. Say 'show "
+            "the window' any time to open it.")
     if ask_yes("Add Player Two to your app launcher?"):
-        for p in install_desktop_entry():
-            say(f"Added {p}")
+        try:
+            for p in install_desktop_entry():
+                say(f"Added {p}")
+        except Exception as exc:  # noqa: BLE001  setup still finishes
+            say(f"I couldn't add it ({exc}). You can start me with: player-two")
 
 
 def run_setup() -> None:
@@ -296,18 +338,19 @@ def run_setup() -> None:
     changes: dict = {}
     say("Player Two setup. Press Enter to keep the answer in brackets. Ctrl+C stops at any "
         "time.")
+    steps = [lambda: step_key(s), lambda: step_speech(s, changes), step_mic,
+             step_controller, lambda: step_talk_key(changes), lambda: step_app(s, changes)]
     try:
-        step_key(s)
-        step_speech(s, changes)
-        step_mic()
-        step_controller()
-        step_talk_key()
-        step_app(s, changes)
+        for step in steps:
+            step()
+            if changes:  # keep each answer even if a later step fails
+                save_settings(changes)
     except KeyboardInterrupt:
-        say("\nStopped. Anything already saved stays saved.")
+        say("\nStopped. The answers you gave are saved.")
         if changes:
             save_settings(changes)
         sys.exit(130)
-    save_settings(changes)
+    how = "Press F8 to talk, and again when you're done" if (
+        changes.get("talk_toggle") or s.talk_toggle) else "Hold F8 and talk"
     say("\nAll set. Start your game, then run player-two, or pick Player Two in your app "
-        "launcher. Hold F8 and ask me anything.")
+        f"launcher. {how}. Say help to hear what else you can say.")

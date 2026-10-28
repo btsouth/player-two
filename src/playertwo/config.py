@@ -90,6 +90,11 @@ class Settings:
     # The companion window (captions, what Player Two sees and presses): "auto" opens it
     # on Hyprland without taking focus from the game, "on" always, "off" never.
     companion: str = "auto"
+    # The talk key starts and stops listening on two presses (GNOME and other desktops
+    # without hold binds) instead of being held.
+    talk_toggle: bool = False
+    # The player bound the talk key by hand where Player Two can't check it.
+    talk_key_set: bool = False
     extra: dict = field(default_factory=dict)
 
     @classmethod
