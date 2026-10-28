@@ -134,7 +134,7 @@ def step_key(s: Settings) -> None:
         say("Paste the key again, or press Enter to keep going without changing it.")
         if not _enter_key():
             break
-    if has_open_credentials():
+    if s.brain != "meta" and has_open_credentials(s.open_base_url):
         say("Your Muse Spark Open provider is set up too, so I'll think with the open model.")
 
 

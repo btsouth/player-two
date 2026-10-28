@@ -438,3 +438,16 @@ async def test_screen_reader_that_refuses_lines_falls_back_to_our_voice(monkeypa
     await v.say("It's weak to fire.", interrupt=False)
     assert v._own.said[0].startswith("NVDA isn't taking my lines")
     assert v._own.said[1:] == ["Shadow ahead.", "It's weak to fire."]
+
+
+def test_modal_token_only_goes_to_a_modal_address(tmp_path, monkeypatch):
+    from playertwo import config
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    for name in ("MODAL_PROXY_KEY", "MODAL_PROXY_SECRET", "PLAYER_TWO_OPEN_API_KEY",
+                 "BASETEN_API_KEY", "FIREWORKS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / "modal.env").write_text("MODAL_PROXY_KEY=wk-1\nMODAL_PROXY_SECRET=ws-1\n")
+    (tmp_path / "open-api-key").write_text("bt-key\n")
+    key, headers = config.open_credentials("https://ws--ep-server.us-west.modal.direct/v1")
+    assert key == "modal" and headers["Modal-Key"] == "wk-1"
+    assert config.open_credentials("https://inference.baseten.co/v1") == ("bt-key", {})

@@ -230,23 +230,25 @@ def _env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def has_open_credentials() -> bool:
+def has_open_credentials(base_url: str = "") -> bool:
     try:
-        open_credentials()
+        open_credentials(base_url)
     except SystemExit:
         return False
     return True
 
 
-def open_credentials() -> tuple[str, dict[str, str]]:
-    """API key and extra headers for the provider serving Muse Spark Open.
+def open_credentials(base_url: str = "") -> tuple[str, dict[str, str]]:
+    """API key and extra headers for the provider serving Muse Spark Open at base_url.
 
     Modal shared endpoints authenticate with a proxy token (Modal-Key and Modal-Secret
     headers, from MODAL_PROXY_KEY/SECRET or ~/.config/player-two/modal.env); Baseten,
-    Fireworks and the rest take a bearer key.
+    Fireworks and the rest take a bearer key. A Modal token is only used for a Modal
+    address, so switching providers doesn't send it to the wrong one.
     """
     env = {**_env_file(CONFIG_DIR / "modal.env"), **os.environ}
-    if env.get("MODAL_PROXY_KEY") and env.get("MODAL_PROXY_SECRET"):
+    modal = not base_url or ".modal." in base_url
+    if modal and env.get("MODAL_PROXY_KEY") and env.get("MODAL_PROXY_SECRET"):
         return "modal", {"Modal-Key": env["MODAL_PROXY_KEY"],
                          "Modal-Secret": env["MODAL_PROXY_SECRET"]}
     for name in ("PLAYER_TWO_OPEN_API_KEY", "BASETEN_API_KEY", "FIREWORKS_API_KEY"):

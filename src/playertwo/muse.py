@@ -63,9 +63,9 @@ class Muse:
         self.client = AsyncOpenAI(base_url=settings.base_url, api_key=api_key(), max_retries=1,
                                   timeout=TIMEOUT_S)
         self.open = settings.brain == "open" or (
-            settings.brain == "auto" and has_open_credentials())
+            settings.brain == "auto" and has_open_credentials(settings.open_base_url))
         if self.open:
-            key, headers = open_credentials()
+            key, headers = open_credentials(settings.open_base_url)
             self.brain = AsyncOpenAI(base_url=settings.open_base_url, api_key=key,
                                      default_headers=headers, max_retries=1,
                                      timeout=TIMEOUT_S)

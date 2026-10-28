@@ -45,19 +45,21 @@ strategy, point and click. It does not play fast action games for you; there it 
 
 **Open weights, if you want them.** By default the narrator and agent use Muse Spark on Meta Model
 API, which caches the parts of each request that repeat. They also run on **Muse Spark Open**,
-Meta's open-weight model, through a hosted provider (we tested a Modal shared endpoint; Baseten and
-Fireworks work the same way). Once provider credentials are set up, `brain = "auto"` uses it, and
-`brain = "open"` or `"meta"` picks one. SAM 3.1 and speech recognition stay on Meta Model API. On
-our scored battle trials both brains get 8 of 8 right. Hosted open-model endpoints bill every
-token, so they cost more for the same play.
+Meta's open-weight model, through a hosted provider (we tested Baseten and a Modal shared endpoint;
+Fireworks works the same way). Once provider credentials are set up, `brain = "auto"` uses it, and
+`brain = "open"` or `"meta"` picks one. SAM 3.1 and speech recognition stay on Meta Model API.
+
+Both brains get 8 of 8 right on our scored battle trials, and 20 of 22 on the Persona 4 Golden
+narration checks. The difference is speed: on Baseten a narration line takes a median 5.3 seconds,
+against 1.4 on Meta Model API. That's why Meta is the default for live play.
 
 ```toml
 brain = "open"
-open_base_url = "https://YOUR-WORKSPACE--ep-NAME-server.us-west.modal.direct/v1"
-open_model = "meta-models/Muse-Spark-Open-816B-A42B"
-# Modal proxy token in ~/.config/player-two/modal.env:
-#   MODAL_PROXY_KEY=wk-...
-#   MODAL_PROXY_SECRET=ws-...
+open_base_url = "https://inference.baseten.co/v1"
+open_model = "meta-models/muse-spark-open-1026"
+# Baseten API key in ~/.config/player-two/open-api-key (or BASETEN_API_KEY).
+# For a Modal shared endpoint, use its .modal.direct address and put the proxy token
+# in ~/.config/player-two/modal.env as MODAL_PROXY_KEY=wk-... and MODAL_PROXY_SECRET=ws-...
 ```
 
 Meta's API has no text-to-speech model, so the narrator voice is
