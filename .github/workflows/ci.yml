@@ -13,3 +13,13 @@ jobs:
       - run: uv sync --group dev
       - run: uv run ruff check src tests scripts
       - run: uv run pytest -q
+  windows:
+    runs-on: windows-latest
+    env:
+      VGAMEPAD_SKIP_VIGEMBUS_INSTALL: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+      - run: uv sync --group dev --extra windows
+      - run: uv run pytest -q
+      - run: uv run python -c "from playertwo import win32; print(len(win32.clients()), 'windows')"
