@@ -20,6 +20,10 @@ developer has to build.
 - **Answers questions.** "What's on screen?" "Who's here?" "Which enemy is hurt?"
 - **Plays when you ask.** "Skip to the battle and hit the left one with Zio." It looks, moves the
   cursor, checks the highlight, confirms, then looks again to make sure it worked.
+- **Works hands-free.** For players who can't easily press a key, it can listen all the time and
+  act on what starts with its name: "Player Two, open the menu." A small speech detector runs on
+  your PC, so only speech is sent to be transcribed, and talk in the room that isn't for Player
+  Two is ignored.
 - **Checks before anything that matters.** If the request is vague or it can't read the screen, it
   asks instead of guessing: "Garu on Shadow A, the left one. Go?"
 - **Warns you in real-time games.** It finds your health and stamina bars once, then reads them on
@@ -72,7 +76,8 @@ Meta's API has no text-to-speech model, so the narrator voice is
  game window ──► screen watcher ──► "a new screen settled" ──► Muse Spark ──► voice (Kokoro)
                       │                                                         ▲
                       └─► HUD watcher (pixels, every frame) ──► warning sounds ─┤
- talk key ──► mic ──► Muse Voice Transcribe ──► agent (Muse Spark + tools) ─────┘
+ talk key or
+ "Player Two" ──► mic ──► Muse Voice Transcribe ──► agent (Muse Spark + tools) ─────┘
                                                    │
                                                    └─► virtual Xbox controller ──► game
 ```
@@ -86,6 +91,11 @@ Meta's API has no text-to-speech model, so the narrator voice is
   looks at the highlight before pressing A.
 - **Controller** (`controls.py`): a uinput Xbox 360 pad on Linux, ViGEm on Windows, or keyboard
   keys for PC-only games.
+- **Hands-free listening** (`listen.py`): Silero VAD (a 2 MB model on the CPU, well under a
+  millisecond per 80 ms of sound) finds stretches of speech, which stream to Muse Voice
+  Transcribe as they're spoken. Only what starts with "Player Two" counts, plus an answer to a
+  question it just asked. What it hears of its own voice is recognized and ignored, and
+  "Player Two, stop" works the moment it's heard.
 - **Companion window** (`ui/`): what Player Two sees, says, hears and presses, with big captions
   for low vision, a box to type to it, and settings. It opens in its own app window without taking
   focus from the game (on another monitor if you have one). `?captions` shows a single caption bar
@@ -113,7 +123,8 @@ player-two setup         # key, voice, microphone, controller, talk key, launche
 
 Then start your game and run `player-two`, or pick **Player Two** in your app launcher. It finds
 the game window by itself (a Steam game is named from its Steam library), says hello, and starts
-narrating. Hold **F8** and talk. Say "help" any time to hear what you can say.
+narrating. Hold **F8** and talk, or with hands-free on, just say "Player Two" and what you need.
+Say "help" any time to hear what you can say.
 
 Setup is plain questions and answers, so it reads well in a screen reader. It:
 
@@ -122,11 +133,17 @@ Setup is plain questions and answers, so it reads well in a screen reader. It:
   Player Two says, and its speaking speed
 - checks your microphone and the virtual controller, and offers the one-line udev rule if
   `/dev/uinput` needs it
+- offers hands-free listening, for anyone who can't easily press a key
 - adds F8 as a hold-to-talk key to your Omarchy or Hyprland config (with a backup). On GNOME it
   adds F8 as a shortcut you press once to start talking and again to stop. On Windows, Player Two
   takes F8 itself, so the game doesn't also get it. Elsewhere, bind `player-two ctl talk-start` to
   a key press and `player-two ctl talk-stop` to its release.
 - adds Player Two to your app launcher
+
+**Hands-free works best with a headset or earbuds.** Over speakers, the microphone also hears
+Player Two and the game. It still ignores its own voice, and you can talk to it whenever it's
+quiet, but words said over its longer lines can get lost. Each stretch of speech, including the
+game's, is sent to be transcribed, so speakers also cost a little more.
 
 When something is wrong (no key, no microphone, no controller, no network), Player Two says so out
 loud and says how to fix it, instead of printing it where you can't see it.
@@ -136,6 +153,7 @@ loud and says how to fix it, instead of printing it where you can't see it.
 | Say | What happens |
 |---|---|
 | anything about the game | Player Two looks and answers, or does it |
+| "Player Two" first (hands-free) | the same, with no key; "Player Two" alone, then the request, works too |
 | "describe" / "what's on screen" | a full spoken tour of the screen |
 | "repeat" | says the last line again |
 | "stop" / "quiet" / "cancel that" | stops talking (and cancels a running command) |
@@ -164,6 +182,7 @@ team_up = false
 window = ""               # part of the game window's title; empty means find the game
 controls = "auto"         # gamepad, keyboard
 companion = "auto"        # the window: auto (on Hyprland), on, off
+hands_free = false        # listen all the time for "Player Two, ..."; no talk key needed
 ```
 
 ## Safety and limits

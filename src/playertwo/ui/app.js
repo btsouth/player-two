@@ -177,8 +177,14 @@ function applySettings(ev) {
   }
   if (ev.output) $("output").value = ev.output;
   if (ev.team_up !== undefined) $("team-up").checked = ev.team_up;
+  if (ev.hands_free !== undefined) setHandsFree(ev.hands_free);
   if (ev.paused !== undefined) $("paused").checked = ev.paused;
   if (ev.companion) $("companion").checked = ev.companion !== "off";
+}
+
+function setHandsFree(on) {
+  $("hands-free").checked = on;
+  $("type-box").placeholder = on ? "Say “Player Two, open the menu”, or type here" : "Or type: open the menu";
 }
 
 function handle(ev) {
@@ -188,15 +194,18 @@ function handle(ev) {
       if (ev.talk_key) { talkKey = ev.talk_key; $("talk-key").textContent = ev.talk_key; }
       talkToggle = Boolean(ev.talk_toggle);
       $("talk-verb").textContent = talkToggle ? "Press" : "Hold";
+      setHandsFree(Boolean(ev.hands_free));
       if (ev.first_run && !localStorage.getItem("p2-welcomed")) {
         notice("welcome", "hello", "Hi, I'm Player Two", [
-          `I tell you what's happening in your game, and I play when you ask. Hold ${talkKey} and talk, then let go. Some things to try:`,
+          ev.hands_free
+            ? "I tell you what's happening in your game, and I play when you ask. I'm listening: start with my name, like “Player Two, open the menu”. Some things to try:"
+            : `I tell you what's happening in your game, and I play when you ask. Hold ${talkKey} and talk, then let go. Some things to try:`,
           ["“What's on screen?”", "“Open the menu”", "“Heal whoever is hurt”",
             "“Repeat that”", "“Stop” (I stop talking)", "“Less detail”"],
         ], "Got it");
       }
       for (const [i, p] of (ev.problems || []).entries()) notice(`problem-${i}`, "warn", "Needs a fix", [p]);
-      if (ev.talk_key_bound === false) {
+      if (ev.talk_key_bound === false && !ev.hands_free) {
         notice("talk-key", "warn", "No talk key yet", [
           "Run player-two setup in a terminal to make F8 your talk key. Until then, type to me in the box below, or use the talk button.",
         ]);
@@ -380,6 +389,7 @@ $("speech-rate").addEventListener("input", (e) => {
 });
 $("speech-rate").addEventListener("change", (e) => setSoon("speech_rate", e.target.value));
 $("team-up").addEventListener("change", (e) => setSetting("team_up", e.target.checked));
+$("hands-free").addEventListener("change", (e) => setSetting("hands_free", e.target.checked));
 $("companion").addEventListener("change", (e) => setSetting("companion", e.target.checked ? "on" : "off"));
 $("paused").addEventListener("change", (e) => send(e.target.checked ? "pause" : "resume"));
 

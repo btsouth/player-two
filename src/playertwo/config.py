@@ -124,6 +124,9 @@ class Settings:
     # The companion window (captions, what Player Two sees and presses): "auto" opens it
     # on Hyprland without taking focus from the game, "on" always, "off" never.
     companion: str = "auto"
+    # Hands-free: always listening, and acting on what starts with "Player Two", for
+    # players who can't easily press a talk key. A headset keeps the game out of it.
+    hands_free: bool = False
     # The talk key starts and stops listening on two presses (GNOME and other desktops
     # without hold binds) instead of being held.
     talk_toggle: bool = False

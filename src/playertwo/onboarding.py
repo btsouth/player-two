@@ -271,6 +271,29 @@ def step_controller() -> None:
             say("That didn't work. Until it's fixed I'll press keyboard keys instead.")
 
 
+def step_hands_free(s: Settings, changes: dict) -> bool:
+    """Offer hands-free listening. True when it's on (no talk key needed)."""
+    say("\nStep 5 of 6: how you talk to me.")
+    on = ask_yes("Do you want hands-free? I listen all the time, and act on what starts "
+                 "with my name, like: Player Two, open the menu. It's for anyone who can't "
+                 "easily press a key. A headset works best, so I don't hear the game.",
+                 s.hands_free)
+    changes["hands_free"] = on
+    if not on:
+        return False
+    from .listen import ensure_vad
+
+    try:
+        ensure_vad()
+    except Exception as exc:  # noqa: BLE001
+        say(f"I couldn't download the speech detector ({exc}). I'll try again when I "
+            "start.")
+    say("Hands-free is on. With speakers, talk to me when I'm quiet: words said over me can "
+        "get lost. A headset fixes that. To turn hands-free off, open the settings in the "
+        "Player Two window.")
+    return True
+
+
 def step_talk_key(changes: dict) -> None:
     from .desktop import (
         TALK_KEY,
@@ -281,7 +304,7 @@ def step_talk_key(changes: dict) -> None:
         talk_key_bound,
     )
 
-    say("\nStep 5 of 6: the talk key.")
+    say("Then a talk key: hold it while you talk.")
     if sys.platform == "win32":
         say(f"Hold {TALK_KEY} to talk to me, in any window, while I'm running.")
         return
@@ -340,7 +363,9 @@ def run_setup() -> None:
     say("Player Two setup. Press Enter to keep the answer in brackets. Ctrl+C stops at any "
         "time.")
     steps = [lambda: step_key(s), lambda: step_speech(s, changes), step_mic,
-             step_controller, lambda: step_talk_key(changes), lambda: step_app(s, changes)]
+             step_controller,
+             lambda: step_hands_free(s, changes) or step_talk_key(changes),
+             lambda: step_app(s, changes)]
     try:
         for step in steps:
             step()
@@ -353,5 +378,7 @@ def run_setup() -> None:
         sys.exit(130)
     how = "Press F8 to talk, and again when you're done" if (
         changes.get("talk_toggle") or s.talk_toggle) else "Hold F8 and talk"
+    if changes.get("hands_free", s.hands_free):
+        how = "Say Player Two, then what you need"
     say("\nAll set. Start your game, then run player-two, or pick Player Two in your app "
         f"launcher. {how}. Say help to hear what else you can say.")

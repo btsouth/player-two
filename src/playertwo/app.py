@@ -8,13 +8,14 @@ import json
 import re
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import open_controls
-from .listen import Mic, Utterance
+from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
 from .screen import Capture, ChangeWatcher, Frame, GameHidden, NoGame, auto_capture
@@ -74,6 +75,13 @@ MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Pla
                "window, where you can type to me instead.")
 SOUND_PROBLEM = ("I can't find a speaker or headset. I'll start talking as soon as one is "
                  "connected.")
+# "Player Two, stop" (and its other ways to say stop), anywhere in what's heard.
+STOP_CALL = re.compile(r"(?:player|layer|play a)s?[\s,-]*(?:two|2|ii|to|too)[\s,.!?:-]*"
+                       r"(?:stop|stop it|stop talking|be quiet|quiet|shush|shut up|cancel|hush)"
+                       r"\b", re.IGNORECASE)
+HANDS_FREE_PROBLEM = ("I couldn't start hands-free listening, so for now hold the talk key, "
+                      "or use the talk button in the Player Two window. Run player-two setup "
+                      "to try again.")
 TALK_KEY_PROBLEM = ("Your talk key isn't set up yet. Run player-two setup in a terminal to "
                     "set it up. Until then, I opened the Player Two window: type to me "
                     "there, or use its talk button.")
@@ -87,6 +95,7 @@ SETTABLE: dict[str, tuple] = {
     "output": ("auto", "voice", "screen-reader"),
     "team_up": (True, False),
     "companion": ("auto", "on", "off"),
+    "hands_free": (True, False),
 }
 SPEECH_RATES = (0.8, 2.0)
 
@@ -211,6 +220,22 @@ class Session:
         self.paused = False
         self.mic: Mic | None = None
         self.utt: Utterance | None = None
+        # Hands-free listening: the listener and its task, whether the player has said
+        # "Player Two" in what's being heard now (and when), until when a follow-up
+        # needs no name (after "Player Two" on its own), and when Player Two last spoke
+        # (what the microphone heard then may be its own voice).
+        self.hands: HandsFree | None = None
+        self.hands_task: asyncio.Task | None = None
+        self.hands_active = False
+        self.woke_at = 0.0
+        self.follow_until = 0.0
+        self.spoke_at = 0.0
+        self.narrating_text = ""
+        # When Player Two was speaking lately, as [start, end] times.
+        self.spans: deque[list[float]] = deque(maxlen=64)
+        # The speech (by when it began) and how many "Player Two, stop"s in it were acted on.
+        self.stop_seen: tuple[float, int] = (0.0, 0)
+        self.hands_lock = asyncio.Lock()
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
         self.answer: asyncio.Future[str] | None = None
@@ -242,7 +267,7 @@ class Session:
 
     def listening(self) -> bool:
         """The player is talking, or what they said is being worked out."""
-        return self.utt is not None or self.transcribing
+        return self.utt is not None or self.transcribing or self.hands_active
 
     def announce(self, text: str, interrupt: bool = False, status: bool = False,
                  wait_turn: bool = False) -> asyncio.Task:
@@ -369,7 +394,7 @@ class Session:
                              direction=args.get("direction", ""), ms=args.get("ms", 0))
 
     def current_status(self) -> str:
-        if self.utt is not None:
+        if self.utt is not None or self.hands_active:
             return "listening"
         if self.transcribing:
             return "thinking"
@@ -387,12 +412,29 @@ class Session:
     async def track_status(self) -> None:
         checked = time.monotonic()
         while True:
-            if time.monotonic() - checked > 2.0 and self.utt is None:
+            # Finding a speaker again restarts the sound system, which closes the
+            # hands-free mic for a moment: less often then, and never mid-sentence.
+            every = 2.0 if self.hands is None else 10.0
+            hearing = self.hands is not None and (self.hands.utt is not None
+                                                  or self.hands_active)
+            if time.monotonic() - checked > every and self.utt is None and not hearing:
                 checked = time.monotonic()
                 if await asyncio.to_thread(self.mixer.check):
                     back = f"My sound is back. {self.unheard}".strip()
                     self.unheard = ""
                     self.announce(back, status=True, wait_turn=True)
+            now = time.monotonic()
+            if not self.voice.idle():
+                self.spoke_at = now
+                if self.spans and now - self.spans[-1][1] < 0.25:
+                    self.spans[-1][1] = now
+                else:
+                    self.spans.append([now, now])
+            if self.hands_active and now - self.woke_at > 20:
+                # What they were saying never came back (the mic went away mid-word).
+                self.hands_active = False
+                if self.utt is None:
+                    self.agent.resume()
             st = self.current_status()
             if st != self.status:
                 self.status = st
@@ -408,14 +450,18 @@ class Session:
         await self.voice.wait_idle(15)
         self.voice.cue("listening")
         try:
-            end = time.monotonic() + timeout
+            asked = time.monotonic()
+            end = asked + timeout
             while True:
                 try:
                     return await asyncio.wait_for(asyncio.shield(self.answer),
                                                   max(0.1, end - time.monotonic()))
                 except TimeoutError:
-                    # Still talking or being transcribed: give them time to finish.
-                    if self.utt is not None or self.transcribing:
+                    # Still talking or being transcribed: give them time to finish
+                    # (hands-free, up to a point: the game's own voices count as talking).
+                    hearing = self.hands is not None and self.hands.utt is not None and (
+                        time.monotonic() - asked < 3 * timeout)
+                    if self.utt is not None or self.transcribing or hearing:
                         end = time.monotonic() + 10
                         continue
                     return ""
@@ -432,8 +478,11 @@ class Session:
     async def _narrate(self, frame: Frame, interrupt: bool = False) -> None:
         t = time.monotonic()
 
+        self.narrating_text = ""
+
         async def deltas():
             async for d in self.narrator.narrate(frame):
+                self.narrating_text += d
                 yield d
 
         try:
@@ -548,6 +597,7 @@ class Session:
     def talk_start(self) -> None:
         if self.utt is not None:
             return
+        self.hands_active = False  # the talk key takes over from hands-free listening
         self.voice.stop()
         self.voice.cue("listening")
         waiting = self.answer is not None and not self.answer.done()
@@ -618,6 +668,184 @@ class Session:
             # Whatever they said that wasn't stop or a new request (a repeat, a question,
             # nothing), the action they asked for earlier carries on.
             self.agent.resume()
+
+    # Hands-free
+
+    def open_ear(self, at: float) -> bool:
+        """Whether speech that began at `at` counts without "Player Two" first: an answer
+        to a question, or what comes right after "Player Two" on its own."""
+        return (self.answer is not None and not self.answer.done()) or at < self.follow_until
+
+    def maybe_echo(self, start: float, end: float) -> bool:
+        """Whether speech heard from `start` to `end` could be Player Two's own voice: it
+        was talking for most of that time. (Talking over it, the player's "Player Two"
+        stops its voice, so their sentence is mostly quiet on its side.)"""
+        spoke = sum(max(0.0, min(b, end) - max(a, start)) for a, b in self.spans)
+        return spoke >= 0.6 * max(0.1, end - start)
+
+    def echo(self, text: str, named: bool = False) -> bool:
+        """Whether `text` reads like Player Two's own recent words picked up by the mic.
+
+        With `named`, only its lines that say its own name count ("Hi, I'm Player Two"),
+        and what was heard after the name is compared with all of such a line. One word
+        after the name ("Player Two, stop") always counts as the player's.
+        """
+        def words(t: str | None) -> set[str]:
+            return set(re.findall(r"[a-z0-9']+", (t or "").lower()))
+
+        said = self.said_lately()
+        heard = words(addressed(text) if named else text)
+        if named:
+            said = [line for line in said if addressed(line) is not None]
+            if not heard:
+                return bool(said)  # just the name, while it said its own name lately
+            if len(heard) == 1:
+                return False
+        elif not heard:
+            return True
+        for line in said:
+            w = words(line)
+            if w and len(heard & w) / len(heard) >= 0.6:
+                return True
+        return False
+
+    def said_lately(self) -> list[str]:
+        """Player Two's own lines from the last 30 s, and the narration being said now."""
+        now = time.time()
+        said = [e["text"] for e in self.events.recent
+                if e["kind"] in ("say", "ask") and now - e["t"] < 30 and e.get("text")]
+        return [*said, self.narrating_text]
+
+    def new_stops(self, text: str, started: float) -> bool:
+        """Whether `text` (the speech that began at `started`, so far) has a "Player Two,
+        stop" not acted on yet. It counts even mixed into Player Two's own voice
+        (speakers, no headset), unless it's the very words Player Two said."""
+        def norm(t: str) -> str:
+            return " ".join(re.findall(r"[a-z0-9']+", t.lower()))
+
+        said = [norm(line) for line in self.said_lately()]
+        found = [m for m in STOP_CALL.finditer(text)
+                 if not any(norm(m.group(0)) in line for line in said)]
+        seen = self.stop_seen[1] if self.stop_seen[0] == started else 0
+        if len(found) <= seen:
+            return False
+        self.stop_seen = (started, len(found))
+        self.voice.cue("heard")
+        self.events.emit("heard", text="stop")
+        return True
+
+    def hands_partial(self, text: str, started: float) -> None:
+        """The words so far of speech that began at `started`."""
+        hands = self.hands
+        if self.utt is not None or hands is None or hands.utt is None or (
+                hands.started != started):
+            return  # the talk key is in use, or a dropped stretch's last words
+        if self.new_stops(text, started):
+            self.spawn(self.local("stop"))
+            return
+        said = addressed(text)
+        if said is None:
+            if self.open_ear(started) or self.hands_active:
+                self.events.emit("hearing", text=text)
+            return
+        # While it's saying its own name ("Hi, I'm Player Two"), the words so far can't
+        # tell its voice from the player's: the whole sentence decides, in hands_heard.
+        own_name = time.monotonic() - self.spoke_at < 1.0 and self.echo("Player Two",
+                                                                         named=True)
+        if not self.hands_active and not own_name and not self.echo(text, named=True):
+            # "Player Two": stop talking and wait to hear what they want.
+            self.hands_active, self.woke_at = True, time.monotonic()
+            self.voice.stop()
+            self.voice.cue("listening")
+            waiting = self.answer is not None and not self.answer.done()
+            if self.agent_task and not self.agent_task.done() and not waiting:
+                self.agent.hold()
+        if self.hands_active and said:
+            self.events.emit("hearing", text=said)
+
+    def hands_dropped(self) -> None:
+        """Speech being heard was cut off before its words came back (the talk key went
+        down, the mic went away): let go of what "Player Two" held."""
+        if self.hands_active:
+            self.hands_active = False
+            if self.utt is None:
+                self.agent.resume()
+
+    async def hands_heard(self, text: str, error: BaseException | None,
+                          started: float, ended: float) -> None:
+        """Speech heard hands-free, from `started` to `ended`: act on it if it was said to
+        Player Two."""
+        woke, self.hands_active = self.hands_active, False
+        try:
+            if self.utt is not None:
+                return  # the talk key is in use now; that's what counts
+            if error is not None:
+                if woke:
+                    self.trouble(error, "listen", answer=True)
+                else:
+                    self.events.emit("error", where="listen", message=str(error)[:300])
+                return
+            if self.new_stops(text, started):
+                await self.local("stop")
+            if self.stop_seen[0] == started and self.stop_seen[1]:
+                # Stopped in this breath: only what came after counts ("Player Two, stop.
+                # Player Two, open the map"), and only if it's said to Player Two too.
+                text = text[list(STOP_CALL.finditer(text))[-1].end():]
+                if not addressed(text):
+                    return
+            echo_possible = self.maybe_echo(started, ended)
+            said = addressed(text)
+            if said is not None and echo_possible and self.echo(text, named=True):
+                said = None
+            elif said is None and text and not (echo_possible and self.echo(text)):
+                busy = (self.agent_task is not None and not self.agent_task.done()) or (
+                    not self.voice.idle())
+                if self.open_ear(started) or (busy and local_action(text) == "stop"):
+                    said = text  # an answer, a follow-up, or "stop" while it's busy
+            if said is None:
+                if text:
+                    self.events.emit("overheard", text=text)
+                return
+            if not said:
+                # Just "Player Two": the next thing they say is for it, name or not.
+                self.follow_until = time.monotonic() + 8.0
+                self.voice.cue("listening")
+                return
+            self.follow_until = 0.0
+            self.voice.cue("heard")
+            self.events.emit("heard", text=said)
+            await self.handle(said)
+        finally:
+            if woke and self.utt is None:
+                self.agent.resume()
+
+    async def start_hands_free(self) -> bool:
+        """Start listening hands-free. False (and the reason logged) when it can't."""
+        from .listen import SpeechDetector, ensure_vad
+
+        async with self.hands_lock:
+            if self.hands_task is not None and not self.hands_task.done():
+                return True
+            try:
+                detector = await asyncio.to_thread(lambda: SpeechDetector(ensure_vad()))
+            except Exception as exc:  # noqa: BLE001  no download, no onnxruntime
+                self.events.emit("error", where="hands_free", message=str(exc)[:300])
+                return False
+            if not self.s.hands_free:
+                return True  # turned off again while the detector loaded
+            self.hands = HandsFree(
+                self.hands_partial, self.hands_heard, self.hands_dropped,
+                lambda: ["Player Two", *self.keywords],
+                lambda: self.utt is not None or self.transcribing,
+                detector=detector)
+            self.hands_task = self.spawn(self.hands.run())
+            return True
+
+    def stop_hands_free(self) -> None:
+        if self.hands_task is not None:
+            self.hands_task.cancel()
+        self.hands, self.hands_task = None, None
+        self.hands_dropped()
 
     async def handle(self, text: str) -> None:
         action = local_action(text)
@@ -749,7 +977,7 @@ class Session:
                          team_up=self.narrator.team_up, paused=self.paused,
                          language=self.narrator.language, confirm=self.agent.confirm,
                          speech_rate=self.s.speech_rate, output=self.s.output,
-                         companion=self.s.companion,
+                         companion=self.s.companion, hands_free=self.hands is not None,
                          choices={k: list(v) for k, v in SETTABLE.items()},
                          speech_rates=list(SPEECH_RATES))
 
@@ -785,8 +1013,21 @@ class Session:
             self.voice.lang, self.voice.voice_name = voice_for(value, self.s.voice)
         if key == "companion" and value == "on":
             self.open_window()
+        if key == "hands_free":
+            if value and not await self.start_hands_free():
+                self.s.hands_free = False
+                self.emit_settings()
+                await self.announce(HANDS_FREE_PROBLEM, status=True)
+                return "failed"
+            if self.s.hands_free != value:
+                return "ok"  # switched back while the detector loaded; that one counts
+            if not value:
+                self.stop_hands_free()
         save_settings({key: value})
         self.emit_settings()
+        if key == "hands_free":
+            await self.announce("Okay, I'm listening for my name. Say Player Two, then "
+                                "what you need." if value else "Okay, hands-free is off.")
         if key in ("output", "language", "speech_rate"):
             await self.announce("Like this?" if key == "speech_rate" else "Okay.")
         return "ok"
@@ -815,7 +1056,8 @@ class Session:
         elif action == "help":
             from .desktop import talk_key_bound
 
-            talk = ("Press the talk key, speak, and press it again,"
+            talk = ("Start with my name, Player Two," if self.hands is not None
+                    else "Press the talk key, speak, and press it again,"
                     if self.s.talk_toggle and talk_key_bound(self.s)
                     else "Hold the talk key while you speak," if talk_key_bound(self.s)
                     else "Type in the Player Two window, or use its talk button,")
@@ -956,7 +1198,14 @@ class Session:
         parts += self.problems
         how = (f"Press {TALK_KEY} to talk, and again when you're done" if self.s.talk_toggle
                else f"Hold {TALK_KEY} to talk")
-        if not talk_key_bound(self.s):
+        if self.hands is not None:
+            if new:
+                parts.append("I'm listening hands-free. Start with my name, like: Player "
+                             "Two, open the menu. Ask for help to hear what else you can "
+                             "say, and say stop any time to cut me off.")
+            elif not terse:
+                parts.append("Say Player Two, then what you need.")
+        elif not talk_key_bound(self.s):
             parts.append(TALK_KEY_PROBLEM)
         elif new:
             parts.append(f"{how}, and tell me what you need. Say help to hear what else "
@@ -1026,6 +1275,9 @@ class Session:
             self.windows_talk_key()
         if not mic_ok():
             self.problems.append(MIC_PROBLEM)
+        # Even without a mic yet: hands-free opens one as soon as it's plugged in.
+        if self.s.hands_free and not await self.start_hands_free():
+            self.problems.append(HANDS_FREE_PROBLEM)
         await asyncio.to_thread(self.voice.warm_up)
         # Find the game before saying hello, so the greeting can name it.
         try:
@@ -1041,7 +1293,8 @@ class Session:
         # Without a mic or a talk key, typing in the window is the only way to reach me.
         from .desktop import talk_key_bound as _bound
 
-        typing_only = MIC_PROBLEM in self.problems or not _bound(self.s)
+        typing_only = MIC_PROBLEM in self.problems or (
+            not _bound(self.s) and self.hands is None)
         if ui and (self.want_window() or typing_only or SOUND_PROBLEM in self.problems):
             self.open_window(refocus=not typing_only)
         from .desktop import TALK_KEY, talk_key_bound
@@ -1049,7 +1302,7 @@ class Session:
         self.events.emit("ready", voice=self.voice.voice_name, device=self.voice.device,
                          game=self.narrator.game, found=self.game is not False,
                          talk_key=TALK_KEY, talk_key_bound=talk_key_bound(self.s),
-                         talk_toggle=self.s.talk_toggle,
+                         talk_toggle=self.s.talk_toggle, hands_free=self.hands is not None,
                          brain=self.muse.model, first_run=first_run(),
                          problems=self.problems)
         self.emit_settings()

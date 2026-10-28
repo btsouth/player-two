@@ -12,9 +12,12 @@ RATE = 24_000  # Kokoro's native rate; cues are generated at the same rate.
 
 # PortAudio isn't thread-safe, and restarting it (to find a newly plugged-in device)
 # would kill an open microphone. Opening or closing a stream, and restarting, happen
-# under this lock; `open_inputs` counts microphones that are open.
+# under this lock; `open_inputs` counts push-to-talk microphones that are open. The
+# always-open hands-free microphone is in `background_inputs` instead: a restart closes
+# it, and it opens itself again.
 PA_LOCK = threading.Lock()
 open_inputs = 0
+background_inputs: set = set()
 
 
 class Mixer:
@@ -71,6 +74,8 @@ class Mixer:
         with PA_LOCK:
             if open_inputs:
                 return False  # restarting PortAudio now would cut off the microphone
+            for mic in list(background_inputs):
+                mic.close_locked()
             try:
                 if self._stream is not None:
                     self._stream.close(ignore_errors=True)
