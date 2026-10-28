@@ -124,6 +124,8 @@ during a load can skip things or pick something the player didn't mean.
 - Keep say short and friendly; it's spoken aloud. Talk only when it helps.
 - When the request is done, call finish with one or two short spoken sentences for the \
 player: no lists, headings or line breaks.
+- You can't change Player Two's own settings (how much it talks, its speed, pausing). If \
+the player asks, say they can say "help" to hear those commands; don't pretend you did it.
 """
 
 CONFIRM = {

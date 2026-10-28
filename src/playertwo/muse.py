@@ -51,17 +51,24 @@ class Usage:
         return (fresh * 1.25 + self.cached_tokens * 0.15 + self.completion_tokens * 4.25) / 1e6
 
 
+# No answer in this long means the call is stuck: give up so narration can move on, and
+# say so, rather than sitting silent (the client's own default is ten minutes).
+TIMEOUT_S = 25.0
+
+
 class Muse:
     def __init__(self, settings: Settings):
         self.s = settings
         # SAM 3.1 and anything Meta-only always go through Meta Model API.
-        self.client = AsyncOpenAI(base_url=settings.base_url, api_key=api_key(), max_retries=2)
+        self.client = AsyncOpenAI(base_url=settings.base_url, api_key=api_key(), max_retries=1,
+                                  timeout=TIMEOUT_S)
         self.open = settings.brain == "open" or (
             settings.brain == "auto" and has_open_credentials())
         if self.open:
             key, headers = open_credentials()
             self.brain = AsyncOpenAI(base_url=settings.open_base_url, api_key=key,
-                                     default_headers=headers, max_retries=2)
+                                     default_headers=headers, max_retries=1,
+                                     timeout=TIMEOUT_S)
             self.model = settings.open_model
         else:
             self.brain = self.client

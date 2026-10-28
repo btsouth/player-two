@@ -177,3 +177,18 @@ async def test_window_socket_refuses_other_websites():
             assert ws.protocol.state.name == "OPEN"
     finally:
         server.cancel()
+
+
+def test_spoken_commands_people_actually_say():
+    cases = {
+        "terse": "terse", "back to normal": "normal", "team up": "team_up",
+        "the game reads the menus": "team_up", "watch my health": "hud", "help": "help",
+        "what can you do": "help", "speak slower": "slower", "faster": "faster",
+        "read that again": "repeat", "what?": "repeat", "stop it": "stop",
+        "shut up, player two": "stop", "cancel that": "stop", "what's happening": "describe",
+        "show the window": "show",
+        # Requests and answers are for the agent.
+        "stop attacking and heal": None, "keep going": None, "yes": None,
+    }
+    for said, action in cases.items():
+        assert local_action(said) == action, said

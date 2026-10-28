@@ -43,9 +43,6 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
 
     async def handler(ws):
         q: asyncio.Queue = asyncio.Queue()
-        session.events.subs.add(q)
-        for ev in session.events.snapshot():
-            await ws.send(json.dumps(ev))
 
         async def commands():
             async for msg in ws:
@@ -59,8 +56,11 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
                     except Exception as exc:  # noqa: BLE001  keep the window's commands working
                         session.events.emit("error", where="window", message=str(exc)[:300])
 
+        session.events.subs.add(q)
         rx = asyncio.create_task(commands())
         try:
+            for ev in session.events.snapshot():
+                await ws.send(json.dumps(ev))
             while True:
                 await ws.send(json.dumps(await q.get()))
         except ConnectionClosed:

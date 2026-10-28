@@ -29,13 +29,40 @@ class Mixer:
         self.recorded: list[np.ndarray] = []
         self._stream = None
         if sink == "device":
+            self._open()
+
+    def _open(self) -> None:
+        import sounddevice as sd
+
+        self._stream = sd.OutputStream(
+            samplerate=RATE, channels=2, dtype="float32", blocksize=480,
+            callback=self._callback, latency="low",
+        )
+        self._stream.start()
+
+    def check(self) -> bool:
+        """Reopen the sound device if it went away (a headset unplugged, a device change).
+
+        While there's no device, queued speech is dropped so nothing waits on it forever.
+        Returns whether sound is playing again.
+        """
+        if self.sink != "device":
+            return True
+        if self._stream is not None and self._stream.active:
+            return True
+        self.clear_speech()
+        try:
+            if self._stream is not None:
+                self._stream.close(ignore_errors=True)
             import sounddevice as sd
 
-            self._stream = sd.OutputStream(
-                samplerate=RATE, channels=2, dtype="float32", blocksize=480,
-                callback=self._callback, latency="low",
-            )
-            self._stream.start()
+            sd._terminate()  # PortAudio only sees device changes after re-initializing
+            sd._initialize()
+            self._open()
+        except Exception:  # noqa: BLE001  try again on the next check
+            self._stream = None
+            return False
+        return True
 
     def close(self) -> None:
         if self._stream is not None:

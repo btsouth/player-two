@@ -106,15 +106,27 @@ async def locate(muse: Muse, img: Image.Image, phrase: str) -> tuple[list[Match]
 
 
 WHERE = re.compile(
-    r"^(?:hey,? )?(?:where(?:'s| is| are)|find|show me|how many)\s+(?:the |a |an |my |all )?"
+    r"^(?:hey,? )?(?:where(?:'s| is| are)|find|how many)\s+(?:the |a |an |my |all )?"
     r"(?P<what>[\w' -]{2,40}?)\??$", re.IGNORECASE)
+# Words that make it a request to do something ("find a potion and use it"), which is the
+# agent's job, not a question about where things are on screen.
+ACTION_WORDS = {"and", "then", "use", "open", "go", "attack", "heal", "buy", "sell", "equip",
+                "talk", "pick", "give", "cast", "hit", "to", "with", "for", "me", "out"}
 
 
 def where_request(text: str) -> str | None:
     """The noun phrase in "where's the door?", or None if it isn't that kind of question."""
-    m = WHERE.match(text.strip().rstrip(".!"))
+    text = text.strip().rstrip(".!")
+    m = WHERE.match(text)
     if not m:
+        return None
+    # "How many enemies are there" is about the screen; "how many potions do I have"
+    # needs the menus.
+    if text.lower().startswith("how many") and not re.search(
+            r"\b(on (the )?screen|are there|here|do you see|can you see)\b", text, re.IGNORECASE):
         return None
     what = re.sub(r"\b(on (the )?screen|here|now|right now|at)\b", "", m.group("what"), flags=re.IGNORECASE)
     what = what.strip(" ,")
+    if set(re.findall(r"[a-z']+", what.lower())) & ACTION_WORDS:
+        return None
     return what or None

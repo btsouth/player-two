@@ -23,15 +23,28 @@ from .screenreader import open_voice
 # Short commands handled without the model. They must be the whole utterance: "keep going,
 # but don't leave" or "stop attacking and heal" are requests for the agent, not commands.
 LOCAL = [
-    (r"stop|quiet|shush|shut up|be quiet|hush|stop talking|cancel|never ?mind", "stop"),
-    (r"repeat|repeat that|say that again|what did (you|they|he|she) say|again|come again",
-     "repeat"),
+    ((r"stop|stop it|quiet|shush|shut up|be quiet|hush|stop talking|cancel|cancel that"
+      r"|never ?mind|forget it|stop that"), "stop"),
+    ((r"repeat|repeat that|say that again|say it again|read that again|what did (you|they|he"
+      r"|she) say|again|come again|what|what was that|sorry|pardon|huh"), "repeat"),
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
-      r"|what do you see"), "describe"),
+      r"|what do you see|what'?s (going on|happening)"), "describe"),
+    (r"help|what can you do|what can i say|commands|list (the )?commands", "help"),
+    (r"(be )?terse|terse mode|just the facts", "terse"),
     (r"talk less|less detail|quieter|be quieter|quiet mode", "quiet"),
-    (r"more detail|more details|talk more", "detailed"),
+    (r"(back to )?normal|normal mode|regular mode", "normal"),
+    (r"more detail|more details|talk more|detailed( mode)?", "detailed"),
+    (r"(talk|speak|read) (slower|more slowly)|slow down|slower", "slower"),
+    (r"(talk|speak|read) faster|speed up|faster", "faster"),
+    ((r"team up|the game (reads|narrates) (the |its own )?menus|leave (the )?menus to the"
+      r" game"), "team_up"),
+    (r"(you )?read the menus( too)?|solo( mode)?", "solo"),
+    ((r"watch my (health|hp|stamina)|health warnings( on)?|warn me (about|when) (my )?"
+      r"(health|hp) (is )?(gets )?low"), "hud"),
+    (r"stop watching my (health|hp|stamina)|(no|stop) (the )?health warnings", "hud_off"),
     (r"pause|stop narrating|pause narration", "pause"),
-    (r"resume|start narrating|keep narrating|resume narration", "resume"),
+    (r"resume|start narrating|keep narrating|resume narration|unpause", "resume"),
+    (r"(show|open) (the |your )?(player two )?window", "show"),
     ((r"good ?bye|bye( bye)?|(quit|exit|close|turn off|shut down)"
       r" (player two|yourself)|turn yourself off|that'?s all for (now|today)"), "quit"),
 ]
@@ -43,12 +56,18 @@ def local_action(text: str) -> str | None:
     t = re.sub(r"[^\w' ]+", " ", text.lower())
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"^((hey|ok|okay|please|player two|can you|could you) )+", "", t)
-    t = re.sub(r"( (please|now|for me))+$", "", t)
-    for pattern, action in LOCAL_RE:
-        if pattern.fullmatch(t):
-            return action
+    # "Quit player two" needs its name; "shut up, player two" doesn't.
+    for form in (t, re.sub(r"( (please|now|for me|player two|thanks|thank you))+$", "", t)):
+        for pattern, action in LOCAL_RE:
+            if pattern.fullmatch(form):
+                return action
     return None
 
+
+HELP = ("Hold the talk key and ask me anything about the game, or tell me what to do, like: "
+        "open the menu, or: use a potion on Yosuke. You can also say: describe, repeat, "
+        "stop, help, terse, more detail, slower, faster, pause, resume, watch my health, "
+        "or goodbye.")
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. You can type to me in the "
                "Player Two window instead.")
@@ -90,6 +109,12 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
     if isinstance(exc, openai.AuthenticationError | openai.PermissionDeniedError):
         return "key", ("The model turned down my API key. Run player-two setup in a "
                        "terminal to check it.")
+    if isinstance(exc, openai.APITimeoutError):
+        return "slow", "The model is taking too long right now. I'll keep trying."
+    if isinstance(exc, TimeoutError):
+        return "timeout", "That took too long. Try again?"
+    if isinstance(exc, NoGame):
+        return "nogame", "I don't see a game yet. Start one and I'll find it."
     if isinstance(exc, openai.RateLimitError):
         return "rate", "I'm being rate limited, so I'll slow down for a bit."
     if isinstance(exc, openai.APIConnectionError | openai.APITimeoutError | OSError):
@@ -117,6 +142,7 @@ class Events:
         self.log_path: Path | None = None
         self.recent: list[dict] = []
         self.sticky: dict[str, dict] = {}
+        self.last_said = ""
 
     def snapshot(self) -> list[dict]:
         """What a window that just opened needs: the latest state, then recent history."""
@@ -128,6 +154,8 @@ class Events:
 
             data["text"] = tidy(data["text"])
         ev = {"t": time.time(), "kind": kind, **data}
+        if kind in ("say", "ask") and data.get("text"):
+            self.last_said = data["text"]
         if kind in ("ready", "status", "frame", "settings", "game"):
             self.sticky[kind] = ev
         elif kind in ("say", "heard", "ask", "press", "hold", "error"):
@@ -162,6 +190,16 @@ class Session:
         self.pending: tuple[Frame, float] | None = None
         self.silent_streak = 0
         self.quiet_until = 0.0
+        # After an error, no narration until then, scene cut or not.
+        self.error_until = 0.0
+        # Until then, settled screens don't count as scene cuts (after Player Two forced a
+        # fresh look itself), so they don't talk over what it just said.
+        self.soft_until = 0.0
+        self.talk_started = 0.0
+        self.capture_failures = 0
+        self.asked = ""
+        self.stopped_agent = False
+        self._last_show = 0.0
         self.agent_task: asyncio.Task | None = None
         self.paused = False
         self.mic: Mic | None = None
@@ -186,11 +224,12 @@ class Session:
         self.main: asyncio.Task | None = None
 
     def focus_game(self) -> None:
-        target = getattr(self.capture, "target", None)
-        if target and target.get("address"):
-            from .screen import hypr_focus
+        self.capture.focus()
 
-            hypr_focus(target["address"])
+    def fresh_look(self) -> None:
+        """Narrate the screen again soon, without cutting off what's being said."""
+        self.watcher.force()
+        self.soft_until = time.monotonic() + 3.0
 
     def announce(self, text: str, interrupt: bool = False) -> asyncio.Task:
         """Say a line of Player Two's own (not narration) and caption it in the window."""
@@ -233,7 +272,7 @@ class Session:
             return
         # A different game: start fresh, as if Player Two had just sat down.
         self.narrator.recent.clear()
-        self.watcher.force()
+        self.fresh_look()
         self.announce(f"I can see {name}." if name else "I can see your game.")
 
     def trouble(self, exc: BaseException, where: str, answer: bool = False) -> None:
@@ -273,10 +312,18 @@ class Session:
             self.show(frame)
         return frame
 
-    def show(self, frame: Frame) -> None:
-        """Send a small copy of the frame to the companion window."""
+    def show(self, frame: Frame, force: bool = False) -> None:
+        """Send a small copy of the frame to the companion window (a few a second)."""
         import base64
         import io
+
+        now = time.monotonic()
+        # Settled screens always go out (a window that opens later shows the latest one);
+        # the agent's many looks while it settles only a few times a second, and only
+        # when a window is watching.
+        if not force and (not self.events.subs or now - self._last_show < 0.25):
+            return
+        self._last_show = now
 
         img = frame.image.convert("RGB")
         img.thumbnail((720, 405))
@@ -298,17 +345,21 @@ class Session:
             return "thinking"
         if self.agent_task is not None and not self.agent_task.done():
             waiting = self.answer is not None and not self.answer.done()
-            if not self.mixer.idle.is_set():
+            if not self.voice.idle():
                 return "speaking"
             return "listening" if waiting else "acting"
-        if not self.mixer.idle.is_set():
+        if not self.voice.idle():
             return "speaking"
         if self.narrating is not None and not self.narrating.done():
             return "thinking"
         return "paused" if self.paused else "watching"
 
     async def track_status(self) -> None:
+        checked = time.monotonic()
         while True:
+            if time.monotonic() - checked > 2.0 and self.utt is None:
+                checked = time.monotonic()
+                await asyncio.to_thread(self.mixer.check)
             st = self.current_status()
             if st != self.status:
                 self.status = st
@@ -319,12 +370,22 @@ class Session:
         """Ask out loud and wait for the next thing the player says."""
         self.events.emit("ask", text=question)
         self.answer = asyncio.get_running_loop().create_future()
+        self.asked = question
         await self.voice.say(question, interrupt=False)
+        await self.voice.wait_idle(15)
         self.voice.cue("listening")
         try:
-            return await asyncio.wait_for(self.answer, timeout)
-        except TimeoutError:
-            return ""
+            end = time.monotonic() + timeout
+            while True:
+                try:
+                    return await asyncio.wait_for(asyncio.shield(self.answer),
+                                                  max(0.1, end - time.monotonic()))
+                except TimeoutError:
+                    # Still talking or being transcribed: give them time to finish.
+                    if self.utt is not None or self.transcribing:
+                        end = time.monotonic() + 10
+                        continue
+                    return ""
         finally:
             self.answer = None
 
@@ -348,8 +409,9 @@ class Session:
             raise
         except Exception as exc:  # noqa: BLE001  say it, back off, keep watching
             self.trouble(exc, "narrate")
-            self.quiet_until = time.monotonic() + 10.0
-            self.watcher.force()
+            self.error_until = time.monotonic() + 10.0
+            self.pending = None
+            self.watcher.force()  # look again once the back-off is over
             return
         self.recovered()
         if text:
@@ -372,9 +434,11 @@ class Session:
         """
         if self.pending is None or (self.narrating and not self.narrating.done()):
             return
+        if time.monotonic() < self.error_until:
+            return
         frame, change = self.pending
-        cut = change >= self.SCENE_CUT
-        if not cut and not self.mixer.idle.is_set():
+        cut = change >= self.SCENE_CUT and time.monotonic() >= self.soft_until
+        if not cut and not self.voice.idle():
             return  # let the last line finish; we'll narrate the newest screen after
         if not cut and time.monotonic() < self.quiet_until:
             return
@@ -389,15 +453,21 @@ class Session:
         if describe:
             async def run():
                 self.voice.stop()
-                text = await self.voice.say_stream(self.narrator.describe(frame))
+                try:
+                    text = await self.voice.say_stream(self.narrator.describe(frame))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    self.trouble(exc, "describe", answer=True)
+                    return
                 self.events.emit("say", text=text, source="describe")
             self.narrating = asyncio.create_task(run())
         else:
             self.narrating = asyncio.create_task(self._narrate(frame))
 
     async def watch(self) -> None:
-        period = 1.0 / self.s.watch_fps
         while True:
+            period = 1.0 / self.s.watch_fps
             t = time.monotonic()
             try:
                 frame = await self.grab_now()
@@ -406,9 +476,16 @@ class Session:
                 await asyncio.sleep(1.0)
                 continue
             except Exception as exc:  # noqa: BLE001  keep watching through hiccups
-                self.events.emit("error", where="capture", message=str(exc))
+                self.capture_failures += 1
+                if self.capture_failures == 5:  # a few seconds of it: say so, once
+                    self.events.emit("error", where="capture", message=str(exc)[:300])
+                    self.voice.cue("error")
+                    self.announce("I can't see the screen right now. I'll keep trying.")
                 await asyncio.sleep(1.0)
                 continue
+            if self.capture_failures >= 5:
+                self.announce("I can see the screen again.")
+            self.capture_failures = 0
             self.update_game()
             if self.hud is not None:
                 self.on_hud(self.hud.update(frame.image, frame.t))
@@ -416,7 +493,7 @@ class Session:
             if self.watcher.update(frame) and not self.paused and not busy:
                 self.events.emit("settled", label=frame.label,
                                  change=round(self.watcher.last_change, 3))
-                self.show(frame)
+                self.show(frame, force=True)
                 self.pending = (frame, self.watcher.last_change)
             if not self.paused and not busy:
                 self._maybe_narrate()
@@ -441,6 +518,7 @@ class Session:
             self.announce(MIC_PROBLEM, interrupt=True)
             return
         self.mic = mic
+        self.talk_started = time.monotonic()
         self.utt = Utterance(self.keywords,
                              on_partial=lambda p: self.events.emit("hearing", text=p))
         self.utt.start()
@@ -448,6 +526,12 @@ class Session:
 
     async def _pump(self, mic: Mic, utt: Utterance) -> None:
         while self.utt is utt:
+            if utt.result is not None and utt.result.done():
+                break  # the speech session ended (an error); talk_stop will say so
+            if time.monotonic() - self.talk_started > 60:
+                # A lost key release would leave the mic open for good.
+                self.spawn(self.talk_stop())
+                break
             try:
                 frame = await asyncio.wait_for(mic.queue.get(), 0.5)
             except TimeoutError:
@@ -481,10 +565,22 @@ class Session:
             await self.announce("Sorry, I didn't catch that.", interrupt=True)
 
     async def handle(self, text: str) -> None:
-        if self.answer is not None and not self.answer.done():
-            self.answer.set_result(text)
-            return
         action = local_action(text)
+        if self.answer is not None and not self.answer.done():
+            if action == "repeat":
+                await self.voice.say(self.asked or "Sorry, say that again?")
+                self.voice.cue("listening")
+                return
+            if action == "stop":
+                self.agent.cancelled = True
+                self.answer.set_result("")
+                await self.announce("Okay, I won't.", interrupt=True)
+                return
+            if not self.agent.cancelled:
+                self.answer.set_result(text)
+                return
+            # The player pressed talk to start something new, not to answer.
+            self.answer.set_result("")
         if action:
             await self.local(action)
             return
@@ -501,23 +597,37 @@ class Session:
     async def _agent(self, text: str) -> None:
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
+        self.pending = None
         self.voice.cue("working")
+        ticks = self.spawn(self._working_ticks())
         try:
-            run = await self.agent.run(text, self.latest)
+            run = await self.agent.run(text, self.latest if self.game is not False else None)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001  say it out loud instead of going silent
             self.trouble(exc, "agent", answer=True)
             return
+        finally:
+            ticks.cancel()
+            self.pending = None
         self.events.emit("agent", request=text, outcome=run.outcome,
                          steps=[{"tool": s.tool, "args": s.args, "t": round(s.t, 2)}
                                 for s in run.steps],
                          turns=run.turns, seconds=round(run.seconds, 2))
-        # The agent already said what happened. Count the result as seen.
-        frame = await self.grab_now()
-        self.watcher.update(frame)
-        self.watcher.base = None
-        self.watcher.prev = None
+        if run.outcome == "cancelled" and self.stopped_agent:
+            self.stopped_agent = False
+            await self.announce("Okay, stopped.", interrupt=True)
+        # The agent already said what happened: count the screen it left as seen, so the
+        # narrator doesn't talk over its last line about the same thing.
+        with contextlib.suppress(Exception):
+            self.watcher.accept(await self.grab_now())
+
+    async def _working_ticks(self) -> None:
+        """A soft tick every few seconds while acting, so a long silence isn't a mystery."""
+        while True:
+            await asyncio.sleep(4.0)
+            if self.voice.idle() and self.answer is None:
+                self.voice.cue("working")
 
     def on_hud(self, alerts) -> None:
         for a in alerts:
@@ -531,6 +641,14 @@ class Session:
 
     async def where(self, phrase: str) -> None:
         """Find things with SAM 3.1, say where they are, and ping each one from its side."""
+        try:
+            await self._where(phrase)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.trouble(exc, "where", answer=True)
+
+    async def _where(self, phrase: str) -> None:
         from .locate import describe, locate, point
 
         if self.narrating and not self.narrating.done():
@@ -554,8 +672,12 @@ class Session:
     async def start_hud(self) -> None:
         from .hud import HudWatch, calibrate
 
-        frame = await self.grab_now()
-        meters = await calibrate(self.muse, frame.image)
+        try:
+            frame = await self.grab_now()
+            meters = await calibrate(self.muse, frame.image)
+        except Exception as exc:  # noqa: BLE001
+            self.trouble(exc, "hud", answer=True)
+            return
         if not meters:
             await self.announce("I can't find any health or stamina bars on this screen.")
             return
@@ -620,12 +742,28 @@ class Session:
             self.voice.stop()
             if self.agent_task and not self.agent_task.done():
                 self.agent.cancelled = True
+                self.stopped_agent = True
         elif action == "repeat":
-            last = self.narrator.recent[-1] if self.narrator.recent else "Nothing yet."
-            await self.announce(last)
+            await self.voice.say(self.events.last_said or "I haven't said anything yet.")
         elif action == "describe":
-            frame = await self.grab_now()
+            try:
+                frame = await self.grab_now()
+            except Exception as exc:  # noqa: BLE001
+                self.trouble(exc, "describe", answer=True)
+                return
             self._start_narration(frame, describe=True)
+        elif action == "help":
+            await self.announce(HELP, interrupt=True)
+        elif action in ("slower", "faster"):
+            if not hasattr(self.voice, "lang"):
+                await self.announce("Your screen reader sets my speed. Change it there.")
+                return
+            step = 0.15 if action == "faster" else -0.15
+            rate = round(min(2.0, max(0.8, self.s.speech_rate + step)), 2)
+            await self.set_setting("speech_rate", str(rate))
+        elif action == "show":
+            self.open_window()
+            await self.announce("Okay, the Player Two window is open.")
         elif action in ("terse", "quiet", "normal", "detailed"):
             self.narrator.verbosity = action
             await self.announce({"terse": "Terse mode.",
@@ -649,7 +787,7 @@ class Session:
             await self.announce("Okay, I'll stay quiet until you say resume.")
         elif action == "resume":
             self.paused = False
-            self.watcher.force()
+            self.fresh_look()
             await self.announce("I'm back.")
         elif action == "quit":
             await self.quit()
@@ -706,13 +844,15 @@ class Session:
             self.events.emit("heard", text=arg, typed=True)
             self.spawn(self.handle(arg))
         elif cmd in ("stop", "repeat", "describe", "terse", "quiet", "normal", "detailed",
-                     "team_up", "solo", "pause", "resume", "hud", "hud_off", "quit"):
+                     "team_up", "solo", "pause", "resume", "hud", "hud_off", "quit", "help",
+                     "slower", "faster"):
             self.spawn(self.local(cmd))
         elif cmd == "set":
             key, _, value = arg.partition(" ")
             return await self.set_setting(key, value)
         elif cmd == "show":
-            self.open_window()
+            if arg != "again" or self.want_window():
+                self.open_window()
             if arg == "again":
                 self.announce("I'm already running.")
         elif cmd == "status":

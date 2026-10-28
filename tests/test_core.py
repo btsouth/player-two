@@ -203,6 +203,14 @@ class TestNarrator:
         second = run(self._gather(nar))
         assert first.startswith("Teddie") and second == ""
         assert len(nar.recent) == 1
+        # New dialogue after a repeated opening is still said; a changed number is news.
+        nar.muse.stream_text = ('Teddie says: "Sensei, are you leaving?" Still the stage. '
+                                'Yosuke: "Wait up!"')
+        assert run(self._gather(nar)) == 'Yosuke: "Wait up!"'
+        nar.muse.stream_text = "Your turn. Chie has 60 HP."
+        run(self._gather(nar))
+        nar.muse.stream_text = "Your turn. Chie has 40 HP."
+        assert run(self._gather(nar)) == "Your turn. Chie has 40 HP."
 
     def test_reworded_opening_is_a_repeat_but_a_new_turn_is_not(self):
         nar = Narrator(FakeMuse())
@@ -247,6 +255,9 @@ def test_where_questions_and_wording():
     assert where_request("Where's the door?") == "door"
     assert where_request("how many enemies on screen") == "enemies"
     assert where_request("use Zio on the left one") is None
+    assert where_request("find a healing item and use it") is None
+    assert where_request("how many potions do I have") is None
+    assert where_request("show me my items") is None
     boxes = parse_boxes("<0f>0<|box;x1=0;y1=0;x2=100;y2=100;w=1000;h=1000|><|mask;x=0|>,"
                         "1<|box;x1=800;y1=400;x2=900;y2=600;w=1000;h=1000|>")
     assert [round(b.cx, 2) for b in boxes] == [0.05, 0.85]

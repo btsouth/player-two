@@ -128,6 +128,9 @@ class Voice:
     def cue(self, name: str, pan: float = 0.0) -> None:
         self.mixer.cue(CUES[name](), pan=pan)
 
+    def idle(self) -> bool:
+        return self.mixer.idle.is_set()
+
     def stop(self) -> None:
         """Cut off whatever is being said."""
         self._gen += 1

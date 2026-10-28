@@ -47,6 +47,9 @@ class Capture:
         """Which game this is, steady while its window title changes."""
         return self.game()
 
+    def focus(self) -> None:
+        """Give the game keyboard focus (for keyboard controls). Best effort."""
+
 
 def hypr_clients() -> list[dict]:
     try:
@@ -94,6 +97,10 @@ class HyprlandCapture(Capture):
         from .games import game_key
 
         return game_key(self.target) if self.target else ""
+
+    def focus(self) -> None:
+        if self.target and self.target.get("address"):
+            hypr_focus(self.target["address"])
 
     def grab(self) -> Frame:
         now = time.monotonic()
@@ -235,6 +242,13 @@ class ChangeWatcher:
     def force(self) -> None:
         """Treat the next settled frame as new, e.g. after the player asks for a re-read."""
         self.base = None
+
+    def accept(self, frame: Frame) -> None:
+        """Count this frame as already seen: only a change from it is news."""
+        th = thumb(frame.image)
+        self.base = self.prev = th
+        self.pending_since = None
+        self.still_since = None
 
     def update(self, frame: Frame) -> bool:
         """Feed a frame. Returns True when it is a new screen that has settled."""

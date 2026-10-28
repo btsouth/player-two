@@ -10,6 +10,7 @@ Our cues and direction pings still play through Player Two's own audio.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import platform
 import shutil
@@ -218,9 +219,14 @@ class ScreenReaderVoice:
         self.first_audio_ms: list[float] = []
         self._gen = 0
         self._busy_until = 0.0
+        self._stopping: asyncio.Task | None = None
 
     def warm_up(self) -> None:
         pass
+
+    def idle(self) -> bool:
+        """Whether it's probably done talking (screen readers can't always say)."""
+        return asyncio.get_running_loop().time() >= self._busy_until
 
     def cue(self, name: str, pan: float = 0.0) -> None:
         self.mixer.cue(CUES[name](), pan=pan)
@@ -228,9 +234,15 @@ class ScreenReaderVoice:
     def stop(self) -> None:
         self._gen += 1
         self._busy_until = 0.0
-        asyncio.get_running_loop().create_task(self.backend.stop())
+        self._stopping = asyncio.get_running_loop().create_task(self.backend.stop())
 
     async def _send(self, text: str) -> None:
+        # The interrupt has to reach the screen reader before the new line does, or it
+        # cancels the line it was meant to make room for.
+        if self._stopping is not None:
+            stopping, self._stopping = self._stopping, None
+            with contextlib.suppress(Exception):  # a failed interrupt still lets us speak
+                await stopping
         loop = asyncio.get_running_loop()
         start = max(loop.time(), self._busy_until)
         self._busy_until = start + max(0.5, len(text.split()) * self.SECONDS_PER_WORD)

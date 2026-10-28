@@ -182,10 +182,18 @@ class Agent:
             held_back = ""
             if self.look_before_confirm:
                 buttons, held_back = split_before_confirm(buttons)
-            gap = int(a.get("gap_ms", 150))
+            gap = max(60, min(int(a.get("gap_ms") or 150), 1000))
             if self.on_action:
                 self.on_action(name, {**a, "buttons": buttons})
-            await asyncio.to_thread(self.controls.sequence, buttons, max(60, min(gap, 1000)))
+            # One press at a time, so "stop" takes effect between presses.
+            pressed = []
+            for i, b in enumerate(buttons):
+                if self.cancelled:
+                    return f"stopped by the player after {' '.join(pressed) or 'no presses'}"
+                await asyncio.to_thread(self.controls.press, b)
+                pressed.append(b)
+                if i < len(buttons) - 1:
+                    await asyncio.sleep(gap / 1000)
             done = f"pressed {' '.join(buttons)}"
             if held_back:
                 done += (". Stopped before confirming: look at what is highlighted now. If it "
@@ -194,12 +202,14 @@ class Agent:
         if self.on_action:
             self.on_action(name, a)
         if name == "wait":
-            secs = max(0.5, min(float(a.get("seconds", 2)), 8.0))
+            secs = max(0.5, min(float(a.get("seconds") or 2), 8.0))
             await asyncio.sleep(secs)
             return f"waited {secs:g} s"
         if name == "hold":
-            ms = max(50, min(int(a.get("ms", 500)), 5000))
-            inp = a.get("input", "left_stick")
+            ms = max(50, min(int(a.get("ms") or 500), 5000))
+            inp = a.get("input") or "left_stick"
+            if not (inp in ("left_stick", "right_stick") or inp in AGENT_BUTTONS):
+                return f"can't hold {inp!r}"
             if inp.endswith("_stick"):
                 d = a.get("direction", "up")
                 await asyncio.to_thread(self.controls.stick, inp.split("_")[0], d, ms)
@@ -245,9 +255,13 @@ class Agent:
                 noise = await self._noise()
             t_act = time.monotonic()
             for c in calls:
+                if self.cancelled:
+                    break
                 try:
                     args = json.loads(c.function.arguments or "{}")
                 except json.JSONDecodeError:
+                    args = {}
+                if not isinstance(args, dict):
                     args = {}
                 run.steps.append(Step(c.function.name, args, time.monotonic() - t0))
                 if c.function.name == "say":
@@ -266,9 +280,15 @@ class Agent:
                     finished = args.get("text", "Done.")
                     result = "finished"
                 else:
-                    result = await self._act(c.function.name, args)
+                    try:
+                        result = await self._act(c.function.name, args)
+                    except (TypeError, ValueError, KeyError) as exc:
+                        result = f"bad arguments ({exc}); fix them and try again"
                     acted = True
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
+            if self.cancelled:
+                run.outcome = "cancelled"
+                break
             if finished is not None:
                 await self.speak(finished)
                 run.outcome = finished
