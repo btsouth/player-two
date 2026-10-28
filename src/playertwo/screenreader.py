@@ -281,11 +281,19 @@ class ScreenReaderVoice:
 
 
 def open_voice(settings: Settings, mixer: Mixer):
-    """The built-in narrator voice, or the screen reader when output is "screen-reader"."""
-    if settings.output == "screen-reader":
+    """The built-in narrator voice, or the player's screen reader.
+
+    "screen-reader" uses whatever screen reader or speech service there is; "auto" (the
+    default) uses a screen reader only when one is running (Orca, NVDA, JAWS), since
+    people who use one want Player Two in the voice and speed they already know.
+    """
+    if settings.output in ("screen-reader", "auto"):
         backend = find_backend()
+        if settings.output == "auto" and backend is not None and backend.name == "speech-dispatcher":
+            backend = None  # a speech service, not a screen reader in use
         if backend is not None:
             return ScreenReaderVoice(settings, mixer, backend)
+    if settings.output == "screen-reader":
         print("No screen reader found (Orca, speech-dispatcher, NVDA or JAWS); "
               "using Player Two's own voice.", file=sys.stderr)
     from .voice import Voice

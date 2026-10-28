@@ -72,7 +72,7 @@ class Settings:
     # Language Player Two speaks. On-screen text in other languages is translated.
     language: str = "English"
     # Where speech goes: "voice" (the built-in narrator) or "screen-reader" (NVDA, Orca).
-    output: str = "voice"
+    output: str = "auto"
     # When the agent checks before acting: "always", "important", or "never".
     confirm: str = "important"
     # The game has its own screen narrator: leave menus to it and cover the rest.

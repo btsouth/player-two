@@ -78,8 +78,7 @@ async def _say(args) -> None:
     from .screenreader import open_voice
 
     s = _settings(args)
-    file_sink = args.wav or s.output == "screen-reader"
-    voice = open_voice(s, Mixer("file" if file_sink else "device"))
+    voice = open_voice(s, Mixer("file" if args.wav else "device"))
     await voice.say(" ".join(args.text))
     await voice.wait_idle()
     if not voice.first_audio_ms:
@@ -172,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
         sp.add_argument("--window", help="part of the game window's title or class")
         sp.add_argument("--language", help="language to speak, e.g. Spanish")
         sp.add_argument("--confirm", choices=["always", "important", "never"])
-        sp.add_argument("--output", choices=["voice", "screen-reader"],
+        sp.add_argument("--output", choices=["auto", "voice", "screen-reader"],
                         help="speak with Player Two's voice or through your screen reader")
         sp.add_argument("--brain", choices=["auto", "meta", "open"],
                         help="open: Muse Spark Open; meta: Muse Spark on Meta Model API; "

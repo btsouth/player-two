@@ -145,11 +145,12 @@ def step_speech(s: Settings, changes: dict) -> None:
     output = s.output
     if reader is not None:
         use = ask_yes(f"{reader.name} is running. Should I speak through {reader.name}, at "
-                      "your own voice and speed, instead of my voice?",
-                      s.output == "screen-reader")
-        output = "screen-reader" if use else "voice"
+                      "your own voice and speed, instead of my voice? (Whenever it isn't "
+                      "running, I'll use my voice.)", s.output != "voice")
+        output = "auto" if use else "voice"
     elif s.output == "screen-reader":
         say("I don't see a screen reader running, so I'll use my own voice for now.")
+        output = "auto"
     changes["output"] = output
     s.output = output
     languages = ["English", "British English", "Spanish", "French", "Italian",
@@ -160,7 +161,7 @@ def step_speech(s: Settings, changes: dict) -> None:
     verbosity = ask_choice("How much should I say?", list(VERBOSITY_HELP), s.verbosity,
                            VERBOSITY_HELP)
     changes["verbosity"] = s.verbosity = verbosity
-    if output == "voice":
+    if reader is None or output == "voice":
         from .voice import MODEL_FILES, model_dir
 
         if not all((model_dir() / f).exists() for f in MODEL_FILES):
@@ -190,7 +191,7 @@ def test_voice(s: Settings, changes: dict) -> None:
     if not ask_yes("Did you hear me?"):
         say("Check that your speakers or headset are the default sound output, then run "
             "player-two say hello to try again.")
-    elif s.output == "voice":
+    elif voice.device != "screen reader":  # the screen reader keeps its own speed
         rate = ask_choice("Speaking speed?", ["slower", "same", "faster"], "same")
         if rate != "same":
             s.speech_rate = round(s.speech_rate + (0.15 if rate == "faster" else -0.15), 2)

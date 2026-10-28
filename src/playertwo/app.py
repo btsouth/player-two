@@ -61,7 +61,7 @@ SETTABLE: dict[str, tuple] = {
     "confirm": ("always", "important", "never"),
     "language": ("English", "British English", "Spanish", "French", "Italian",
                  "Portuguese", "Hindi"),
-    "output": ("voice", "screen-reader"),
+    "output": ("auto", "voice", "screen-reader"),
     "team_up": (True, False),
     "companion": ("auto", "on", "off"),
 }
