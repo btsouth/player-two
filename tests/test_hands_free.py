@@ -76,7 +76,7 @@ def session(monkeypatch):
     s.answer = None
     s.utt = None
     s.hands_active = s.transcribing = False
-    s.woke_at = s.follow_until = s.spoke_at = 0.0
+    s.woke_at = s.woke_for = s.follow_until = s.spoke_at = 0.0
     s.spans = deque()
     s.stop_seen = (0.0, 0)
     s.hands = SimpleNamespace(utt=object(), started=0.0)
@@ -255,3 +255,51 @@ async def test_stop_then_a_new_request_in_one_breath(monkeypatch):
     now = time.monotonic()
     await s.hands_heard("Player Two, stop. Player Two, open the map.", None, now - 3, now - 1)
     assert s.handled == ["local:stop", "open the map"]
+
+
+async def test_commands_that_start_with_stop_are_not_a_plain_stop(monkeypatch):
+    s = session(monkeypatch)
+    s.spawn = lambda coro: asyncio.ensure_future(coro)
+    s.voice.speaking = True
+    for text in ("Player Two, stop narrating.", "Player Two, quiet mode.",
+                 "Player Two, stop watching my health."):
+        started = partial(s, text)
+        await s.hands_heard(text, None, started, time.monotonic())
+    await asyncio.sleep(0)
+    assert s.handled == ["stop narrating", "quiet mode", "stop watching my health"]
+
+
+async def test_stop_without_its_name_from_the_room_is_ignored(monkeypatch):
+    s = session(monkeypatch)
+    s.spawn = lambda coro: asyncio.ensure_future(coro)
+    s.agent_task = asyncio.get_running_loop().create_future()
+    started = partial(s, "tell that player to stop camping.")
+    await s.hands_heard("tell that player to stop camping.", None, started, time.monotonic())
+    await asyncio.sleep(0)
+    assert s.handled == []
+    s.agent_task.cancel()
+
+
+async def test_a_new_sentence_keeps_its_hold_when_the_last_one_finishes(monkeypatch):
+    s = session(monkeypatch)
+    s.agent_task = asyncio.get_running_loop().create_future()
+    first = time.monotonic() - 3
+    second = partial(s, "Player Two, wait", ago=0.5)  # the next sentence, already going
+    assert s.agent.held
+    await s.hands_heard("Player Two, open the map.", None, first, first + 1.5)
+    assert s.handled == ["open the map"]
+    assert s.hands_active and s.agent.held  # still listening to the second one
+    await s.hands_heard("Player Two, wait.", None, second, time.monotonic())
+    assert not s.hands_active and not s.agent.held
+    s.agent_task.cancel()
+
+
+async def test_okay_stopped_is_not_cut_off_by_the_rest_of_the_same_stop(monkeypatch):
+    s = session(monkeypatch)
+    s.spawn = lambda coro: asyncio.ensure_future(coro)
+    s.voice.speaking = True
+    started = partial(s, "Player Two stop.")
+    s.voice.speaking = True  # now saying "Okay, stopped."
+    s.hands_partial("Player Two stop. Um", started)
+    await asyncio.sleep(0)
+    assert s.handled == ["local:stop"] and s.voice.stopped == 0 and not s.hands_active

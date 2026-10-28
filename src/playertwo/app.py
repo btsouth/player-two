@@ -75,10 +75,17 @@ MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Pla
                "window, where you can type to me instead.")
 SOUND_PROBLEM = ("I can't find a speaker or headset. I'll start talking as soon as one is "
                  "connected.")
-# "Player Two, stop" (and its other ways to say stop), anywhere in what's heard.
-STOP_CALL = re.compile(r"(?:player|layer|play a)s?[\s,-]*(?:two|2|ii|to|too)[\s,.!?:-]*"
-                       r"(?:stop|stop it|stop talking|be quiet|quiet|shush|shut up|cancel|hush)"
-                       r"\b", re.IGNORECASE)
+# "Player Two, stop" (and its other ways to say stop), anywhere in what's heard, as a whole
+# command: followed by the end of a sentence or its name again, so "Player Two, stop
+# narrating" and "quiet mode" stay commands of their own. In words still coming in, the
+# end of the text isn't the end of the sentence: STOP_SO_FAR needs punctuation.
+_STOP = (r"(?:player|layer|play a)s?[\s,-]*(?:(?:two|2|ii)\b|(?:to|too)(?=\s*[,.!?]))"
+         r"[\s,.!?:-]*(?:stop|stop it|stop that|stop talking|be quiet|quiet|shush|shut up"
+         r"|cancel|cancel that|hush|never ?mind)")
+STOP_CALL = re.compile(_STOP + r"(?=\s*(?:[,.!?;]|$)|\s+(?:hey |ok |okay )?(?:player|layer))",
+                       re.IGNORECASE)
+STOP_SO_FAR = re.compile(_STOP + r"(?=\s*[,.!?;]|\s+(?:hey |ok |okay )?(?:player|layer))",
+                         re.IGNORECASE)
 HANDS_FREE_PROBLEM = ("I couldn't start hands-free listening, so for now hold the talk key, "
                       "or use the talk button in the Player Two window. Run player-two setup "
                       "to try again.")
@@ -228,6 +235,7 @@ class Session:
         self.hands_task: asyncio.Task | None = None
         self.hands_active = False
         self.woke_at = 0.0
+        self.woke_for = 0.0  # when the speech that said "Player Two" began
         self.follow_until = 0.0
         self.spoke_at = 0.0
         self.narrating_text = ""
@@ -716,15 +724,16 @@ class Session:
                 if e["kind"] in ("say", "ask") and now - e["t"] < 30 and e.get("text")]
         return [*said, self.narrating_text]
 
-    def new_stops(self, text: str, started: float) -> bool:
-        """Whether `text` (the speech that began at `started`, so far) has a "Player Two,
-        stop" not acted on yet. It counts even mixed into Player Two's own voice
-        (speakers, no headset), unless it's the very words Player Two said."""
+    def new_stops(self, text: str, started: float, final: bool = False) -> bool:
+        """Whether `text` (the speech that began at `started`, so far, or all of it when
+        `final`) has a "Player Two, stop" not acted on yet. It counts even mixed into
+        Player Two's own voice (speakers, no headset), unless it's the very words Player
+        Two said."""
         def norm(t: str) -> str:
             return " ".join(re.findall(r"[a-z0-9']+", t.lower()))
 
         said = [norm(line) for line in self.said_lately()]
-        found = [m for m in STOP_CALL.finditer(text)
+        found = [m for m in (STOP_CALL if final else STOP_SO_FAR).finditer(text)
                  if not any(norm(m.group(0)) in line for line in said)]
         seen = self.stop_seen[1] if self.stop_seen[0] == started else 0
         if len(found) <= seen:
@@ -743,6 +752,13 @@ class Session:
         if self.new_stops(text, started):
             self.spawn(self.local("stop"))
             return
+        if self.stop_seen[0] == started and self.stop_seen[1]:
+            # Stopped already in this breath: only its name again starts something new
+            # (and cutting the voice off now would cut off "Okay, stopped").
+            stops = list(STOP_SO_FAR.finditer(text))
+            if not stops or not addressed(text[stops[-1].end():]):
+                return
+            text = text[stops[-1].end():]
         said = addressed(text)
         if said is None:
             if self.open_ear(started) or self.hands_active:
@@ -755,6 +771,7 @@ class Session:
         if not self.hands_active and not own_name and not self.echo(text, named=True):
             # "Player Two": stop talking and wait to hear what they want.
             self.hands_active, self.woke_at = True, time.monotonic()
+            self.woke_for = started
             self.voice.stop()
             self.voice.cue("listening")
             waiting = self.answer is not None and not self.answer.done()
@@ -775,7 +792,11 @@ class Session:
                           started: float, ended: float) -> None:
         """Speech heard hands-free, from `started` to `ended`: act on it if it was said to
         Player Two."""
-        woke, self.hands_active = self.hands_active, False
+        # Only the speech that said "Player Two" lets go of what that held: another
+        # sentence may already have started.
+        woke = self.hands_active and self.woke_for == started
+        if woke:
+            self.hands_active = False
         try:
             if self.utt is not None:
                 return  # the talk key is in use now; that's what counts
@@ -785,12 +806,13 @@ class Session:
                 else:
                     self.events.emit("error", where="listen", message=str(error)[:300])
                 return
-            if self.new_stops(text, started):
+            if self.new_stops(text, started, final=True):
                 await self.local("stop")
-            if self.stop_seen[0] == started and self.stop_seen[1]:
+            stops = list(STOP_CALL.finditer(text))
+            if self.stop_seen[0] == started and self.stop_seen[1] and stops:
                 # Stopped in this breath: only what came after counts ("Player Two, stop.
                 # Player Two, open the map"), and only if it's said to Player Two too.
-                text = text[list(STOP_CALL.finditer(text))[-1].end():]
+                text = text[stops[-1].end():]
                 if not addressed(text):
                     return
             echo_possible = self.maybe_echo(started, ended)
@@ -837,7 +859,7 @@ class Session:
                 self.hands_partial, self.hands_heard, self.hands_dropped,
                 lambda: ["Player Two", *self.keywords],
                 lambda: self.utt is not None or self.transcribing,
-                detector=detector)
+                detector=detector, refresh=self.mixer.refresh)
             self.hands_task = self.spawn(self.hands.run())
             return True
 

@@ -44,6 +44,7 @@ class Mic:
     def __init__(self, background: bool = False):
         self.queue: asyncio.Queue[bytes] = asyncio.Queue()
         self.background = background
+        self.retired = False  # closed for good: a start still under way opens nothing
         self._stream = None
 
     @property
@@ -62,6 +63,8 @@ class Mic:
         from . import audio
 
         with audio.PA_LOCK:
+            if self.retired or self._stream is not None:
+                return
             stream = sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16",
                                        blocksize=FRAME, callback=cb)
             try:
@@ -79,6 +82,14 @@ class Mic:
         from . import audio
 
         with audio.PA_LOCK:
+            self.close_locked()
+
+    def retire(self) -> None:
+        """Close the mic for good."""
+        from . import audio
+
+        with audio.PA_LOCK:
+            self.retired = True
             self.close_locked()
 
     def close_locked(self) -> None:
@@ -351,8 +362,10 @@ class HandsFree:
                                    Awaitable[None]],
                  on_drop: Callable[[], None],
                  keywords: Callable[[], list[str]], paused: Callable[[], bool],
-                 detector: SpeechDetector | None = None):
+                 detector: SpeechDetector | None = None,
+                 refresh: Callable[[], None] | None = None):
         self.on_partial = on_partial
+        self.refresh = refresh  # restarts the sound system, to find a new mic
         self.on_text = on_text
         self.on_drop = on_drop
         self.keywords = keywords
@@ -366,28 +379,38 @@ class HandsFree:
         self.started = 0.0  # when the stretch being heard began
 
     async def run(self) -> None:
+        loop = asyncio.get_running_loop()
+        refreshed = 0.0
+        lost = False  # the mic failed or went quiet: the device list may be stale
         try:
             while True:
                 if not self.mic.open:
                     self._end(cancel=True)
+                    if lost and self.refresh and time.monotonic() - refreshed > 10.0:
+                        refreshed = time.monotonic()
+                        with contextlib.suppress(Exception):
+                            await asyncio.to_thread(self.refresh)
                     try:
                         # Off the event loop: it waits while the sound system restarts.
-                        await asyncio.to_thread(self.mic.start, asyncio.get_running_loop())
+                        await asyncio.to_thread(self.mic.start, loop)
                         self.heard_at = time.monotonic()
+                        lost = False
                     except Exception:  # noqa: BLE001  unplugged: try again shortly
+                        lost = True
                         await asyncio.sleep(2.0)
                         continue
                 try:
                     frame = await asyncio.wait_for(self.mic.queue.get(), 1.0)
                 except TimeoutError:
-                    if time.monotonic() - self.heard_at > 5.0:
-                        self.mic.stop()  # the device went away: open it again
+                    if self.mic.open and time.monotonic() - self.heard_at > 5.0:
+                        lost = True
+                        await asyncio.to_thread(self.mic.stop)  # gone: open it again
                     continue
                 self.heard_at = time.monotonic()
                 self.feed(frame)
         finally:
             self._end(cancel=True)
-            self.mic.stop()
+            self.mic.retire()
 
     def feed(self, frame: bytes) -> None:
         if self.paused():

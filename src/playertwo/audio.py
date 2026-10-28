@@ -92,6 +92,29 @@ class Mixer:
         self.lost = False
         return True
 
+    def refresh(self) -> None:
+        """Restart the sound system so a newly plugged-in microphone shows up (PortAudio
+        only sees device changes after re-initializing), keeping the speaker going."""
+        with PA_LOCK:
+            if open_inputs:
+                return
+            for mic in list(background_inputs):
+                mic.close_locked()
+            if self._stream is not None:
+                self._stream.close(ignore_errors=True)
+                self._stream = None
+            import sounddevice as sd
+
+            with contextlib.suppress(Exception):
+                sd._terminate()
+            with contextlib.suppress(Exception):
+                sd._initialize()
+            if self.sink == "device":
+                try:
+                    self._open()
+                except Exception:  # noqa: BLE001  check() finds it again later
+                    self._stream = None
+
     def close(self) -> None:
         if self._stream is not None:
             self._stream.close(ignore_errors=True)
