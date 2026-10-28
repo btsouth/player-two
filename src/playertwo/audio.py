@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from collections import deque
 
 import numpy as np
 
 RATE = 24_000  # Kokoro's native rate; cues are generated at the same rate.
+
+# PortAudio isn't thread-safe, and restarting it (to find a newly plugged-in device)
+# would kill an open microphone. Opening or closing a stream, and restarting, happen
+# under this lock; `open_inputs` counts microphones that are open.
+PA_LOCK = threading.Lock()
+open_inputs = 0
 
 
 class Mixer:
@@ -59,17 +66,24 @@ class Mixer:
             return False
         self.lost = True
         self.clear_speech()
-        try:
-            if self._stream is not None:
-                self._stream.close(ignore_errors=True)
-            import sounddevice as sd
+        with self._lock:
+            self._cues.clear()  # or they'd all play at once when sound comes back
+        with PA_LOCK:
+            if open_inputs:
+                return False  # restarting PortAudio now would cut off the microphone
+            try:
+                if self._stream is not None:
+                    self._stream.close(ignore_errors=True)
+                import sounddevice as sd
 
-            sd._terminate()  # PortAudio only sees device changes after re-initializing
-            sd._initialize()
-            self._open()
-        except Exception:  # noqa: BLE001  try again on the next check
-            self._stream = None
-            return False
+                # PortAudio only sees device changes after re-initializing.
+                with contextlib.suppress(Exception):
+                    sd._terminate()
+                sd._initialize()
+                self._open()
+            except Exception:  # noqa: BLE001  try again on the next check
+                self._stream = None
+                return False
         self.lost = False
         return True
 
@@ -95,6 +109,8 @@ class Mixer:
 
     def cue(self, mono: np.ndarray, pan: float = 0.0, gain: float = 0.6) -> None:
         """Play a short sound. pan is -1 (left) to 1 (right)."""
+        if not self.playing():
+            return
         pan = max(-1.0, min(1.0, pan))
         left = np.cos((pan + 1) * np.pi / 4)
         right = np.sin((pan + 1) * np.pi / 4)

@@ -153,6 +153,12 @@ class TestAgent:
         ])
         run(agent.run("what's my HP?"))
         assert said == ["Your HP is 42 out of 50.", "You also have 3 potions."]
+        agent, _, said, _, _ = self.make([
+            [("say", {"text": "I'll open the map."}),
+             ("finish", {"text": "I couldn't open the map."})],
+        ])
+        run(agent.run("open the map"))
+        assert said == ["I'll open the map.", "I couldn't open the map."]
 
     def test_holding_the_talk_key_pauses_presses_until_released(self):
         agent, pad, said, _, _ = self.make([

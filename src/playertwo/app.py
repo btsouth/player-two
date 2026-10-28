@@ -230,6 +230,7 @@ class Session:
         self.troubled: dict[str, float] = {}
         self.window = None
         self.ui = True  # the window's web server runs (not with --no-ui)
+        self.unheard = ""  # the greeting, when there was no sound device to say it on
         self.main: asyncio.Task | None = None
 
     def focus_game(self) -> None:
@@ -390,7 +391,9 @@ class Session:
             if time.monotonic() - checked > 2.0 and self.utt is None:
                 checked = time.monotonic()
                 if await asyncio.to_thread(self.mixer.check):
-                    self.announce("My sound is back.", status=True, wait_turn=True)
+                    back = f"My sound is back. {self.unheard}".strip()
+                    self.unheard = ""
+                    self.announce(back, status=True, wait_turn=True)
             st = self.current_status()
             if st != self.status:
                 self.status = st
@@ -571,7 +574,10 @@ class Session:
     async def _pump(self, mic: Mic, utt: Utterance) -> None:
         while self.utt is utt:
             if utt.result is not None and utt.result.done():
-                break  # the speech session ended (an error); talk_stop will say so
+                # The speech session ended (an error). Don't wait for the key release,
+                # which may never come; talk_stop says what went wrong.
+                self.spawn(self.talk_stop())
+                break
             if time.monotonic() - self.talk_started > 60:
                 # A lost key release would leave the mic open for good.
                 self.spawn(self.talk_stop())
@@ -1052,6 +1058,9 @@ class Session:
         self.emit_settings()
         greeting = self.greeting()
         self.events.emit("say", text=greeting, source="hello")
+        if self.mixer.lost and hasattr(self.voice, "lang"):
+            # Nobody heard it: say it once sound is back.
+            self.unheard = greeting.replace(" " + SOUND_PROBLEM, "")
         await self.voice.say(greeting)
         first_run(mark=True)
         # Let the hello finish before the first look at the game starts talking.

@@ -35,15 +35,23 @@ class Mic:
         def cb(indata, _frames, _t, _status):
             loop.call_soon_threadsafe(self.queue.put_nowait, bytes(indata))
 
-        self._stream = sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16",
-                                         blocksize=FRAME, callback=cb)
-        self._stream.start()
+        from . import audio
+
+        with audio.PA_LOCK:
+            self._stream = sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16",
+                                             blocksize=FRAME, callback=cb)
+            self._stream.start()
+            audio.open_inputs += 1
 
     def stop(self) -> None:
+        from . import audio
+
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+            with audio.PA_LOCK:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
+                audio.open_inputs -= 1
 
 
 class Utterance:

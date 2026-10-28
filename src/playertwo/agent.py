@@ -168,15 +168,26 @@ class Agent:
             await self.speak(text)
 
     def _already_said(self, text: str) -> bool:
-        """Whether this run already said it (a finish that restates the last say)."""
-        words = set(re.findall(r"[a-z0-9']+", text.lower()))
-        for said in self.said:
-            if re.findall(r"\d+", said) != re.findall(r"\d+", text):
-                continue
-            before = set(re.findall(r"[a-z0-9']+", said.lower()))
-            if words and (words <= before or len(words & before) / len(words | before) >= 0.5):
-                return True
-        return False
+        """Whether the last say already said it (a finish that restates it). Never when
+        the numbers or a "not" differ: "I couldn't open the map" after "I'll open the
+        map" is news."""
+        if not self.said:
+            return False
+        said = self.said[-1]
+
+        def words(t: str) -> set[str]:
+            return set(re.findall(r"[a-z0-9']+", t.lower().replace("\u2019", "'")))
+
+        def negations(w: set[str]) -> set[str]:
+            return {x for x in w if x in ("not", "no", "never", "nothing", "none", "cannot")
+                    or x.endswith("n't")}
+
+        now, before = words(text), words(said)
+        if not now or re.findall(r"\d+", said) != re.findall(r"\d+", text):
+            return False
+        if negations(now) != negations(before):
+            return False
+        return now <= before or len(now & before) / len(now | before) >= 0.5
 
     def system(self) -> str:
         parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]
