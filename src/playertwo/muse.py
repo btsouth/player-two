@@ -73,7 +73,8 @@ class Muse:
         """Parameters only some providers accept."""
         extra: dict = {}
         if self._effort_ok:
-            extra["reasoning_effort"] = effort
+            # Muse Spark Open's lowest setting is "low"; "minimal" is Meta API only.
+            extra["reasoning_effort"] = "low" if self.open and effort == "minimal" else effort
         if not self.open:
             extra["prompt_cache_key"] = key
         return extra
@@ -84,8 +85,8 @@ class Muse:
         try:
             return await self.brain.chat.completions.create(
                 model=self.model, **kw, **self._extra(effort, key))
-        except BadRequestError:
-            if not self._effort_ok:
+        except BadRequestError as exc:
+            if "reasoning_effort" not in str(exc):
                 raise
             self._effort_ok = False  # this provider doesn't take reasoning_effort
             return await self.brain.chat.completions.create(
