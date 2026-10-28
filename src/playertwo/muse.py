@@ -103,12 +103,16 @@ class Muse:
             stream_options={"include_usage": True},
         )
         usage = None
-        async for chunk in stream:
-            if chunk.usage:
-                usage = chunk.usage
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-        self.usage.add(usage, time.monotonic() - t)
+        try:
+            async for chunk in stream:
+                if chunk.usage:
+                    usage = chunk.usage
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        finally:
+            # Stopping early (a <silent> reply, a repeat) must close the HTTP stream too.
+            await stream.close()
+            self.usage.add(usage, time.monotonic() - t)
 
     async def json(
         self, messages: list[dict], effort: str | None = None, max_tokens: int = 3000

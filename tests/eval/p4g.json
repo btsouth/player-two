@@ -1,0 +1,368 @@
+{
+ "game": "Persona 4 Golden",
+ "images": "~/.cache/player-two/eval/p4g",
+ "note": "Screens captured from the real game. Images aren't in the repo (they're the game's art); each case names its file in the images folder. must: every group needs one alternative to match (case-insensitive regex). never: no pattern may match. max_words: words outside quoted dialogue. recent: what Player Two already said this session. A must of [\"<silent>\"] means it should say nothing.",
+ "cases": [
+  {
+   "file": "c1.png",
+   "what": "Teddie asks a question",
+   "must": [
+    [
+     "sensei, are you leaving\\?"
+    ],
+    [
+     "teddie"
+    ]
+   ],
+   "never": [
+    "tuesday",
+    "after school",
+    "concert",
+    "stage",
+    "press (a|any) button"
+   ],
+   "max_words": 8
+  },
+  {
+   "file": "b1.png",
+   "what": "battle, Yosuke's turn, Skill selected, three enemies",
+   "must": [
+    [
+     "yosuke"
+    ],
+    [
+     "turn"
+    ],
+    [
+     "skill"
+    ]
+   ],
+   "never": [
+    "you'?re the (blond|blonde|guy)",
+    "mostly full",
+    "full health",
+    "\\byu\\b"
+   ],
+   "max_words": 30
+  },
+  {
+   "file": "b2.png",
+   "what": "battle, the player's turn, Teddie says three enemies",
+   "must": [
+    [
+     "your turn",
+     "you'?re up"
+    ],
+    [
+     "skill"
+    ],
+    [
+     "three enemies",
+     "3 enemies"
+    ]
+   ],
+   "never": [
+    "\\byu\\b",
+    "yosuke'?s turn"
+   ],
+   "max_words": 30
+  },
+  {
+   "file": "b3.png",
+   "what": "battle, Chie's turn",
+   "must": [
+    [
+     "chie"
+    ],
+    [
+     "turn"
+    ]
+   ],
+   "never": [
+    "\\byu\\b",
+    "your turn"
+   ],
+   "max_words": 30
+  },
+  {
+   "file": "b4.png",
+   "what": "battle, Teddie: it got back up",
+   "must": [
+    [
+     "it got back up"
+    ]
+   ],
+   "never": [
+    "\\byu\\b"
+   ],
+   "max_words": 30
+  },
+  {
+   "file": "b5.png",
+   "what": "all-out attack offer while Yosuke has 4 HP",
+   "must": [
+    [
+     "all our strength",
+     "all-out"
+    ],
+    [
+     "yes"
+    ],
+    [
+     "yosuke"
+    ],
+    [
+     "\\b4\\b|four"
+    ]
+   ],
+   "never": [
+    "\\byu\\b",
+    "mostly full"
+   ],
+   "max_words": 30
+  },
+  {
+   "file": "m2.png",
+   "what": "status page, Yukiko",
+   "must": [
+    [
+     "yukiko"
+    ],
+    [
+     "169"
+    ],
+    [
+     "178"
+    ],
+    [
+     "73"
+    ],
+    [
+     "182"
+    ]
+   ],
+   "never": [
+    "you are yukiko"
+   ],
+   "max_words": 30
+  },
+  {
+   "file": "pad1-lb.png",
+   "what": "status page, Yosuke",
+   "must": [
+    [
+     "yosuke"
+    ],
+    [
+     "178"
+    ],
+    [
+     "27"
+    ],
+    [
+     "124"
+    ]
+   ],
+   "never": [],
+   "max_words": 30
+  },
+  {
+   "file": "pad0-y.png",
+   "what": "main menu open, Skill selected",
+   "must": [
+    [
+     "skill"
+    ],
+    [
+     "item"
+    ]
+   ],
+   "never": [],
+   "max_words": 30
+  },
+  {
+   "file": "l1.png",
+   "what": "standing at the save point, nothing new",
+   "must": [
+    [
+     "save point"
+    ]
+   ],
+   "never": [
+    "press (a|any) button",
+    "concert"
+   ],
+   "max_words": 16
+  },
+  {
+   "file": "g1.png",
+   "what": "arrived in the bathhouse changing area",
+   "must": [
+    [
+     "bathhouse|changing area"
+    ]
+   ],
+   "never": [],
+   "max_words": 18
+  },
+  {
+   "file": "l3.png",
+   "what": "arrived on Bath #1",
+   "must": [
+    [
+     "bath (#|number )?(1|one)"
+    ]
+   ],
+   "never": [],
+   "max_words": 18
+  },
+  {
+   "file": "esc.png",
+   "what": "opening text over the Velvet Room",
+   "must": [
+    [
+     "life is truth, and never a dream"
+    ]
+   ],
+   "never": [
+    "velvet|\\bblue\\b|\\broom\\b|limo|\\bcar\\b"
+   ],
+   "max_words": 45
+  },
+  {
+   "file": "s2.png",
+   "what": "opening movie, Yosuke's name card",
+   "must": [
+    [
+     "yosuke"
+    ]
+   ],
+   "never": [
+    "you'?re (yosuke|the one)",
+    "\\byou\\b.*\\bposing\\b"
+   ],
+   "max_words": 14
+  },
+  {
+   "file": "start.png",
+   "what": "studio logo at boot",
+   "must": [
+    [
+     "p.?studio|logo"
+    ]
+   ],
+   "never": [],
+   "max_words": 10
+  },
+  {
+   "file": "s3.png",
+   "what": "loading screen",
+   "must": [
+    [
+     "load"
+    ]
+   ],
+   "never": [],
+   "max_words": 6
+  },
+  {
+   "file": "c2.png",
+   "what": "Check prompt at the entrance",
+   "must": [
+    [
+     "check"
+    ]
+   ],
+   "never": [
+    "concert"
+   ],
+   "max_words": 18
+  },
+  {
+   "file": "g1.png",
+   "what": "mid-session: walked into the changing area",
+   "recent": [
+    "Tuesday, May 24th, after school. Entrance.",
+    "Teddie: \"Sensei, are you leaving?\""
+   ],
+   "must": [
+    [
+     "bathhouse|changing area"
+    ]
+   ],
+   "never": [
+    "tuesday",
+    "after school",
+    "may 24"
+   ],
+   "max_words": 10
+  },
+  {
+   "file": "c2.png",
+   "what": "mid-session: Check prompt appears at the entrance",
+   "recent": [
+    "Tuesday, May 24th, after school. Entrance."
+   ],
+   "must": [
+    [
+     "check"
+    ]
+   ],
+   "never": [
+    "tuesday",
+    "after school",
+    "may 24",
+    "entrance"
+   ],
+   "max_words": 8
+  },
+  {
+   "file": "l1.png",
+   "what": "mid-session: still at the save point, nothing new",
+   "recent": [
+    "Tuesday, May 24th, after school. Save point."
+   ],
+   "must": [
+    [
+     "<silent>"
+    ]
+   ],
+   "never": [],
+   "max_words": 2
+  },
+  {
+   "file": "b2.png",
+   "what": "mid-session: same battle turn already announced",
+   "recent": [
+    "Teddie: \"Three enemies! Let's get through this!\" Your turn. Skill selected."
+   ],
+   "must": [
+    [
+     "<silent>"
+    ]
+   ],
+   "never": [],
+   "max_words": 2
+  },
+  {
+   "file": "b3.png",
+   "what": "mid-session: next turn after the player's",
+   "recent": [
+    "Your turn. Skill selected.",
+    "Yosuke's turn. Skill selected."
+   ],
+   "must": [
+    [
+     "chie"
+    ],
+    [
+     "turn"
+    ]
+   ],
+   "never": [
+    "three enemies"
+   ],
+   "max_words": 12
+  }
+ ]
+}
