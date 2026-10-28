@@ -198,14 +198,14 @@ class Session:
 
     # Narration
 
-    async def _narrate(self, frame: Frame) -> None:
+    async def _narrate(self, frame: Frame, interrupt: bool = False) -> None:
         t = time.monotonic()
 
         async def deltas():
             async for d in self.narrator.narrate(frame):
                 yield d
 
-        text = await self.voice.say_stream(deltas(), interrupt=False)
+        text = await self.voice.say_stream(deltas(), interrupt=interrupt)
         if text:
             self.silent_streak = 0
             self.quiet_until = 0.0
@@ -226,13 +226,16 @@ class Session:
         """
         if self.pending is None or (self.narrating and not self.narrating.done()):
             return
-        if not self.mixer.idle.is_set():
-            return  # let the last line finish; we'll narrate the newest screen after
         frame, change = self.pending
-        if change < self.SCENE_CUT and time.monotonic() < self.quiet_until:
+        cut = change >= self.SCENE_CUT
+        if not cut and not self.mixer.idle.is_set():
+            return  # let the last line finish; we'll narrate the newest screen after
+        if not cut and time.monotonic() < self.quiet_until:
             return
         self.pending = None
-        self.narrating = asyncio.create_task(self._narrate(frame))
+        # A whole new scene (a battle starting, a menu opening) cuts off old talk about
+        # the last one, like a friend would.
+        self.narrating = asyncio.create_task(self._narrate(frame, interrupt=cut))
 
     def _start_narration(self, frame: Frame, describe: bool = False) -> None:
         if self.narrating and not self.narrating.done():

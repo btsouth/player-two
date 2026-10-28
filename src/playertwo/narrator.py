@@ -15,9 +15,23 @@ from .screen import Frame
 _SENTENCE_END = re.compile(r"[.!?][\"'\u201d\u2019)]*(\s|$)")
 
 
-def _first_sentence(text: str) -> str:
-    end = _SENTENCE_END.search(text)
-    return text[: end.end()] if end else text
+def _sentences(text: str) -> list[str]:
+    out, start = [], 0
+    for m in _SENTENCE_END.finditer(text):
+        out.append(text[start : m.end()].strip())
+        start = m.end()
+    return out
+
+
+def _opening(text: str) -> str | None:
+    """Enough of the reply to tell whether it repeats itself: the first sentence, or the
+    first two when the first is short ("Your turn.")."""
+    done = _sentences(text)
+    if not done:
+        return None
+    if len(_words(done[0])) >= 4:
+        return done[0]
+    return " ".join(done[:2]) if len(done) >= 2 else None
 
 
 def _words(text: str) -> list[str]:
@@ -61,15 +75,21 @@ class Narrator:
         return [{"role": "system", "content": self.system()},
                 {"role": "user", "content": content}]
 
-    def repeats(self, sentence: str) -> bool:
-        """True when this opening sentence is how the last narration opened too.
+    def repeats(self, opening: str) -> bool:
+        """True when this opening says what the last narration opened with.
 
         Idle animations (a character bobbing, drifting fog) can make a screen look new when
-        nothing changed, and the model doesn't always answer <silent> then.
+        nothing changed, and the model doesn't always answer <silent> then. A reworded
+        opening ("on the TV World stage" vs "of the TV World stage") still counts.
         """
         if not self.recent:
             return False
-        return _words(sentence) == _words(_first_sentence(self.recent[-1]))
+        n = len(_sentences(opening)) or 1
+        new = set(_words(opening))
+        old = set(_words(" ".join(_sentences(self.recent[-1])[:n])))
+        if not new or not old:
+            return False
+        return len(new & old) / len(new | old) >= 0.75
 
     async def narrate(self, frame: Frame) -> AsyncIterator[str]:
         """Stream what to say about a newly settled frame. Yields nothing when silent."""
@@ -89,10 +109,10 @@ class Narrator:
                         break
                     if len(stripped) < 8 and "<silent>".startswith(stripped):
                         continue
-                    end = _SENTENCE_END.search(stripped)
-                    if end is None:
+                    opening = _opening(stripped)
+                    if opening is None:
                         continue
-                    silent = self.repeats(stripped[: end.end()])
+                    silent = self.repeats(opening)
                     if silent:
                         break
                     yield head

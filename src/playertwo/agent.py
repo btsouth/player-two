@@ -97,7 +97,7 @@ class Run:
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
-                 max_turns: int = 16, settle_s: float = 0.45,
+                 max_turns: int = 24, settle_s: float = 0.45,
                  ask: Callable[[str], Awaitable[str]] | None = None,
                  confirm: str = "important", language: str = "English",
                  on_action: Callable[[str, dict], None] | None = None,

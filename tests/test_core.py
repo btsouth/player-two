@@ -203,6 +203,17 @@ class TestNarrator:
         assert first.startswith("Teddie") and second == ""
         assert len(nar.recent) == 1
 
+    def test_reworded_opening_is_a_repeat_but_a_new_turn_is_not(self):
+        nar = Narrator(FakeMuse())
+        nar.recent.append("You're at the Entrance on the TV World stage. Teddie is here.")
+        assert nar.repeats("You're at the Entrance of the TV World stage.")
+        nar.recent.append("Your turn. Shadow A is hurt.")
+        assert nar.repeats("Your turn. Shadow A is hurt.")
+        assert not nar.repeats("Your turn. Shadow B is down, one more.")
+        assert not nar.repeats("Your turn. Shadow B is hurt.")
+        assert not nar.repeats("Yosuke's turn. Attack is selected.")
+        assert not nar.repeats("Chie says: I'm starving.")
+
     def test_language_and_team_up_in_prompt(self):
         nar = Narrator(FakeMuse(), language="Spanish", team_up=True)
         system = nar.system()
