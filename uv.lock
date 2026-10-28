@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "onnxruntime", marker = "platform_machine != 'AMD64' and platform_machine != 'x86_64'", specifier = ">=1.20" }]
+overrides = [{ name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = ">=1.20" }]
 
 [[package]]
 name = "accessible-output2"
@@ -393,7 +393,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "espeakng-loader" },
     { name = "numpy" },
-    { name = "onnxruntime", marker = "platform_machine != 'AMD64' and platform_machine != 'x86_64'" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
     { name = "phonemizer" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6b/ef/b58dedba0a1417f16352352787fbcfcbaa0b907e284c2ea3ebaf5541109a/kokoro_onnx-0.6.1.tar.gz", hash = "sha256:7bbdb66dd53775f71088a99999a9aefdad240740daf54cb09410d8bb1e294e35", size = 69799, upload-time = "2026-08-19T00:40:37.021Z" }
@@ -814,8 +814,8 @@ dependencies = [
     { name = "evdev", marker = "sys_platform == 'linux'" },
     { name = "kokoro-onnx" },
     { name = "numpy" },
-    { name = "onnxruntime", marker = "platform_machine != 'AMD64' and platform_machine != 'x86_64'" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'AMD64' or platform_machine == 'x86_64'" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "openai" },
     { name = "pillow" },
     { name = "sounddevice" },
@@ -847,8 +847,8 @@ requires-dist = [
     { name = "kokoro-onnx", specifier = ">=0.4" },
     { name = "mss", marker = "extra == 'windows'", specifier = ">=9" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "onnxruntime", marker = "platform_machine != 'AMD64' and platform_machine != 'x86_64'", specifier = ">=1.20" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'AMD64' or platform_machine == 'x86_64'", specifier = ">=1.23" },
+    { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = ">=1.20" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=1.23" },
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], marker = "extra == 'cuda'", specifier = ">=1.23" },
     { name = "openai", specifier = ">=1.60" },
     { name = "pillow", specifier = ">=10" },

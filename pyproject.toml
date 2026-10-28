@@ -14,9 +14,11 @@ dependencies = [
     "sounddevice>=0.5",
     "soundfile>=0.12",
     "evdev>=1.7; sys_platform == 'linux'",
-    # The GPU build also runs on the CPU, so x86_64 Linux and Windows always get it.
-    "onnxruntime-gpu>=1.23; platform_machine == 'x86_64' or platform_machine == 'AMD64'",
-    "onnxruntime>=1.20; platform_machine != 'x86_64' and platform_machine != 'AMD64'",
+    # The GPU build also runs on the CPU. Linux x86_64 gets it (install with
+    # --excludes uv-excludes.txt so the CPU build doesn't land on top); Windows and
+    # everything else use the CPU build kokoro-onnx asks for.
+    "onnxruntime-gpu>=1.23; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnxruntime>=1.20; sys_platform != 'linux' or platform_machine != 'x86_64'",
 ]
 
 [project.optional-dependencies]
@@ -31,9 +33,9 @@ player-two = "playertwo.cli:main"
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8"]
 
 [tool.uv]
-# kokoro-onnx asks for the CPU-only onnxruntime; on x86_64 the GPU build replaces it.
+# kokoro-onnx asks for the CPU-only onnxruntime; on Linux x86_64 the GPU build replaces it.
 override-dependencies = [
-    "onnxruntime>=1.20; platform_machine != 'x86_64' and platform_machine != 'AMD64'",
+    "onnxruntime>=1.20; sys_platform != 'linux' or platform_machine != 'x86_64'",
 ]
 
 [build-system]
