@@ -13,6 +13,9 @@ CACHE_DIR = Path(
     or Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "player-two"
 )
 
+STATE_DIR = Path(
+    os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "player-two"
+
 
 def socket_path() -> Path:
     """The running session's control socket (hotkeys and the window talk to it)."""
@@ -57,6 +60,9 @@ class Settings:
     # The game's window: part of its title or class. Empty picks the last focused window.
     window: str = ""
     game: str = ""
+    # The companion window (captions, what Player Two sees and presses): "auto" opens it
+    # on Hyprland without taking focus from the game, "on" always, "off" never.
+    companion: str = "auto"
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -75,6 +81,54 @@ class Settings:
             cur = getattr(s, f.name)
             setattr(s, f.name, type(cur)(env) if not isinstance(cur, bool) else env == "1")
         return s
+
+
+def toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int | float):
+        return repr(v)
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def save_settings(changes: dict, path: Path | None = None) -> None:
+    """Write changed settings into config.toml, keeping every other line (and comment)."""
+    import re
+
+    path = path or CONFIG_DIR / "config.toml"
+    lines = path.read_text().splitlines() if path.exists() else []
+    todo = dict(changes)
+    # Top-level keys end where the first table starts; new ones go just before it.
+    end = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
+               len(lines))
+    for i in range(end):
+        m = re.match(r"\s*([A-Za-z_]+)\s*=", lines[i])
+        if m and m.group(1) in todo:
+            lines[i] = f"{m.group(1)} = {toml_value(todo.pop(m.group(1)))}"
+    lines[end:end] = [f"{k} = {toml_value(v)}" for k, v in todo.items()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    os.chmod(tmp, path.stat().st_mode & 0o777 if path.exists() else 0o600)
+    tmp.replace(path)
+
+
+def first_run(mark: bool = False) -> bool:
+    """True until Player Two has welcomed this player once."""
+    p = STATE_DIR / "welcomed"
+    seen = p.exists()
+    if mark and not seen:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+    return not seen
+
+
+def has_api_key() -> bool:
+    try:
+        api_key()
+    except SystemExit:
+        return False
+    return True
 
 
 def api_key() -> str:

@@ -20,10 +20,19 @@ const GLYPH = {
   start: ["≡", "round"], back: ["⧉", "round"], guide: ["⌂", "round"],
   ls: ["L3", ""], rs: ["R3", ""],
 };
+const VERBOSITY_HINT = {
+  terse: "Bare facts, for fast screen reader users.",
+  quiet: "Only dialogue and choices.",
+  normal: "What's new and matters, in a few words.",
+  detailed: "A little more about each scene.",
+};
 
 let socket = null;
+let connected = false;
 let pressTimer = null;
 let lastPress = 0;
+let liveTimer = null;
+let talkKey = "F8";
 
 function setState(state) {
   app.dataset.state = state;
@@ -40,6 +49,18 @@ function setCaption(text, who = "Player Two") {
   span.className = "fresh";
   span.textContent = text;
   cap.append(span);
+}
+
+function setGame(name, found) {
+  $("game").classList.toggle("none", !found);
+  $("game-name").textContent = found ? (name || "Your game") : "No game open yet";
+  $("screen-empty-text").textContent = found ? "Waiting for the game"
+    : "Start a game and I'll find it";
+  if (!found) {
+    $("frame").hidden = true;
+    $("screen-empty").hidden = false;
+    $("live").hidden = true;
+  }
 }
 
 function glyph(name) {
@@ -64,9 +85,43 @@ function addItem(kind, tag, content) {
   li.append(t, body);
   const feed = $("feed");
   feed.append(li);
-  while (feed.children.length > 60) feed.firstElementChild.remove();
+  while (feed.children.length > 80) feed.firstElementChild.remove();
   const wrap = feed.parentElement; // the scroller
-  wrap.scrollTo({ top: wrap.scrollHeight, behavior: "smooth" });
+  wrap.scrollTo({ top: wrap.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+}
+
+// Notices: the welcome on first run, and anything that needs fixing.
+function notice(id, kind, title, lines, dismiss) {
+  if (document.getElementById(`notice-${id}`)) return;
+  const box = document.createElement("div");
+  box.className = `notice ${kind}`;
+  box.id = `notice-${id}`;
+  box.setAttribute("role", kind === "warn" ? "alert" : "note");
+  const h = document.createElement("h3");
+  h.textContent = title;
+  box.append(h);
+  for (const line of lines) {
+    const p = document.createElement(Array.isArray(line) ? "ul" : "p");
+    if (Array.isArray(line)) {
+      for (const item of line) {
+        const li = document.createElement("li");
+        li.textContent = item;
+        p.append(li);
+      }
+    } else p.textContent = line;
+    box.append(p);
+  }
+  if (dismiss) {
+    const b = document.createElement("button");
+    b.className = "notice-close";
+    b.textContent = dismiss;
+    b.addEventListener("click", () => {
+      box.remove();
+      if (id === "welcome") localStorage.setItem("p2-welcomed", "1");
+    });
+    box.append(b);
+  }
+  $("notices").append(box);
 }
 
 function showPresses(buttons, note) {
@@ -91,11 +146,53 @@ function showPresses(buttons, note) {
   lastPress = Date.now();
 }
 
+function applySettings(ev) {
+  for (const group of document.querySelectorAll(".seg[data-setting]")) {
+    const value = ev[group.dataset.setting];
+    if (value === undefined) continue;
+    for (const b of group.querySelectorAll("[role=radio]")) {
+      const on = b.dataset.value === value;
+      b.setAttribute("aria-checked", String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+  }
+  if (ev.verbosity) $("verbosity-hint").textContent = VERBOSITY_HINT[ev.verbosity] || "";
+  const langs = ev.choices?.language;
+  if (langs && $("language").options.length !== langs.length) {
+    $("language").replaceChildren(...langs.map((l) => new Option(l, l)));
+  }
+  if (ev.language) $("language").value = ev.language;
+  if (ev.speech_rate) {
+    $("speech-rate").value = ev.speech_rate;
+    $("rate-out").textContent = `${Number(ev.speech_rate).toFixed(2)}×`;
+  }
+  if (ev.output) $("output").value = ev.output;
+  if (ev.team_up !== undefined) $("team-up").checked = ev.team_up;
+  if (ev.paused !== undefined) $("paused").checked = ev.paused;
+  if (ev.companion) $("companion").checked = ev.companion !== "off";
+}
+
 function handle(ev) {
   switch (ev.kind) {
     case "ready":
-      if (ev.game) $("game").textContent = ev.game;
-      if (ev.talk_key) $("talk-key").textContent = ev.talk_key;
+      setGame(ev.game, ev.found !== false);
+      if (ev.talk_key) { talkKey = ev.talk_key; $("talk-key").textContent = ev.talk_key; }
+      if (ev.first_run && !localStorage.getItem("p2-welcomed")) {
+        notice("welcome", "hello", "Hi, I'm Player Two", [
+          `I tell you what's happening in your game, and I play when you ask. Hold ${talkKey} and talk, then let go. Some things to try:`,
+          ["“What's on screen?”", "“Open the menu”", "“Heal whoever is hurt”",
+            "“Repeat that”", "“Stop” (I stop talking)", "“Less detail”"],
+        ], "Got it");
+      }
+      for (const [i, p] of (ev.problems || []).entries()) notice(`problem-${i}`, "warn", "Needs a fix", [p]);
+      if (ev.talk_key_bound === false) {
+        notice("talk-key", "warn", "No talk key yet", [
+          "Run player-two setup in a terminal to make F8 your talk key. Until then, hold the talk button below, or type.",
+        ]);
+      }
+      break;
+    case "game":
+      setGame(ev.name, ev.found);
       break;
     case "status":
       setState(ev.state);
@@ -109,6 +206,9 @@ function handle(ev) {
       img.src = `data:image/jpeg;base64,${ev.jpeg}`;
       img.hidden = false;
       $("screen-empty").hidden = true;
+      $("live").hidden = false;
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => { $("live").hidden = true; }, 20000);
       break;
     }
     case "hearing":
@@ -152,8 +252,7 @@ function handle(ev) {
       break;
     }
     case "settings":
-      document.querySelectorAll(".modes button").forEach((b) =>
-        b.setAttribute("aria-checked", String(b.dataset.mode === ev.verbosity)));
+      applySettings(ev);
       break;
     case "error":
       addItem("error", "Oops", ev.message || "Something went wrong");
@@ -168,53 +267,146 @@ function send(command) {
 
 function connect() {
   socket = new WebSocket(`ws://${location.host}/events`);
+  socket.onopen = () => {
+    connected = true;
+    $("gone").hidden = true;
+  };
   socket.onmessage = (m) => handle(JSON.parse(m.data));
   socket.onclose = () => {
     setState("paused");
     $("status-text").textContent = "Reconnecting";
+    // Gone for a moment is a hiccup; gone for longer means Player Two stopped.
+    if (connected) setTimeout(() => { if (socket.readyState !== WebSocket.OPEN) $("gone").hidden = false; }, 2500);
+    connected = false;
     setTimeout(connect, 1500);
   };
 }
 
-// Talk: hold the button, or the talk key while this window has focus.
+// Talk: hold the button (mouse, touch, Space or Enter), or the talk key while this
+// window has focus.
 const talk = $("talk");
-talk.addEventListener("pointerdown", () => send("talk-start"));
-talk.addEventListener("pointerup", () => send("talk-stop"));
-talk.addEventListener("pointerleave", (e) => { if (e.buttons) send("talk-stop"); });
-addEventListener("keydown", (e) => {
-  if (e.key === "F8" && !e.repeat) { send("talk-start"); e.preventDefault(); }
+let talking = false;
+function talkStart() { if (!talking) { talking = true; send("talk-start"); } }
+function talkStop() { if (talking) { talking = false; send("talk-stop"); } }
+talk.addEventListener("pointerdown", talkStart);
+talk.addEventListener("pointerup", talkStop);
+talk.addEventListener("pointerleave", talkStop);
+talk.addEventListener("keydown", (e) => {
+  if ((e.key === " " || e.key === "Enter") && !e.repeat) { talkStart(); e.preventDefault(); }
 });
-addEventListener("keyup", (e) => { if (e.key === "F8") { send("talk-stop"); e.preventDefault(); } });
-document.querySelectorAll(".modes button").forEach((b) => b.addEventListener("click", () => {
-  send(b.dataset.mode);
-  handle({ kind: "settings", verbosity: b.dataset.mode });
-}));
+talk.addEventListener("keyup", (e) => {
+  if (e.key === " " || e.key === "Enter") { talkStop(); e.preventDefault(); }
+});
+addEventListener("keydown", (e) => {
+  if (e.key === talkKey && !e.repeat) { talkStart(); e.preventDefault(); }
+});
+addEventListener("keyup", (e) => { if (e.key === talkKey) { talkStop(); e.preventDefault(); } });
+addEventListener("blur", talkStop);
+
+$("type-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = $("type-box").value.trim();
+  if (!text) return;
+  send(`do ${text}`);
+  $("type-box").value = "";
+});
+
+// Settings
+const dialog = $("settings");
+$("open-settings").addEventListener("click", () => {
+  dialog.showModal();
+  $("open-settings").setAttribute("aria-expanded", "true");
+});
+dialog.addEventListener("close", () => {
+  $("open-settings").setAttribute("aria-expanded", "false");
+  $("open-settings").focus();
+});
+dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+
+function setSetting(key, value) {
+  send(`set ${key} ${value}`);
+  applySettings({ [key]: value });
+}
+
+for (const group of document.querySelectorAll(".seg[data-setting]")) {
+  const radios = [...group.querySelectorAll("[role=radio]")];
+  for (const b of radios) {
+    b.addEventListener("click", () => setSetting(group.dataset.setting, b.dataset.value));
+  }
+  // Arrow keys move between choices, as in any radio group.
+  group.addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = radios.indexOf(document.activeElement);
+    const next = radios[(i + step + radios.length) % radios.length];
+    next.focus();
+    next.click();
+  });
+}
+$("language").addEventListener("change", (e) => setSetting("language", e.target.value));
+$("output").addEventListener("change", (e) => setSetting("output", e.target.value));
+$("speech-rate").addEventListener("input", (e) => {
+  $("rate-out").textContent = `${Number(e.target.value).toFixed(2)}×`;
+});
+$("speech-rate").addEventListener("change", (e) => setSetting("speech_rate", e.target.value));
+$("team-up").addEventListener("change", (e) => setSetting("team_up", e.target.checked));
+$("companion").addEventListener("change", (e) => setSetting("companion", e.target.checked ? "on" : "off"));
+$("paused").addEventListener("change", (e) => send(e.target.checked ? "pause" : "resume"));
+
+function setTextSize(scale) {
+  document.documentElement.style.setProperty("--caption-scale", scale);
+  $("text-size").value = scale;
+  localStorage.setItem("p2-text-size", scale);
+}
+$("text-size").addEventListener("change", (e) => setTextSize(e.target.value));
+setTextSize(localStorage.getItem("p2-text-size") || "1");
+
+let quitArmed = null;
+$("quit").addEventListener("click", () => {
+  const b = $("quit");
+  if (!quitArmed) {
+    b.textContent = "Press again to quit";
+    b.classList.add("armed");
+    quitArmed = setTimeout(() => {
+      quitArmed = null;
+      b.textContent = "Quit Player Two";
+      b.classList.remove("armed");
+    }, 3500);
+    return;
+  }
+  clearTimeout(quitArmed);
+  send("quit");
+  dialog.close();
+});
 
 // Scripted session for previews and the README.
 const DEMO = [
-  [400, { kind: "ready", game: "Persona 4 Golden" }],
-  [300, { kind: "frame", jpeg: window.DEMO_FRAMES?.[0] }],
+  [300, { kind: "ready", game: "Persona 4 Golden", found: true, talk_key: "F8", talk_key_bound: true }],
+  [0, { kind: "settings", verbosity: "normal", confirm: "important", language: "English", speech_rate: 1.1, output: "voice", team_up: false, paused: false, companion: "auto", choices: { language: ["English", "Spanish", "French"] } }],
+  [100, { kind: "say", source: "hello", text: "Player Two here. I can see Persona 4 Golden. Hold F8 to talk." }],
+  [1600, { kind: "frame", jpeg: window.DEMO_FRAMES?.[0] }],
   [200, { kind: "status", state: "thinking" }],
-  [1300, { kind: "status", state: "speaking" }],
-  [0, { kind: "say", source: "narrator", text: "Mr. Morooka: “I'm Kinshiro Morooka, your homeroom teacher from today forward!”" }],
-  [3600, { kind: "status", state: "watching" }],
-  [900, { kind: "status", state: "listening" }],
-  [500, { kind: "hearing", text: "skip to the" }],
-  [600, { kind: "hearing", text: "skip to the battle and use Agi" }],
-  [500, { kind: "heard", text: "Skip to the battle and use Agi on the hurt one" }],
-  [200, { kind: "status", state: "acting" }],
-  [900, { kind: "press", buttons: ["a", "a", "a"] }],
-  [300, { kind: "frame", jpeg: window.DEMO_FRAMES?.[1] }],
-  [900, { kind: "press", buttons: ["down", "a"] }],
   [1100, { kind: "status", state: "speaking" }],
-  [0, { kind: "ask", text: "Agi on Shadow B, the hurt one on the right. Go?" }],
-  [2400, { kind: "status", state: "listening" }],
-  [700, { kind: "heard", text: "Yes" }],
+  [0, { kind: "say", source: "narrator", text: "Teddie: “Sensei, are you leaving?” Yes, or No." }],
+  [3200, { kind: "status", state: "watching" }],
+  [900, { kind: "status", state: "listening" }],
+  [500, { kind: "hearing", text: "no, let's go" }],
+  [600, { kind: "hearing", text: "no, let's go fight" }],
+  [500, { kind: "heard", text: "No, let's go fight" }],
   [200, { kind: "status", state: "acting" }],
-  [700, { kind: "press", buttons: ["a", "down", "a"] }],
+  [900, { kind: "press", buttons: ["down", "a"] }],
+  [300, { kind: "frame", jpeg: window.DEMO_FRAMES?.[1] }],
+  [1100, { kind: "status", state: "speaking" }],
+  [0, { kind: "say", source: "narrator", text: "Battle. Your turn. Three enemies." }],
+  [1800, { kind: "status", state: "listening" }],
+  [700, { kind: "heard", text: "Hit the left one with Garu" }],
+  [200, { kind: "status", state: "acting" }],
+  [700, { kind: "press", buttons: ["y", "down", "a"] }],
   [300, { kind: "frame", jpeg: window.DEMO_FRAMES?.[2] }],
-  [900, { kind: "status", state: "speaking" }],
-  [0, { kind: "say", source: "agent", text: "Agi hit Shadow B for 45. It's down to 35." }],
+  [900, { kind: "press", buttons: ["a"] }],
+  [700, { kind: "status", state: "speaking" }],
+  [0, { kind: "say", source: "agent", text: "Garu hit the left Shadow. It's down." }],
   [3000, { kind: "status", state: "watching" }],
 ];
 

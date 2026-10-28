@@ -3,10 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Player Two</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<a class="skip" href="#type-box">Skip to typing a message</a>
 <main class="app" id="app" data-state="watching">
   <header class="top">
     <div class="brand">
@@ -27,49 +30,140 @@
       </svg>
       <div class="titles">
         <h1>Player Two</h1>
-        <p class="game" id="game">Ready when you are</p>
+        <p class="game" id="game"><span class="game-dot" aria-hidden="true"></span><span id="game-name">Starting up</span></p>
       </div>
     </div>
-    <div class="status" id="status" role="status" aria-live="polite">
-      <span class="dot"></span><span id="status-text">Watching</span>
+    <div class="top-right">
+      <div class="status" id="status"><span class="dot" aria-hidden="true"></span><span id="status-text">Starting</span></div>
+      <button class="icon-btn" id="open-settings" aria-haspopup="dialog" aria-controls="settings" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" fill="none" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke-width="1.6"/></svg>
+        <span class="sr">Settings</span>
+      </button>
     </div>
   </header>
 
   <section class="now" aria-label="What Player Two is saying">
     <div class="now-meta"><span class="who" id="now-who">Player Two</span>
       <span class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-    <p class="caption" id="caption">Hold the talk key and tell me what you need.</p>
+    <p class="caption" id="caption">Getting ready…</p>
     <p class="hearing" id="hearing" hidden></p>
   </section>
 
   <section class="sees" aria-label="What Player Two sees">
-    <h2 class="label">What I see <span class="live">Live</span></h2>
+    <h2 class="label">What I see <span class="live" id="live" hidden>Live</span></h2>
     <div class="screen" id="screen">
       <img id="frame" alt="" hidden>
-      <div class="screen-empty" id="screen-empty">Waiting for the game</div>
+      <div class="screen-empty" id="screen-empty">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="6" fill="none" stroke-width="1.8"/><path d="M7 10v4M5 12h4" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="11" r="1.2"/><circle cx="18" cy="13.4" r="1.2"/></svg>
+        <span id="screen-empty-text">Waiting for the game</span>
+      </div>
       <div class="marks" id="marks" aria-hidden="true"></div>
       <div class="presses" id="presses" aria-hidden="true"></div>
     </div>
   </section>
 
-  <section class="feed-wrap" aria-label="Conversation">
-    <h2 class="label">Conversation</h2>
-    <div class="feed-scroll"><ol class="feed" id="feed"></ol></div>
+  <section class="feed-wrap" aria-labelledby="feed-label">
+    <h2 class="label" id="feed-label">Conversation</h2>
+    <div class="notices" id="notices"></div>
+    <div class="feed-scroll"><ol class="feed" id="feed" role="log" aria-live="off"></ol></div>
   </section>
 
   <footer class="bottom">
-    <button class="talk" id="talk" aria-label="Hold to talk">
+    <button class="talk" id="talk" aria-describedby="talk-help">
       <svg class="mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" fill="none" stroke-width="2" stroke-linecap="round"/></svg>
       <span>Hold <kbd id="talk-key">F8</kbd> to talk</span>
     </button>
-    <div class="modes" role="radiogroup" aria-label="How much I say">
-      <button role="radio" data-mode="terse">Terse</button>
-      <button role="radio" data-mode="quiet">Quiet</button>
-      <button role="radio" data-mode="normal" aria-checked="true">Normal</button>
-      <button role="radio" data-mode="detailed">Detailed</button>
-    </div>
+    <span class="sr" id="talk-help">Hold the button, Space, or the talk key while you speak, then let go.</span>
+    <form class="type" id="type-form" autocomplete="off">
+      <label class="sr" for="type-box">Type to Player Two</label>
+      <input id="type-box" type="text" placeholder="Or type: open the menu" enterkeyhint="send">
+      <button type="submit" class="send" title="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="sr">Send</span>
+      </button>
+    </form>
   </footer>
 </main>
+
+<dialog class="settings" id="settings" aria-labelledby="settings-title">
+  <form method="dialog" class="settings-inner" id="settings-form">
+    <div class="settings-head">
+      <h2 id="settings-title">Settings</h2>
+      <button class="icon-btn" value="close" title="Close settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <span class="sr">Close</span>
+      </button>
+    </div>
+    <p class="settings-note">Changes apply right away and are kept for next time.</p>
+
+    <fieldset class="field">
+      <legend>How much I say</legend>
+      <div class="seg" role="radiogroup" aria-label="How much I say" data-setting="verbosity">
+        <button type="button" role="radio" data-value="terse">Terse</button>
+        <button type="button" role="radio" data-value="quiet">Quiet</button>
+        <button type="button" role="radio" data-value="normal">Normal</button>
+        <button type="button" role="radio" data-value="detailed">Detailed</button>
+      </div>
+      <p class="hint" id="verbosity-hint"></p>
+    </fieldset>
+
+    <fieldset class="field">
+      <legend>When I play for you</legend>
+      <div class="seg" role="radiogroup" aria-label="When to check with you" data-setting="confirm">
+        <button type="button" role="radio" data-value="always">Ask first</button>
+        <button type="button" role="radio" data-value="important">Ask if it matters</button>
+        <button type="button" role="radio" data-value="never">Just do it</button>
+      </div>
+    </fieldset>
+
+    <div class="field row">
+      <label for="language">Language</label>
+      <select id="language" data-setting="language"></select>
+    </div>
+
+    <div class="field row">
+      <label for="speech-rate">Speaking speed <output id="rate-out" for="speech-rate"></output></label>
+      <input type="range" id="speech-rate" min="0.8" max="2" step="0.05" data-setting="speech_rate">
+    </div>
+
+    <div class="field row">
+      <label for="output">Speak through</label>
+      <select id="output" data-setting="output">
+        <option value="voice">My voice</option>
+        <option value="screen-reader">Your screen reader</option>
+      </select>
+    </div>
+
+    <div class="field row">
+      <label for="text-size">Caption size</label>
+      <select id="text-size">
+        <option value="1">Large</option>
+        <option value="1.3">Larger</option>
+        <option value="1.7">Huge</option>
+      </select>
+    </div>
+
+    <div class="field toggles">
+      <label class="toggle"><input type="checkbox" id="team-up" data-setting="team_up">
+        <span><b>The game reads its own menus</b><small>I'll leave menus to it and cover the rest.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="paused">
+        <span><b>Pause narration</b><small>I stay quiet until you resume. Talking still works.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="companion">
+        <span><b>Open this window when I start</b><small>It opens without taking focus from the game.</small></span></label>
+    </div>
+
+    <div class="settings-foot">
+      <button type="button" class="quit" id="quit">Quit Player Two</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="gone" id="gone" hidden>
+  <div class="gone-card" role="alert">
+    <h2>Player Two has stopped</h2>
+    <p>Start it again from your app launcher or with <code>player-two</code>. This window will reconnect by itself.</p>
+  </div>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

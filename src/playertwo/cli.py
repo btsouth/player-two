@@ -14,7 +14,7 @@ from .config import Settings
 def _settings(args) -> Settings:
     s = Settings.load()
     for name in ("game", "verbosity", "voice", "model", "effort", "window", "language",
-                 "confirm", "brain", "output"):
+                 "confirm", "brain", "output", "companion"):
         v = getattr(args, name, None)
         if v:
             setattr(s, name, v)
@@ -132,9 +132,11 @@ async def _ctl(args) -> None:
     from .config import socket_path
 
     try:
-        reader, writer = await asyncio.open_unix_connection(str(socket_path()))
+        # Frame events carry a JPEG, far past asyncio's default 64 KB line limit.
+        reader, writer = await asyncio.open_unix_connection(str(socket_path()),
+                                                            limit=1 << 24)
     except (FileNotFoundError, ConnectionRefusedError):
-        print("Player Two isn't running. Start it with: player-two run", file=sys.stderr)
+        print("Player Two isn't running. Start it with: player-two", file=sys.stderr)
         sys.exit(1)
     if args.command == ["events"]:
         writer.write(b"events\n")
@@ -148,8 +150,18 @@ async def _ctl(args) -> None:
     writer.close()
 
 
+COMMANDS = ("run", "setup", "install-desktop", "narrate", "say", "ask", "ctl")
+
+
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="player-two", description=__doc__)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # Plain "player-two" (or with run's flags) starts a session.
+    if not argv or (argv[0] not in COMMANDS and argv[0] not in ("-h", "--help")):
+        argv = ["run", *argv]
+    p = argparse.ArgumentParser(
+        prog="player-two",
+        description="Player Two: an AI co-op partner that tells you what's on screen and "
+        "plays when you ask. Run with no command to start.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp):
@@ -185,10 +197,16 @@ def main(argv: list[str] | None = None) -> None:
                    help="screens the agent sees, in order (the last one repeats)")
     a.add_argument("--dry-run", action="store_true", help="log button presses only")
 
-    r = sub.add_parser("run", help="start a live session on this screen")
+    sub.add_parser("setup", help="set up your key, voice, microphone, controller and "
+                   "talk key, one question at a time")
+    sub.add_parser("install-desktop", help="add Player Two to the app launcher")
+
+    r = sub.add_parser("run", help="start a live session (the default)")
     common(r)
     r.add_argument("--controls", choices=["auto", "gamepad", "keyboard", "dry-run"])
     r.add_argument("--log", help="append session events as JSON lines to this file")
+    r.add_argument("--companion", choices=["auto", "on", "off"],
+                   help="open the Player Two window (auto: on Hyprland, without focus)")
 
     c = sub.add_parser("ctl", help="send a command to the running session "
                        "(talk-start, talk-stop, talk, repeat, describe, stop, status, events, "
@@ -198,6 +216,17 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
     if args.cmd == "run":
         _run(args)
+        return
+    if args.cmd == "setup":
+        from .onboarding import run_setup
+
+        run_setup()
+        return
+    if args.cmd == "install-desktop":
+        from .desktop import install_desktop_entry
+
+        for path in install_desktop_entry():
+            print(f"added {path}")
         return
     try:
         asyncio.run({"narrate": _narrate, "say": _say, "ask": _ask, "ctl": _ctl}[args.cmd](args))

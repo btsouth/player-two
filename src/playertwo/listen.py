@@ -138,3 +138,14 @@ async def transcribe_file(path: str, keywords: list[str] | None = None) -> str:
         u.feed(data[i : i + FRAME * 2])
     u.finish()
     return await u.text(20)
+
+
+def mic_ok() -> bool:
+    """Whether there's a microphone to listen with."""
+    try:
+        import sounddevice as sd
+
+        sd.query_devices(kind="input")
+    except Exception:  # noqa: BLE001  PortAudio raises plain errors for "no device"
+        return False
+    return True

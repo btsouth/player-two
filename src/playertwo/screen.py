@@ -31,12 +31,17 @@ class Frame:
     label: str = ""
 
 
+class NoGame(Exception):
+    """No window that looks like a game is open yet."""
+
+
 class Capture:
     def grab(self) -> Frame:
         raise NotImplementedError
 
-
-OWN_TITLES = ("Player Two",)
+    def game(self) -> str:
+        """The game's name, when the capture knows which game it is looking at."""
+        return ""
 
 
 def hypr_clients() -> list[dict]:
@@ -58,24 +63,28 @@ def hypr_focus(address: str) -> None:
 class HyprlandCapture(Capture):
     """Captures the game's own window with grim, even when something covers it.
 
-    The target is the window whose class or title contains `window`, or else the most
-    recently focused window that isn't Player Two's. Falls back to the whole monitor.
+    The target is the window whose class or title contains `window`, or else the game
+    window games.pick_game finds (a Steam game first). With no game open, grab raises
+    NoGame, unless `whole_screen` asks for the monitor instead.
     """
 
-    def __init__(self, window: str = "", output: str | None = None):
-        self.want = window.lower()
+    def __init__(self, window: str = "", output: str | None = None,
+                 whole_screen: bool = False):
+        self.want = window
         self.output = output
+        self.whole_screen = whole_screen
         self.target: dict | None = None
         self._checked = 0.0
 
     def pick(self) -> dict | None:
-        clients = [c for c in hypr_clients()
-                   if c.get("mapped", True) and c.get("title") not in OWN_TITLES]
-        if self.want:
-            clients = [c for c in clients if self.want in c.get("class", "").lower()
-                       or self.want in c.get("title", "").lower()]
-        clients.sort(key=lambda c: c.get("focusHistoryID", 99))
-        return clients[0] if clients else None
+        from .games import pick_game
+
+        return pick_game(hypr_clients(), self.want)
+
+    def game(self) -> str:
+        from .games import game_name
+
+        return game_name(self.target) if self.target else ""
 
     def grab(self) -> Frame:
         now = time.monotonic()
@@ -92,10 +101,22 @@ class HyprlandCapture(Capture):
                                  label=self.target.get("title", ""))
             except (subprocess.SubprocessError, OSError, KeyError):
                 pass
-            self.target = None
+            # Older Hyprland can't capture one window: show the monitor it's on.
+            if self.output is None and self.target.get("monitor") is not None:
+                self.output = monitor_name(self.target["monitor"])
+        elif not self.whole_screen:
+            raise NoGame
         cmd = ["grim", "-t", "ppm"] + (["-o", self.output] if self.output else []) + ["-"]
         data = subprocess.check_output(cmd, timeout=3)
         return Frame(Image.open(io.BytesIO(data)), now)
+
+
+def monitor_name(monitor_id: int) -> str | None:
+    try:
+        mons = json.loads(subprocess.check_output(["hyprctl", "-j", "monitors"], timeout=2))
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+    return next((m["name"] for m in mons if m.get("id") == monitor_id), None)
 
 
 class MssCapture(Capture):
@@ -110,6 +131,11 @@ class MssCapture(Capture):
     def grab(self) -> Frame:
         shot = self.sct.grab(self.monitor)
         return Frame(Image.frombytes("RGB", shot.size, shot.rgb), time.monotonic())
+
+    def game(self) -> str:
+        from .games import running_steam_game
+
+        return running_steam_game()
 
 
 class FileCapture(Capture):
@@ -151,11 +177,11 @@ def video_frames(path: Path, fps: float) -> Iterator[Frame]:
     proc.wait()
 
 
-def auto_capture(window: str = "") -> Capture:
+def auto_capture(window: str = "", capture: str = "auto") -> Capture:
     if sys.platform == "win32":
         return MssCapture()
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("grim"):
-        return HyprlandCapture(window)
+        return HyprlandCapture(window, whole_screen=capture == "screen")
     return MssCapture()
 
 

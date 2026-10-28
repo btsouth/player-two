@@ -22,6 +22,8 @@ DIRECTIONS = {
 
 
 class Controls:
+    # Set when this isn't what the player asked for (no controller, keys instead).
+    problem = ""
     kind = "base"
 
     def press(self, button: str, hold_ms: int = 100) -> None:
@@ -196,11 +198,88 @@ class WaylandKeys(Controls):
         self._run(*args)
 
 
+class WindowsKeys(Controls):
+    """Keyboard on Windows through SendInput with scan codes, which games read."""
+
+    kind = "keyboard"
+    # Scan codes; 0x100 marks an extended key (the arrows).
+    SCAN: ClassVar[dict[str, int]] = {
+        "Return": 0x1C, "Escape": 0x01, "BackSpace": 0x0E, "Tab": 0x0F, "Up": 0x148,
+        "Down": 0x150, "Left": 0x14B, "Right": 0x14D, "q": 0x10, "e": 0x12, "z": 0x2C,
+        "c": 0x2E, "Shift_L": 0x2A, "v": 0x2F, "F1": 0x3B, "w": 0x11, "a": 0x1E, "s": 0x1F,
+        "d": 0x20}
+
+    def __init__(self, keymap: dict[str, str] | None = None):
+        import ctypes
+        from ctypes import wintypes
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_: ClassVar = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                                  ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                                  ("dwExtraInfo", ctypes.c_size_t)]
+
+        class INPUT(ctypes.Structure):
+            # The union's largest member (MOUSEINPUT) sets the size; pad to it.
+            _fields_: ClassVar = [("type", wintypes.DWORD), ("ki", KEYBDINPUT),
+                                  ("_pad", ctypes.c_byte * 8)]
+
+        self.ctypes, self.INPUT, self.KEYBDINPUT = ctypes, INPUT, KEYBDINPUT
+        self.send = ctypes.windll.user32.SendInput
+        self.map = {**WaylandKeys.MAP, **(keymap or {})}
+
+    def _key(self, name: str, up: bool) -> None:
+        code = self.SCAN[name]
+        flags = 0x0008 | (0x0002 if up else 0) | (0x0001 if code & 0x100 else 0)
+        inp = self.INPUT(type=1, ki=self.KEYBDINPUT(0, code & 0xFF, flags, 0, 0))
+        self.send(1, self.ctypes.byref(inp), self.ctypes.sizeof(inp))
+
+    def press(self, button: str, hold_ms: int = 100) -> None:
+        key = self.map[button]
+        self._key(key, False)
+        time.sleep(hold_ms / 1000)
+        self._key(key, True)
+
+    def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
+        keys = [WaylandKeys.STICK[d] for d in direction.split("_")]
+        for k in keys:
+            self._key(k, False)
+        time.sleep(ms / 1000)
+        for k in keys:
+            self._key(k, True)
+
+
+def keyboard(focus=None) -> Controls:
+    return WindowsKeys() if sys.platform == "win32" else WaylandKeys(focus=focus)
+
+
+def pad_problem(exc: BaseException) -> str:
+    """Why the virtual controller couldn't be plugged in, said to the player."""
+    if sys.platform == "win32":
+        return ("I couldn't plug in a virtual controller. It needs the ViGEmBus driver; "
+                "run player-two setup for the link.")
+    if isinstance(exc, PermissionError) or "permission" in str(exc).lower():
+        return ("I couldn't plug in a virtual controller because I don't have permission "
+                "to. Run player-two setup to fix that.")
+    return "I couldn't plug in a virtual controller."
+
+
 def open_controls(kind: str = "auto", focus=None) -> Controls:
+    """The controller, or keyboard keys when it can't be plugged in.
+
+    A keyboard stand-in records why in `problem`, so the session can say so.
+    """
     if kind == "dry-run":
         return DryRun()
     if kind == "keyboard":
-        return WaylandKeys(focus=focus)
-    if sys.platform == "win32":
-        return WindowsPad()
-    return LinuxPad()
+        return keyboard(focus)
+    try:
+        return WindowsPad() if sys.platform == "win32" else LinuxPad()
+    except Exception as exc:
+        if kind == "gamepad":
+            raise
+        try:
+            keys = keyboard(focus)
+        except Exception:  # noqa: BLE001  no keyboard either: record presses only
+            keys = DryRun()
+        keys.problem = pad_problem(exc) + " I'll press keyboard keys instead."
+        return keys
