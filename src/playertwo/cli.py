@@ -129,13 +129,12 @@ def _run(args) -> None:
 
 async def _ctl(args) -> None:
     # Kept light on purpose: a talk key press should reach the session instantly.
-    from .config import socket_path
+    from .config import open_control
 
     try:
         # Frame events carry a JPEG, far past asyncio's default 64 KB line limit.
-        reader, writer = await asyncio.open_unix_connection(str(socket_path()),
-                                                            limit=1 << 24)
-    except (FileNotFoundError, ConnectionRefusedError):
+        reader, writer = await open_control(limit=1 << 24)
+    except OSError:
         print("Player Two isn't running. Start it with: player-two", file=sys.stderr)
         sys.exit(1)
     if args.command == ["events"]:

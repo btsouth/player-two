@@ -54,7 +54,10 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
                 except ValueError:
                     continue
                 if isinstance(data, dict) and isinstance(data.get("command"), str):
-                    await session.command(data["command"])
+                    try:
+                        await session.command(data["command"])
+                    except Exception as exc:  # noqa: BLE001  keep the window's commands working
+                        session.events.emit("error", where="window", message=str(exc)[:300])
 
         rx = asyncio.create_task(commands())
         try:
@@ -66,5 +69,10 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
             rx.cancel()
             session.events.subs.discard(q)
 
-    async with serve(handler, "127.0.0.1", port, process_request=process_request):
+    # Only this page may connect: any other site open in the player's browser could
+    # otherwise read the screen and the mic and press buttons. No Origin means a
+    # non-browser client on this machine.
+    origins = [f"http://127.0.0.1:{port}", f"http://localhost:{port}", None]
+    async with serve(handler, "127.0.0.1", port, process_request=process_request,
+                     origins=origins):
         await asyncio.Future()

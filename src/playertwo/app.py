@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .agent import Agent
 from .audio import Mixer
-from .config import Settings, first_run, save_settings, socket_path
+from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import open_controls
 from .listen import Mic, Utterance
 from .muse import Muse
@@ -147,7 +147,7 @@ class Session:
         self.muse = Muse(settings)
         self.mixer = Mixer(sink)
         self.voice = open_voice(settings, self.mixer)
-        self.capture = capture or auto_capture(settings.window)
+        self.capture = capture or auto_capture(settings.window, settings.capture)
         self.controls = open_controls(controls or settings.controls, focus=self.focus_game)
         # Things the player should hear about at start-up (no controller, no mic).
         self.problems: list[str] = [self.controls.problem] if self.controls.problem else []
@@ -179,6 +179,7 @@ class Session:
         # The game in view: None until the first look, then its name ("" when it has
         # none) or False while no game window is open.
         self.game: str | bool | None = None
+        self.game_id: str | None = None
         self.no_game_since: float | None = None
         self.troubled: dict[str, float] = {}
         self.window = None
@@ -196,7 +197,15 @@ class Session:
         self.events.emit("say", text=text, source="p2")
         return self.spawn(self.voice.say(text, interrupt=interrupt))
 
-    def set_game(self, found: str | bool, announce: bool = True) -> None:
+    def update_game(self, announce: bool = True) -> None:
+        """Check which game the capture is looking at (cheap: called on every frame)."""
+        key = self.capture.game_key()
+        if key == self.game_id and self.game not in (None, False):
+            self.no_game_since = None
+            return  # same window; its title may change, the game doesn't
+        self.set_game(self.capture.game(), announce=announce, key=key)
+
+    def set_game(self, found: str | bool, announce: bool = True, key: str | None = None) -> None:
         """Track which game is open; say so when one opens or closes mid-session."""
         if found is False:
             # A game window can blink out while it changes resolution; wait before
@@ -205,10 +214,13 @@ class Session:
             self.no_game_since = self.no_game_since or now
             if self.game is not None and now - self.no_game_since < 5.0:
                 return
+            if self.game is False:
+                return
         else:
             self.no_game_since = None
-        if found == self.game:
-            return
+            if key is not None and key == self.game_id and self.game is not None:
+                return
+        self.game_id = key
         before, self.game = self.game, found
         name = self.s.game or (found if isinstance(found, str) else "")
         self.narrator.game = self.agent.game = name
@@ -224,12 +236,19 @@ class Session:
         self.watcher.force()
         self.announce(f"I can see {name}." if name else "I can see your game.")
 
-    def trouble(self, exc: BaseException, where: str) -> None:
-        """Say what went wrong, once a minute per kind of problem, and log it."""
+    def trouble(self, exc: BaseException, where: str, answer: bool = False) -> None:
+        """Say what went wrong, once a minute per kind of problem, and log it.
+
+        With `answer` (the player just asked for something), there's always a reply:
+        the full explanation once a minute, a short one in between.
+        """
         kind, words = trouble_words(exc)
         self.events.emit("error", where=where, message=str(exc)[:300] or kind)
         now = time.monotonic()
         if now - self.troubled.get(kind, -1e9) < 60:
+            if answer:
+                self.voice.cue("error")
+                self.announce("Sorry, that didn't work.", interrupt=True)
             return
         self.troubled[kind] = now
         self.voice.cue("error")
@@ -390,7 +409,7 @@ class Session:
                 self.events.emit("error", where="capture", message=str(exc))
                 await asyncio.sleep(1.0)
                 continue
-            self.set_game(self.capture.game())
+            self.update_game()
             if self.hud is not None:
                 self.on_hud(self.hud.update(frame.image, frame.t))
             busy = self.agent_task is not None and not self.agent_task.done()
@@ -450,7 +469,7 @@ class Session:
         try:
             text = await utt.text()
         except Exception as exc:  # noqa: BLE001
-            self.trouble(exc, "listen")
+            self.trouble(exc, "listen", answer=True)
             return
         finally:
             self.transcribing = False
@@ -488,8 +507,7 @@ class Session:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001  say it out loud instead of going silent
-            self.troubled.clear()  # every failed command gets an answer
-            self.trouble(exc, "agent")
+            self.trouble(exc, "agent", answer=True)
             return
         self.events.emit("agent", request=text, outcome=run.outcome,
                          steps=[{"tool": s.tool, "args": s.args, "t": round(s.t, 2)}
@@ -563,6 +581,21 @@ class Session:
             value = parse_setting(key, raw)
         except ValueError:
             return f"bad setting: {key} {raw}"
+        if key == "output" and value != self.s.output:
+            # Loading a voice can take seconds (or a download): keep the session running.
+            old = self.s.output
+            self.s.output = value
+            try:
+                voice = await asyncio.to_thread(open_voice, self.s, self.mixer)
+                await asyncio.to_thread(voice.warm_up)
+            except Exception as exc:  # noqa: BLE001
+                self.s.output = old
+                self.events.emit("error", where="settings", message=str(exc)[:300])
+                self.emit_settings()
+                await self.announce("I couldn't switch how I talk. I'll keep this voice.")
+                return "failed"
+            self.voice.stop()
+            self.voice = voice
         setattr(self.s, key, value)
         if key in ("verbosity", "team_up", "language"):
             setattr(self.narrator, key, value)
@@ -572,10 +605,6 @@ class Session:
             from .voice import voice_for
 
             self.voice.lang, self.voice.voice_name = voice_for(value, self.s.voice)
-        if key == "output":
-            self.voice.stop()
-            self.voice = open_voice(self.s, self.mixer)
-            await asyncio.to_thread(self.voice.warm_up)
         if key == "companion" and value == "on":
             self.open_window()
         save_settings({key: value})
@@ -637,10 +666,6 @@ class Session:
     # Control socket: hotkeys and the overlay talk to the session through it.
 
     async def serve(self) -> None:
-        path = socket_path()
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
-
         async def client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
             try:
                 line = (await reader.readline()).decode().strip()
@@ -661,7 +686,7 @@ class Session:
             finally:
                 writer.close()
 
-        server = await asyncio.start_unix_server(client, str(path))
+        server = await start_control(client)
         self.serving.set()
         async with server:
             await server.serve_forever()
@@ -739,7 +764,7 @@ class Session:
         from .desktop import CompanionWindow
         from .web import PORT
 
-        if self.window is not None and self.window.proc and self.window.proc.poll() is None:
+        if self.window is not None and self.window.alive():
             return
         self.window = CompanionWindow()
         self.window.open(f"http://127.0.0.1:{PORT}/", getattr(self.capture, "target", None))
@@ -772,7 +797,12 @@ class Session:
         if ui:
             tasks.append(asyncio.create_task(serve_ui(self)))
             print(f"Player Two window: http://127.0.0.1:{PORT}/", file=sys.stderr)
-        await self.serving.wait()
+        # Wait for the control channel, or for it to fail (port taken, no permission).
+        ready = asyncio.create_task(self.serving.wait())
+        await asyncio.wait({ready, tasks[0]}, return_when=asyncio.FIRST_COMPLETED)
+        if tasks[0].done():
+            ready.cancel()
+            tasks[0].result()
         if sys.platform == "win32":
             self.windows_talk_key()
         if not mic_ok():
@@ -781,7 +811,7 @@ class Session:
         # Find the game before saying hello, so the greeting can name it.
         try:
             frame = await self.grab_now(show=True)
-            self.set_game(self.capture.game(), announce=False)
+            self.update_game(announce=False)
             self.watcher.update(frame)
         except NoGame:
             self.set_game(False, announce=False)
@@ -816,7 +846,7 @@ class Session:
 
 
 async def send(line: str) -> str:
-    reader, writer = await asyncio.open_unix_connection(str(socket_path()))
+    reader, writer = await open_control()
     writer.write((line + "\n").encode())
     await writer.drain()
     reply = (await reader.readline()).decode().strip()

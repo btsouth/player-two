@@ -73,8 +73,9 @@ def write_secret(name: str, value: str) -> None:
     path = CONFIG_DIR / name
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
+        if hasattr(os, "fchmod"):
+            os.fchmod(f.fileno(), 0o600)  # an older file may have been readable
         f.write(value.strip() + "\n")
-    os.chmod(path, 0o600)
 
 
 def check_key(s: Settings) -> str | None:
@@ -115,6 +116,11 @@ def step_key(s: Settings) -> None:
     if not has_api_key():
         say("No key saved. Run player-two setup again when you have one.")
         return
+    env = next((n for n in ("PLAYER_TWO_API_KEY", "MODEL_API_KEY", "META_API_KEY")
+                if os.environ.get(n)), None)
+    if env:
+        say(f"Note: {env} is set in your environment, and it wins over the saved key. "
+            "That's the one I'll check.")
     say("Checking the key...")
     problem = check_key(s)
     say(problem or "The key works.")
@@ -276,8 +282,9 @@ def step_app(s: Settings, changes: dict) -> None:
     show = ask_yes("Open the Player Two window when I start? It shows big captions, what I "
                    "see, and what I press, without taking focus from the game.",
                    s.companion != "off")
-    changes["companion"] = "on" if show and sys.platform == "win32" else (
-        "auto" if show else "off")
+    # "auto" only opens it on Hyprland, where it can open without taking focus.
+    hyprland = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+    changes["companion"] = ("auto" if hyprland else "on") if show else "off"
     if ask_yes("Add Player Two to your app launcher?"):
         for p in install_desktop_entry():
             say(f"Added {p}")

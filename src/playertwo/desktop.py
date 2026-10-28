@@ -83,9 +83,26 @@ def place_rule(workspace: str | None) -> None:
         hypr("keyword", "windowrulev2", f"workspace {workspace} silent, class:{APP_CLASS}")
 
 
+def profile_owner(profile: Path) -> int | None:
+    """The browser process already running this profile (Chromium's lock names it)."""
+    try:
+        pid = int(os.readlink(profile / "SingletonLock").rsplit("-", 1)[1])
+        os.kill(pid, 0)
+    except (OSError, ValueError, IndexError):
+        return None
+    return pid
+
+
 class CompanionWindow:
     def __init__(self):
         self.proc: subprocess.Popen | None = None
+        self.pid: int | None = None
+        self.profile = CACHE_DIR / "window"
+
+    def alive(self) -> bool:
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        return self.pid is not None and profile_owner(self.profile) == self.pid
 
     def open(self, url: str, game: dict | None = None) -> bool:
         exe = browser()
@@ -93,10 +110,15 @@ class CompanionWindow:
             import webbrowser
 
             return webbrowser.open(url)
+        profile = self.profile
+        profile.mkdir(parents=True, exist_ok=True)
+        # A window left by an earlier session reconnects by itself; adopt it, so it
+        # closes with this session instead of a second one opening.
+        self.pid = profile_owner(profile)
+        if self.pid is not None:
+            return True
         if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
             place_rule(window_workspace(game))
-        profile = CACHE_DIR / "window"
-        profile.mkdir(parents=True, exist_ok=True)
         cmd = [exe, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
                "--no-default-browser-check", "--window-size=560,900",
                "--disable-features=Translate", "--autoplay-policy=no-user-gesture-required"]
@@ -106,6 +128,7 @@ class CompanionWindow:
                                          stderr=subprocess.DEVNULL, **flags)
         except OSError:
             return False
+        self.pid = self.proc.pid
         return True
 
     def close(self) -> None:
@@ -115,6 +138,10 @@ class CompanionWindow:
                 self.proc.wait(3)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        elif self.pid is not None and profile_owner(self.profile) == self.pid:
+            import signal
+
+            os.kill(self.pid, signal.SIGTERM)
 
 
 # The talk key.

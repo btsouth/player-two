@@ -34,9 +34,17 @@ let lastPress = 0;
 let liveTimer = null;
 let talkKey = "F8";
 
+// What a screen reader hears from this window: the talk turns, not every flicker between
+// watching and speaking (the voice already covers those).
+const SPOKEN_STATES = { listening: "Listening", thinking: "Got it", acting: "Playing", paused: "Paused" };
+let lastState = "";
 function setState(state) {
   app.dataset.state = state;
   $("status-text").textContent = STATUS[state] || state;
+  // "Looking" also means narrating a new screen; only say "Got it" after the player spoke.
+  const say = state === "thinking" && lastState !== "listening" ? "" : SPOKEN_STATES[state];
+  if (state !== lastState && say) $("announce").textContent = say;
+  lastState = state;
 }
 
 function setCaption(text, who = "Player Two") {

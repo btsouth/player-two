@@ -43,6 +43,10 @@ class Capture:
         """The game's name, when the capture knows which game it is looking at."""
         return ""
 
+    def game_key(self) -> str:
+        """Which game this is, steady while its window title changes."""
+        return self.game()
+
 
 def hypr_clients() -> list[dict]:
     try:
@@ -85,6 +89,11 @@ class HyprlandCapture(Capture):
         from .games import game_name
 
         return game_name(self.target) if self.target else ""
+
+    def game_key(self) -> str:
+        from .games import game_key
+
+        return game_key(self.target) if self.target else ""
 
     def grab(self) -> Frame:
         now = time.monotonic()

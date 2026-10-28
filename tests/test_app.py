@@ -128,3 +128,52 @@ def test_network_trouble_is_said_plainly():
     resp = httpx.Response(401, request=req)
     kind, words = trouble_words(openai.AuthenticationError("no", response=resp, body=None))
     assert kind == "key" and "setup" in words
+
+
+def test_save_settings_keeps_inline_comments_and_writes_through_symlinks(tmp_path):
+    real = tmp_path / "dotfiles" / "config.toml"
+    real.parent.mkdir()
+    real.write_text('verbosity = "normal"  # how chatty\nlanguage = "a # b"\n')
+    real.chmod(0o640)
+    link = tmp_path / "config.toml"
+    link.symlink_to(real)
+    config.save_settings({"verbosity": "quiet", "language": "Spanish"}, link)
+    assert link.is_symlink()
+    assert real.read_text() == 'verbosity = "quiet"  # how chatty\nlanguage = "Spanish"\n'
+    assert real.stat().st_mode & 0o777 == 0o640
+
+
+def test_only_game_like_windows_count_without_steam(home):
+    assert games.looks_like_game(client("hollow_knight.exe", "Hollow Knight", 1))
+    assert games.looks_like_game(client("org.DolphinEmu.dolphin-emu", "Dolphin", 1))
+    assert games.looks_like_game(client("SomeNativeGame", "Game", 1, fullscreen=2))
+    assert not games.looks_like_game(client("SomeNativeGame", "Game", 1))
+    assert not games.looks_like_game(client("org.omarchy.btop", "btop", 1, fullscreen=2))
+    assert not games.looks_like_game(client("thunderbird", "Inbox", 1))
+    assert not games.looks_like_game(client("org.kde.dolphin", "Home", 1, fullscreen=2))
+
+
+async def test_window_socket_refuses_other_websites():
+    import asyncio
+    from types import SimpleNamespace
+
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import InvalidStatus
+
+    from playertwo.app import Events
+    from playertwo.web import serve_ui
+
+    session = SimpleNamespace(events=Events())
+    port = 47899
+    server = asyncio.create_task(serve_ui(session, port))
+    await asyncio.sleep(0.2)
+    try:
+        with pytest.raises(InvalidStatus):
+            async with connect(f"ws://127.0.0.1:{port}/events",
+                               origin="https://evil.example"):
+                pass
+        async with connect(f"ws://127.0.0.1:{port}/events",
+                           origin=f"http://127.0.0.1:{port}") as ws:
+            assert ws.protocol.state.name == "OPEN"
+    finally:
+        server.cancel()

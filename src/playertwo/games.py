@@ -24,6 +24,15 @@ NOT_GAME_WORDS = {
     "neovide", "obsidian", "nautilus", "thunar", "dolphin", "pavucontrol", "wiremix",
     "blueberry", "impala", "walker", "rofi", "wofi", "steam", "steamwebhelper", "lutris",
     "heroic", "bottles", "1password", "bitwarden", "obs", "spotify", "localsend",
+    "mpv", "vlc", "celluloid", "totem", "btop", "htop", "thunderbird", "libreoffice",
+    "keepassxc", "evince", "zathura", "okular",
+}
+# Emulators and game runners: a window of theirs is a game even when it isn't fullscreen.
+GAME_WORDS = {
+    "retroarch", "dolphin-emu", "pcsx2", "rpcs3", "ppsspp", "duckstation", "citra", "lime3ds",
+    "azahar", "yuzu", "suyu", "ryujinx", "eden", "citron", "cemu", "xemu", "xenia", "melonds",
+    "desmume", "mgba", "snes9x", "bsnes", "mame", "mednafen", "flycast", "vita3k", "shadps4",
+    "scummvm", "dosbox", "gamescope", "minecraft", "openmw",
 }
 OWN_TITLE = "Player Two"
 STEAM_CLASS = re.compile(r"^steam_app_(\d+)$")
@@ -108,12 +117,28 @@ def is_own(client: dict) -> bool:
 
 
 def looks_like_game(client: dict) -> bool:
+    """A Steam game, a Windows game under Wine or Proton, an emulator, or any other app
+    that isn't a known non-game and is fullscreen. A game in a small window that's none of
+    these is found with `window = "..."` instead."""
     cls = client.get("class", "") or client.get("initialClass", "")
     if STEAM_CLASS.match(cls):
         return True
     if is_own(client) or not cls:
         return False
-    return not any(w in NOT_GAME_WORDS for w in re.split(r"[.\-_ ]+", cls.lower()))
+    low = cls.lower()
+    # Emulators first, by whole dotted parts ("org.DolphinEmu.dolphin-emu" is a game,
+    # "org.kde.dolphin" the file manager).
+    if low.endswith(".exe") or set(re.split(r"[._ ]+", low)) & GAME_WORDS:
+        return True
+    if set(re.split(r"[.\-_ ]+", low)) & NOT_GAME_WORDS:
+        return False
+    # Hyprland: 2 is fullscreen, 3 fullscreen and maximized (older builds say True).
+    return client.get("fullscreen") in (2, 3, True)
+
+
+def game_key(client: dict) -> str:
+    """What stays the same for one game's window while its title changes."""
+    return client.get("initialClass") or client.get("class") or client.get("address", "")
 
 
 def pick_game(clients: list[dict], want: str = "") -> dict | None:

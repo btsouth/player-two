@@ -23,6 +23,33 @@ def socket_path() -> Path:
     return Path(base) / "player-two.sock"
 
 
+# Windows has no Unix sockets in asyncio; there the control channel is a loopback port.
+CONTROL_PORT = 47821
+
+
+async def open_control(limit: int = 1 << 16):
+    """Connect to the running session's control channel."""
+    import asyncio
+    import sys
+
+    if sys.platform == "win32":
+        return await asyncio.open_connection("127.0.0.1", CONTROL_PORT, limit=limit)
+    return await asyncio.open_unix_connection(str(socket_path()), limit=limit)
+
+
+async def start_control(client):
+    import asyncio
+    import contextlib
+    import sys
+
+    if sys.platform == "win32":
+        return await asyncio.start_server(client, "127.0.0.1", CONTROL_PORT)
+    path = socket_path()
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
+    return await asyncio.start_unix_server(client, str(path))
+
+
 @dataclass
 class Settings:
     model: str = "muse-spark-1.3"
@@ -101,15 +128,24 @@ def save_settings(changes: dict, path: Path | None = None) -> None:
     # Top-level keys end where the first table starts; new ones go just before it.
     end = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
                len(lines))
+    line_re = re.compile(r'(\s*)([A-Za-z_]+)(\s*=\s*)("(?:[^"\\]|\\.)*"|[^#]*?)(\s*#.*)?$')
     for i in range(end):
-        m = re.match(r"\s*([A-Za-z_]+)\s*=", lines[i])
-        if m and m.group(1) in todo:
-            lines[i] = f"{m.group(1)} = {toml_value(todo.pop(m.group(1)))}"
+        m = line_re.match(lines[i])
+        if m and m.group(2) in todo:
+            comment = m.group(5) or ""
+            lines[i] = f"{m.group(2)} = {toml_value(todo.pop(m.group(2)))}{comment}"
     lines[end:end] = [f"{k} = {toml_value(v)}" for k, v in todo.items()]
+    # Write through a symlink (dotfile managers) to the real file, atomically, and never
+    # with looser permissions than it had.
+    path = path.resolve() if path.is_symlink() else path
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n")
-    os.chmod(tmp, path.stat().st_mode & 0o777 if path.exists() else 0o600)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        if hasattr(os, "fchmod"):  # Windows has no fchmod, and no modes to keep
+            os.fchmod(f.fileno(), mode)
+        f.write("\n".join(lines) + "\n")
     tmp.replace(path)
 
 
