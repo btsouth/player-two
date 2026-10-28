@@ -2,8 +2,9 @@
 # Run voice commands against the test arena in an omabox box and check the outcome.
 # Each line of TRIALS: command | expected title fragment
 set -u
-BIN=/home/bts/Projects/player-two/.venv/bin/player-two
-URL=file:///home/bts/Projects/player-two/tests/arena/index.html
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+BIN=$ROOT/.venv/bin/player-two
+URL=file://$ROOT/tests/arena/index.html
 pass=0; total=0
 # Forward the open-weight brain settings into the box when they're set.
 EXTRA=()

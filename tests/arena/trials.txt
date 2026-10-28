@@ -1,0 +1,8 @@
+skip to the battle and cast Agi on Shadow A|A35 B80 SP36
+get to the fight and hit the right shadow with Garu|A80 B50 SP37
+go to the battle and just attack Shadow B|A80 B60 SP40
+skip ahead to the battle and guard|A80 B80 SP40 result
+get into the battle and use the wind skill on the left one|A50 B80 SP37
+skip to the fight and use your strongest spell on the right shadow|A80 B35 SP36
+skip the talking, then fire on the left enemy|A35 B80 SP36
+go to the battle, then heal yourself|A80 B80 SP37

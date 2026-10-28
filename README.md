@@ -155,7 +155,7 @@ uv sync --group dev --extra cuda
 uv run pytest                     # unit tests
 uv run player-two narrate shot1.png shot2.png --wav out.wav
 uv run player-two ask --dry-run --images shot.png -- "who is talking?"
-scripts/arena_trials.sh < trials.txt   # scored end-to-end runs against tests/arena
+scripts/arena_trials.sh < tests/arena/trials.txt   # scored runs against tests/arena
 ```
 
 `tests/arena/index.html` is a small JRPG-style scene (dialogue, menus, a turn-based battle) used to
