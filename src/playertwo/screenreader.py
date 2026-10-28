@@ -10,13 +10,17 @@ Our cues and direction pings still play through Player Two's own audio.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import platform
 import shutil
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from .audio import CUES, Mixer
-from .config import Settings
+from .config import CACHE_DIR, Settings
 from .voice import _SENTENCE, clean_for_speech, speakable
 
 
@@ -50,6 +54,10 @@ class Backend:
 
     async def stop(self) -> None:
         pass
+
+    async def speaking(self) -> bool | None:
+        """Whether the screen reader is still talking, or None if it can't say."""
+        return None
 
 
 async def _run(cmd: list[str]) -> bool:
@@ -85,15 +93,77 @@ class SpeechDispatcher(Backend):
         await _run(["spd-say", "-C"])
 
 
-class Windows(Backend):
-    """NVDA, JAWS and the other Windows screen readers, through accessible_output2."""
+# NVDA's own controller client, current as of NVDA 2026.3. The copy bundled with
+# accessible_output2 is from 2022 and its calls fail inside current NVDA.
+NVDA_CLIENT = ("https://download.nvaccess.org/releases/2026.3/nvda_2026.3_controllerClient.zip",
+               "e38a00689eab422f13aaed9aaaacdd3ae96411643b6f2f5fbf86222660ac7938")
+
+
+def nvda_client() -> Path:
+    """Fetch NVDA's controller client DLL once (LGPL 2.1, from NV Access)."""
+    arch = {"AMD64": "x64", "ARM64": "arm64", "x86": "x86"}.get(platform.machine(), "x64")
+    d = CACHE_DIR / "nvda-client"
+    dll = d / arch / "nvdaControllerClient.dll"
+    if dll.exists():
+        return dll
+    import urllib.request
+
+    d.mkdir(parents=True, exist_ok=True)
+    zpath = d / "client.zip"
+    urllib.request.urlretrieve(NVDA_CLIENT[0], zpath)
+    if hashlib.sha256(zpath.read_bytes()).hexdigest() != NVDA_CLIENT[1]:
+        zpath.unlink()
+        raise RuntimeError("NVDA controller client download didn't match its checksum")
+    with zipfile.ZipFile(zpath) as z:
+        z.extract(f"{arch}/nvdaControllerClient.dll", d)
+        z.extract("license.txt", d)
+    zpath.unlink()
+    return dll
+
+
+class NVDA(Backend):
+    name = "NVDA"
+
+    def __init__(self, lib):
+        self.lib = lib
+
+    @classmethod
+    def connect(cls) -> NVDA | None:
+        import ctypes
+
+        try:
+            lib = ctypes.windll.LoadLibrary(str(nvda_client()))
+        except (OSError, RuntimeError) as exc:
+            print(f"Can't load NVDA's controller client: {exc}", file=sys.stderr)
+            return None
+        return cls(lib) if lib.nvdaController_testIfRunning() == 0 else None
+
+    async def speak(self, text: str) -> None:
+        # NVDA queues these behind whatever it's saying, and shows them on a braille display.
+        await asyncio.to_thread(self.lib.nvdaController_speakText, text)
+        await asyncio.to_thread(self.lib.nvdaController_brailleMessage, text)
+
+    async def stop(self) -> None:
+        await asyncio.to_thread(self.lib.nvdaController_cancelSpeech)
+
+    async def speaking(self) -> bool | None:
+        import ctypes
+
+        flag = ctypes.c_ubyte(0)
+        if self.lib.nvdaController_isSpeaking(ctypes.byref(flag)) != 0:
+            return None  # NVDA older than 2024.1
+        return bool(flag.value)
+
+
+class OtherWindows(Backend):
+    """JAWS and the other Windows screen readers, through accessible_output2."""
 
     def __init__(self, output):
         self.out = output
         self.name = type(output).__name__
 
     async def speak(self, text: str) -> None:
-        await asyncio.to_thread(self.out.output, text, interrupt=False)
+        await asyncio.to_thread(self.out.speak, text, interrupt=False)
 
     async def stop(self) -> None:
         await asyncio.to_thread(self.out.silence)
@@ -102,17 +172,21 @@ class Windows(Backend):
 def find_backend() -> Backend | None:
     """The screen reader running now, or None."""
     if sys.platform == "win32":
+        nvda = NVDA.connect()
+        if nvda is not None:
+            return nvda
         try:
             from accessible_output2.outputs.auto import Auto
         except ImportError:
             return None
         for out in Auto().outputs:
             # SAPI is Windows' own voice, not a screen reader; our voice is better.
-            if type(out).__name__.startswith("Sapi"):
+            name = type(out).__name__.lower()
+            if name.startswith("sapi") or name == "nvda" or out.is_system_output():
                 continue
             try:
                 if out.is_active():
-                    return Windows(out)
+                    return OtherWindows(out)
             except Exception:  # noqa: BLE001, S112  a missing reader can fail any way
                 continue
         return None
@@ -197,7 +271,13 @@ class ScreenReaderVoice:
 
     async def wait_idle(self, timeout: float = 30.0) -> None:
         loop = asyncio.get_running_loop()
-        await asyncio.sleep(min(timeout, max(0.0, self._busy_until - loop.time())))
+        end = loop.time() + timeout
+        if await self.backend.speaking() is None:
+            await asyncio.sleep(min(timeout, max(0.0, self._busy_until - loop.time())))
+            return
+        await asyncio.sleep(0.15)  # let the last message reach the synthesizer
+        while loop.time() < end and await self.backend.speaking():
+            await asyncio.sleep(0.1)
 
 
 def open_voice(settings: Settings, mixer: Mixer):

@@ -143,8 +143,9 @@ controls = "auto"         # gamepad, keyboard
   can't read something instead of guessing.
 - On Windows, the virtual controller needs the ViGEmBus driver. Its maintainer has retired it; it
   still installs and works, and Player Two falls back to keyboard input without it.
-- Screen reader output is tested with Orca 51 and speech-dispatcher on Linux. The Windows path
-  (NVDA and JAWS through accessible_output2, in the `windows` extra) is not tested yet.
+- Screen reader output is tested with Orca 51 and speech-dispatcher on Linux and NVDA 2026.3 on
+  Windows (NVDA's own controller client, downloaded once and checksum verified). JAWS goes through
+  accessible_output2 and is not tested yet.
 - Each described screen costs about a third of a cent in Muse Spark usage.
 
 ## Development
