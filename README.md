@@ -82,29 +82,40 @@ Meta's API has no text-to-speech model, so the narrator voice is
   looks at the highlight before pressing A.
 - **Controller** (`controls.py`): a uinput Xbox 360 pad on Linux, ViGEm on Windows, or keyboard
   keys for PC-only games.
-- **Companion window** (`ui/`): what Player Two sees, says, hears and presses. Big captions for low
-  vision, or `?captions` for a single caption bar.
+- **Companion window** (`ui/`): what Player Two sees, says, hears and presses, with big captions
+  for low vision, a box to type to it, and settings. It opens in its own app window without taking
+  focus from the game (on another monitor if you have one). `?captions` shows a single caption bar
+  for streaming.
+- **Finding the game** (`games.py`): the Steam game window first, named from its Steam library;
+  otherwise the most recent window that isn't a terminal, browser or app. `window = "..."` picks
+  one by name.
 
-## Quick start (Linux)
+## Quick start
 
 ```bash
 git clone https://github.com/btsouth/player-two && cd player-two
-uv tool install .            # or: uv sync && uv run player-two ...
-echo "YOUR_META_API_KEY" > ~/.config/player-two/api-key && chmod 600 ~/.config/player-two/api-key
-player-two run --game "Persona 4 Golden"
+uv tool install .        # Windows: uv tool install ".[windows]"
+player-two setup         # key, voice, microphone, controller, talk key, launcher: one question at a time
 ```
 
-Open the window at <http://127.0.0.1:47820/> (optional; the voice is the main interface).
+Then start your game and run `player-two`, or pick **Player Two** in your app launcher. It finds
+the game window by itself (a Steam game is named from its Steam library), says hello, and starts
+narrating. Hold **F8** and talk.
 
-**Talk key.** On Omarchy or Hyprland, add a hold-to-talk key to `~/.config/hypr/bindings.lua`:
+Setup is plain questions and answers, so it reads well in a screen reader. It:
 
-```lua
-o.bind_hold("F8", "Player Two: talk", "player-two ctl talk-start",
-            "Player Two: done talking", "player-two ctl talk-stop")
-```
+- saves your Meta Model API key (mode 600) and checks that it works
+- offers your screen reader (Orca, NVDA, JAWS) for speech, and lets you pick language, how much
+  Player Two says, and its speaking speed
+- checks your microphone and the virtual controller, and offers the one-line udev rule if
+  `/dev/uinput` needs it
+- adds F8 as a hold-to-talk key to your Omarchy or Hyprland config (with a backup). On Windows,
+  Player Two watches F8 itself. On other desktops, bind `player-two ctl talk-start` to a key press
+  and `player-two ctl talk-stop` to its release.
+- adds Player Two to your app launcher
 
-Any other launcher or hotkey tool can run the same two commands. The companion window also has a
-hold-to-talk button.
+When something is wrong (no key, no microphone, no controller, no network), Player Two says so out
+loud and says how to fix it, instead of printing it where you can't see it.
 
 ## Things you can say
 
@@ -118,10 +129,12 @@ hold-to-talk button.
 | "the game reads the menus" / "team up" | leaves menus to the game's own narrator |
 | "watch my health" | starts health and stamina warnings |
 | "pause" / "resume" | stops and restarts narration |
+| "goodbye" | Player Two says bye and quits |
 
 ## Settings
 
-`~/.config/player-two/config.toml`, or flags on `player-two run`:
+The settings button in the companion window changes the common ones while you play and keeps
+them. All of them live in `~/.config/player-two/config.toml`, or as flags on `player-two`:
 
 ```toml
 voice = "af_heart"        # Kokoro voice
@@ -133,6 +146,7 @@ confirm = "important"     # always, important, never
 team_up = false
 window = ""               # part of the game window's title; empty means the last focused window
 controls = "auto"         # gamepad, keyboard
+companion = "auto"        # the window: auto (on Hyprland), on, off
 ```
 
 ## Safety and limits
