@@ -21,3 +21,20 @@ def test_windows_keys_steer_releases_on_close():
     events.clear()
     keys.close()
     assert events == []
+
+
+def test_held_wayland_keys_are_let_go_on_close():
+    import subprocess
+
+    from playertwo.controls import WaylandKeys
+
+    keys = WaylandKeys()
+    ran = []
+    keys._run = lambda *args: ran.append(args)
+    holder = subprocess.Popen(["sleep", "30"])  # stands in for "wtype -P Up -s 60000"
+    keys._held = (["Up"], holder)
+    keys.close()
+    assert holder.poll() is not None and keys._held is None
+    assert ran == [("-p", "Up")]
+    keys.close()  # nothing held: nothing to do
+    assert ran == [("-p", "Up")]

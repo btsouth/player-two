@@ -621,3 +621,22 @@ async def test_a_command_that_fails_is_said_not_silent(monkeypatch):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert task.done() and ("error", {"where": "task", "message": "lost"}) in emitted
+
+
+@linux_only
+async def test_sigterm_ends_the_session_the_normal_way():
+    import asyncio
+    import os
+    import signal
+
+    s = bare_session()
+    s.main = asyncio.create_task(asyncio.sleep(30))
+    s.stop_on_signals()
+    loop = asyncio.get_running_loop()
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+        with pytest.raises(asyncio.CancelledError):
+            await s.main  # cancelled like "quit": main_run's finally closes the session
+    finally:
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            loop.remove_signal_handler(sig)

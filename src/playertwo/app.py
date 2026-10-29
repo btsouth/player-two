@@ -1464,12 +1464,34 @@ class Session:
                              lambda: loop.call_soon_threadsafe(self.spawn, self.talk_stop()))
         threading.Thread(target=key.run, daemon=True).start()
 
+    def stop_on_signals(self) -> None:
+        """End the session the normal way when the system asks (logout, kill, a closed
+        terminal), so held keys are let go and the window closes."""
+        import signal
+
+        loop = asyncio.get_running_loop()
+
+        def stop() -> None:
+            if self.main is not None and not self.main.done():
+                self.main.cancel()
+
+        if sys.platform == "win32":
+            # Closing the console sends SIGBREAK; there's no other notice before the end.
+            for sig in (signal.SIGTERM, signal.SIGBREAK):
+                with contextlib.suppress(ValueError, OSError):
+                    signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop))
+            return
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with contextlib.suppress(ValueError, OSError, RuntimeError):
+                loop.add_signal_handler(sig, stop)
+
     async def run(self, ui: bool = True) -> None:
         self.ui = ui
         from .listen import mic_ok
         from .web import window_url
 
         self.main = asyncio.current_task()
+        self.stop_on_signals()
         # Open the control socket first, so a talk key pressed during start-up still lands.
         self.serving = asyncio.Event()
         tasks = [asyncio.create_task(self.serve()), asyncio.create_task(self.track_status())]

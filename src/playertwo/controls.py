@@ -7,6 +7,7 @@ a dry-run backend records presses for tests.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import sys
 import time
@@ -293,6 +294,20 @@ class WaylandKeys(Controls):
                 self._held = (keys, subprocess.Popen(["wtype", *args]))
             except OSError as exc:
                 raise ControlsError(f"keyboard keys didn't go through ({exc})") from exc
+
+    def close(self) -> None:
+        """Let go of held keys: the wtype holding them outlives Player Two otherwise."""
+        if self._held is None:
+            return
+        old, proc = self._held
+        self._held = None
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+        with contextlib.suppress(ControlsError):
+            self._run(*[a for k in old for a in ("-p", k)])
 
 
 class WindowsKeys(Controls):
