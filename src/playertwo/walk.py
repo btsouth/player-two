@@ -85,7 +85,7 @@ class Look:
         pb = self.bg / max(self.bg.sum(), 1)
         self.weights = np.where(self.fg >= 3, pf / (pf + pb + 1e-9), 0.0)
 
-    def _best(self, b, cx, cy, rx, ry):
+    def _best(self, b, cx, cy, rx, ry, moved=None):
         H, W = b.shape
         x0 = max(0, round(cx - self.w / 2 - rx))
         y0 = max(0, round(cy - self.h / 2 - ry))
@@ -93,21 +93,26 @@ class Look:
         y1 = min(H, round(cy + self.h / 2 + ry))
         if x1 - x0 < self.w or y1 - y0 < self.h:
             return cx, cy, 0.0
-        m = self.weights[b[y0:y1, x0:x1]]
-        c = np.pad(m.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
         h, w = self.h, self.w
-        sums = (c[h:, w:] - c[:-h, w:] - c[h:, :-w] + c[:-h, :-w]) / (w * h)
+        sums = _box_means(self.weights[b[y0:y1, x0:x1]], w, h)
+        rank = sums
+        if moved is not None:
+            # Walking, things of its colours that stand still (a stall, a flag) aren't it.
+            mot = _box_means(moved[y0:y1, x0:x1], w, h)
+            if mot.max() > 4:
+                rank = sums * (0.4 + 0.6 * mot / mot.max())
         ys, xs = np.mgrid[0:sums.shape[0], 0:sums.shape[1]]
         px, py = x0 + xs + w / 2, y0 + ys + h / 2
         # Of equally good spots, the one nearest where it should be.
         far = ((px - cx) / max(rx, 1)) ** 2 + ((py - cy) / max(ry, 1)) ** 2
-        iy, ix = np.unravel_index(int(np.argmax(sums - 0.08 * sums.max() * far)), sums.shape)
+        iy, ix = np.unravel_index(int(np.argmax(rank - 0.15 * rank.max() * far)), sums.shape)
         return float(px[iy, ix]), float(py[iy, ix]), float(sums[iy, ix])
 
-    def find(self, rgb: np.ndarray, center: tuple[float, float], radius: int
-             ) -> tuple[float, float, float]:
-        """The character's middle near `center`, and how sure (1: as clear as at first)."""
-        x, y, m = self._best(_bins(rgb), center[0], center[1], radius, radius)
+    def find(self, rgb: np.ndarray, center: tuple[float, float], radius: int,
+             moved: np.ndarray | None = None) -> tuple[float, float, float]:
+        """The character's middle near `center`, and how sure (1: as clear as at first).
+        `moved` (see motion) favours what is moving, while the character walks."""
+        x, y, m = self._best(_bins(rgb), center[0], center[1], radius, radius, moved)
         return x, y, m / self.base
 
 
@@ -156,12 +161,10 @@ def phase_shift(a: np.ndarray, b: np.ndarray, mask: tuple[int, int, int, int] | 
     return float(x - limit + fx), float(y - limit + fy), float(near.max())
 
 
-def spot(a: np.ndarray, b: np.ndarray, scroll: tuple[float, float],
-         center: tuple[float, float], radius: int, size: tuple[int, int]
-         ) -> tuple[float, float, float]:
-    """Where something near `center` changed other than by the scenery scrolling from a
-    to b: the walking character, whether the screen follows it or it walks across a still
-    one. Returns its middle and how much it changed (gray levels, on average)."""
+def motion(a: np.ndarray, b: np.ndarray, scroll: tuple[float, float]) -> np.ndarray:
+    """How much each pixel changed from a to b other than by the scenery scrolling: the
+    walking character lights up, whether the screen follows it or it walks across a
+    still one, and so do other people moving."""
     ix, iy = round(scroll[0]), round(scroll[1])
     moved = np.abs(b - np.roll(a, (iy, ix), axis=(0, 1)))
     # What rolled in from the far edge is no picture at all.
@@ -173,6 +176,18 @@ def spot(a: np.ndarray, b: np.ndarray, scroll: tuple[float, float],
         moved[:iy] = 0
     elif iy < 0:
         moved[iy:] = 0
+    return moved
+
+
+def _box_means(x: np.ndarray, w: int, h: int) -> np.ndarray:
+    c = np.pad(x.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    return (c[h:, w:] - c[:-h, w:] - c[h:, :-w] + c[:-h, :-w]) / (w * h)
+
+
+def spot(moved: np.ndarray, center: tuple[float, float], radius: int, size: tuple[int, int]
+         ) -> tuple[float, float, float]:
+    """The middle of the most changed `size` box near `center` (see motion), and how
+    much it changed (gray levels, on average)."""
     w, h = size
     H, W = moved.shape
     x0 = max(0, round(center[0] - w / 2 - radius))
@@ -181,10 +196,14 @@ def spot(a: np.ndarray, b: np.ndarray, scroll: tuple[float, float],
     y1 = min(H, round(center[1] + h / 2 + radius))
     if x1 - x0 < w or y1 - y0 < h:
         return center[0], center[1], 0.0
-    c = np.pad(moved[y0:y1, x0:x1].cumsum(0).cumsum(1), ((1, 0), (1, 0)))
-    sums = (c[h:, w:] - c[:-h, w:] - c[h:, :-w] + c[:-h, :-w]) / (w * h)
-    iy2, ix2 = np.unravel_index(int(np.argmax(sums)), sums.shape)
-    return x0 + ix2 + w / 2, y0 + iy2 + h / 2, float(sums[iy2, ix2])
+    sums = _box_means(moved[y0:y1, x0:x1], w, h)
+    ys, xs = np.mgrid[0:sums.shape[0], 0:sums.shape[1]]
+    px, py = x0 + xs + w / 2, y0 + ys + h / 2
+    # Others move too (people walking, dancers): the nearest to where it should be wins.
+    far = ((px - center[0]) ** 2 + (py - center[1]) ** 2) / max(radius, 1) ** 2
+    iy2, ix2 = np.unravel_index(int(np.argmax(sums * (1 - 0.6 * np.minimum(far, 1)))),
+                                sums.shape)
+    return float(px[iy2, ix2]), float(py[iy2, ix2]), float(sums[iy2, ix2])
 
 
 def new_place(a: np.ndarray, b: np.ndarray) -> bool:
@@ -251,7 +270,7 @@ async def locate(muse: Muse, img: Image.Image, target: str, context: str = "",
     data: dict = {}
     for _ in range(2):  # a reply cut short isn't JSON: ask once more
         try:
-            data = await muse.json(msgs, effort="low", max_tokens=3000)
+            data = await muse.json(msgs, effort="minimal", max_tokens=3000)
             break
         except ValueError:
             continue
@@ -300,9 +319,14 @@ class Walker:
         """Walk to `target`; `me` says which character is the player's, if it's unclear."""
         t0 = time.monotonic()
         self.me = me
+        # How far it went over the ground, so the model can keep a map in its head.
+        self.travel = np.zeros(2)
+        self.size = 0.0
 
         def done(outcome: str, detail: str) -> Walked:
             self.steer(None)
+            if self.size and np.hypot(*self.travel) > self.size:
+                detail += f"; walked {self._words(self.travel, self.size)} in all"
             return Walked(outcome, detail, time.monotonic() - t0)
 
         img = await self.grab()
@@ -324,6 +348,7 @@ class Walker:
         px1, py1, px2, py2 = loc.player
         size = max(6.0, min(px2 - px1, py2 - py1, 0.25 * w))
         player = np.array([(px1 + px2) / 2, (py1 + py2) / 2])
+        self.size = size
         # The model's box is only roughly right, and a small sprite is mostly background:
         # the character is pinned down once it moves (see spot), then followed by colour.
         bw, bh = max(4, round(px2 - px1)), max(4, round(py2 - py1))
@@ -407,8 +432,9 @@ class Walker:
             scroll = np.array([sx, sy])
             for p in points:
                 p += scroll
+            moved = motion(prev, g, (sx, sy))
             if look is not None:
-                nx, ny, score = look.find(rgb, (player[0], player[1]), radius=int(size))
+                nx, ny, score = look.find(rgb, (player[0], player[1]), int(size), moved)
                 velocity = np.array([nx, ny]) - player
                 fast = float(np.hypot(*scroll))
                 # Moving just like the scenery: that's the ground, not the character.
@@ -416,8 +442,7 @@ class Walker:
                     look = None
             if look is None:
                 unsure += 1
-                x, y, how = spot(prev, g, scroll, (player[0], player[1]), int(2 * size),
-                                 (bw, bh))
+                x, y, how = spot(moved, (player[0], player[1]), int(2 * size), (bw, bh))
                 prev = g
                 if how > 6:
                     seen_moving = True
@@ -455,6 +480,7 @@ class Walker:
             # How the character moved over the ground, over the last few frames: one
             # frame's is a few pixels of wobble from the walking animation.
             moves = [*moves[-3:], velocity - scroll]
+            self.travel += velocity - scroll
             rel = np.mean(moves, axis=0) if len(moves) > 1 else np.zeros(2)
             if float(np.hypot(*rel)) > 0.6:
                 last_rel = time.monotonic()
