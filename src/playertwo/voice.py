@@ -163,6 +163,14 @@ class Voice:
             return
         if interrupt:
             self.stop()
+        queued = self._gen  # a stop() or a newer line while it waits drops it
+        # One line at a time: two said together would otherwise alternate sentences.
+        async with self._lock:
+            await self._say(text, queued)
+
+    async def _say(self, text: str, gen: int) -> None:
+        if gen != self._gen:
+            return  # cut off by a newer line while it waited its turn
         gen = self._gen
         self.last_spoken = text
         t0 = time.monotonic()
@@ -183,6 +191,13 @@ class Voice:
         """Speak streamed model text, starting as soon as the first sentence is complete."""
         if interrupt:
             self.stop()
+        queued = self._gen
+        async with self._lock:
+            return await self._say_stream(deltas, queued)
+
+    async def _say_stream(self, deltas, mine: int) -> str:
+        if mine != self._gen:
+            return ""
         gen = self._gen
         buf = ""
         spoken: list[str] = []

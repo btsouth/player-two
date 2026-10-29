@@ -104,8 +104,11 @@ class CompanionWindow:
         self.proc: subprocess.Popen | None = None
         self.pid: int | None = None
         self.profile = CACHE_DIR / "window"
+        self.tab_opened = False
 
     def alive(self) -> bool:
+        if self.tab_opened:
+            return True
         if self.proc is not None and self.proc.poll() is None:
             return True
         return self.pid is not None and profile_owner(self.profile) == self.pid
@@ -115,7 +118,12 @@ class CompanionWindow:
         if exe is None:
             import webbrowser
 
-            return webbrowser.open(url)
+            # A tab in the default browser can't be watched or closed: open it once per
+            # session, or every "show the window" adds another.
+            if self.tab_opened:
+                return True
+            self.tab_opened = webbrowser.open(url)
+            return self.tab_opened
         profile = self.profile
         profile.mkdir(parents=True, exist_ok=True)
         # A window left by an earlier session reconnects by itself; adopt it, so it

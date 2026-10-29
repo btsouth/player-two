@@ -172,7 +172,7 @@ async def test_window_socket_refuses_other_websites():
     from websockets.exceptions import InvalidStatus
 
     from playertwo.app import Events
-    from playertwo.web import serve_ui
+    from playertwo.web import TOKEN, serve_ui
 
     session = SimpleNamespace(events=Events())
     port = 47899
@@ -183,9 +183,47 @@ async def test_window_socket_refuses_other_websites():
             async with connect(f"ws://127.0.0.1:{port}/events",
                                origin="https://evil.example"):
                 pass
-        async with connect(f"ws://127.0.0.1:{port}/events",
+        # Another program on this PC, without the window's secret.
+        with pytest.raises(InvalidStatus):
+            async with connect(f"ws://127.0.0.1:{port}/events"):
+                pass
+        with pytest.raises(InvalidStatus):
+            async with connect(f"ws://127.0.0.1:{port}/events?k=guess",
+                               origin=f"http://127.0.0.1:{port}"):
+                pass
+        async with connect(f"ws://127.0.0.1:{port}/events?k={TOKEN}",
                            origin=f"http://127.0.0.1:{port}") as ws:
             assert ws.protocol.state.name == "OPEN"
+    finally:
+        server.cancel()
+
+
+async def test_the_window_can_only_send_its_own_commands():
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from websockets.asyncio.client import connect
+
+    from playertwo.app import Events
+    from playertwo.web import TOKEN, serve_ui
+
+    got: list[str] = []
+
+    async def command(line):
+        got.append(line)
+
+    session = SimpleNamespace(events=Events(), command=command)
+    port = 47898
+    server = asyncio.create_task(serve_ui(session, port))
+    await asyncio.sleep(0.2)
+    try:
+        async with connect(f"ws://127.0.0.1:{port}/events?k={TOKEN}",
+                           origin=f"http://127.0.0.1:{port}") as ws:
+            for line in ("shot /tmp/x.png", "press a", "do open the menu"):
+                await ws.send(json.dumps({"command": line}))
+            await asyncio.sleep(0.2)
+        assert got == ["do open the menu"]
     finally:
         server.cancel()
 
@@ -282,3 +320,34 @@ async def test_scripted_presses_for_a_known_start(tmp_path):
     assert (await s.command("shot now.png")).startswith("give")
     await s.command(f"shot {tmp_path / 'now.png'}")
     assert Image.open(tmp_path / "now.png").size == (64, 36)
+
+
+def test_bad_settings_fall_back_and_are_said(tmp_path):
+    from playertwo.config import Settings
+
+    p = tmp_path / "config.toml"
+    p.write_text('watch_fps = 0\nspeech_rate = "fast"\nverbosity = "chatty"\n'
+                 'hands_free = "yes"\nlanguage = "Spanish"\n')
+    s = Settings.load(p)
+    assert (s.watch_fps, s.speech_rate, s.verbosity, s.hands_free) == (6.0, 1.1, "normal", False)
+    assert s.language == "Spanish"
+    assert len(s.problems) == 4 and any("watch_fps" in p for p in s.problems)
+    p.write_text('verbosity = "terse\n')  # a typo in the file itself
+    s = Settings.load(p)
+    assert s.verbosity == "normal" and "mistake" in s.problems[0]
+
+
+def test_errors_are_said_for_what_they_are():
+    import subprocess
+    from types import SimpleNamespace
+
+    from websockets.exceptions import InvalidStatus
+
+    from playertwo.app import trouble_words
+    from playertwo.controls import ControlsError
+
+    assert trouble_words(ControlsError("x"))[0] == "controls"
+    assert trouble_words(FileNotFoundError("wtype"))[0] != "net"
+    assert trouble_words(InvalidStatus(SimpleNamespace(status_code=401)))[0] == "key"
+    assert trouble_words(ConnectionRefusedError())[0] == "net"
+    assert trouble_words(subprocess.CalledProcessError(1, "x"))[0] == "other"

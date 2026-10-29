@@ -15,7 +15,7 @@ from pathlib import Path
 from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
-from .controls import BUTTONS, open_controls
+from .controls import BUTTONS, ControlsError, open_controls
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
@@ -140,6 +140,15 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
         return "nogame", "I don't see a game yet. Start one and I'll find it."
     if isinstance(exc, openai.RateLimitError):
         return "rate", "I'm being rate limited, so I'll slow down for a bit."
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if type(exc).__name__ == "InvalidStatus" and status in (401, 403):
+        return "key", ("Speech recognition turned down my API key. Run player-two setup in "
+                       "a terminal to check it.")
+    if isinstance(exc, ControlsError):
+        return "controls", ("I can't press buttons in the game right now. Run player-two setup "
+                            "to check the controller.")
+    if isinstance(exc, PermissionError | FileNotFoundError):
+        return "other", f"Something is missing or locked on this computer: {exc}."
     if isinstance(exc, openai.APIConnectionError | openai.APITimeoutError | OSError):
         return "net", ("I can't reach the model right now. Check the internet connection. "
                        "I'll keep trying.")
@@ -202,6 +211,7 @@ class Session:
         self.controls = open_controls(controls or settings.controls, focus=self.focus_game)
         # Things the player should hear about at start-up (no controller, no mic).
         self.problems: list[str] = [self.controls.problem] if self.controls.problem else []
+        self.problems += settings.problems
         if self.mixer.lost:
             self.problems.append(SOUND_PROBLEM)
         self.narrator = Narrator(self.muse, settings.verbosity, settings.game,
@@ -247,6 +257,8 @@ class Session:
         self.hands_lock = asyncio.Lock()
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
+        self.side_task: asyncio.Task | None = None  # a "where is" or health-bar search
+        self.fps_before_hud: float | None = None
         self.answer: asyncio.Future[str] | None = None
         self.hud = None
         self.agent = Agent(self.muse, self.controls, lambda: self.grab_now(show=True),
@@ -358,6 +370,12 @@ class Session:
         if self.troubled.pop("net", None) is not None or self.troubled.pop("server", None):
             self.troubled.clear()
             self.announce("I'm back online.", status=True, wait_turn=True)
+
+    def stop_side(self) -> None:
+        """Cancel a "where is it" or "watch my health" still on its way."""
+        if self.side_task is not None and not self.side_task.done():
+            self.side_task.cancel()
+        self.side_task = None
 
     def spawn(self, coro) -> asyncio.Task:
         """Start a background task and keep a reference so it isn't collected mid-run."""
@@ -593,22 +611,28 @@ class Session:
             if self.capture_failures >= 5:
                 self.announce("I can see the screen again.", status=True, wait_turn=True)
             self.capture_failures = 0
-            notice, self.capture.notice = self.capture.notice, ""
-            if notice:
-                self.events.emit("error", where="capture", message=notice)
-                self.announce(notice, status=True, wait_turn=True)
-            self.update_game()
-            if self.hud is not None:
-                self.on_hud(self.hud.update(frame.image, frame.t))
-            busy = self.agent_task is not None and not self.agent_task.done()
-            if self.watcher.update(frame) and not self.paused and not busy:
-                self.events.emit("settled", label=frame.label,
-                                 change=round(self.watcher.last_change, 3))
-                self.show(frame, force=True)
-                self.pending = (frame, self.watcher.last_change)
-            if not self.paused and not busy:
-                self._maybe_narrate()
+            try:
+                self._look(frame)
+            except Exception as exc:  # noqa: BLE001  one bad frame must not end the session
+                self.events.emit("error", where="watch", message=str(exc)[:300])
             await asyncio.sleep(max(0.0, period - (time.monotonic() - t)))
+
+    def _look(self, frame: Frame) -> None:
+        notice, self.capture.notice = self.capture.notice, ""
+        if notice:
+            self.events.emit("error", where="capture", message=notice)
+            self.announce(notice, status=True, wait_turn=True)
+        self.update_game()
+        if self.hud is not None:
+            self.on_hud(self.hud.update(frame.image, frame.t))
+        busy = self.agent_task is not None and not self.agent_task.done()
+        if self.watcher.update(frame) and not self.paused and not busy:
+            self.events.emit("settled", label=frame.label,
+                             change=round(self.watcher.last_change, 3))
+            self.show(frame, force=True)
+            self.pending = (frame, self.watcher.last_change)
+        if not self.paused and not busy:
+            self._maybe_narrate()
 
     # Talking
 
@@ -904,8 +928,9 @@ class Session:
         from .locate import where_request
 
         phrase = where_request(text)
+        self.stop_side()
         if phrase:
-            self.spawn(self.where(phrase))
+            self.side_task = self.spawn(self.where(phrase))
             return
         if self.agent_task and not self.agent_task.done():
             self.agent_task.cancel()
@@ -999,6 +1024,8 @@ class Session:
             await self.announce("I can't find any health or stamina bars on this screen.")
             return
         self.hud = HudWatch(meters)
+        if self.fps_before_hud is None:
+            self.fps_before_hud = self.s.watch_fps
         self.s.watch_fps = max(self.s.watch_fps, 12.0)
         names = ", ".join(m.name for m in meters)
         await self.announce(f"Okay, I'm watching your {names}. I'll warn you when it "
@@ -1069,6 +1096,7 @@ class Session:
         self.events.emit("local", action=action)
         self.spawn(self._after_local())
         if action == "stop":
+            self.stop_side()
             self.voice.stop()
             if self.answer is not None and not self.answer.done():
                 self.answer.set_result("")
@@ -1125,9 +1153,11 @@ class Session:
             self.emit_settings()
             await self.announce("Okay, I'll read the menus too.")
         elif action == "hud":
-            await self.start_hud()
+            self.side_task = self.spawn(self.start_hud())  # "stop" can cancel it
         elif action == "hud_off":
             self.hud = None
+            if self.fps_before_hud is not None:
+                self.s.watch_fps, self.fps_before_hud = self.fps_before_hud, None
             await self.announce("Okay, no more health warnings.")
         elif action == "pause":
             self.paused = True
@@ -1281,17 +1311,29 @@ class Session:
             return True
         return self.s.companion == "auto" and bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
 
+    async def _serve_ui(self) -> None:
+        """The window's server; if it can't start (its port taken), go on without it."""
+        from .web import PORT, serve_ui
+
+        try:
+            await serve_ui(self)
+        except OSError as exc:
+            self.ui = False
+            self.events.emit("error", where="window", message=str(exc)[:300])
+            self.announce(f"My window can't open: port {PORT} is taken by another program. "
+                          "I'll keep going without it.", status=True, wait_turn=True)
+
     def open_window(self, refocus: bool = True) -> None:
         """Open the companion window. With `refocus`, hand focus back to the game after,
         in case the window took it; not when the player asked for the window or typing
         there is their only way in."""
         from .desktop import CompanionWindow
-        from .web import PORT
+        from .web import window_url
 
         if not self.ui or (self.window is not None and self.window.alive()):
             return
         self.window = CompanionWindow()
-        self.window.open(f"http://127.0.0.1:{PORT}/", getattr(self.capture, "target", None))
+        self.window.open(window_url(), getattr(self.capture, "target", None))
         if refocus:
             self.spawn(self._refocus_game())
 
@@ -1313,15 +1355,15 @@ class Session:
     async def run(self, ui: bool = True) -> None:
         self.ui = ui
         from .listen import mic_ok
-        from .web import PORT, serve_ui
+        from .web import window_url
 
         self.main = asyncio.current_task()
         # Open the control socket first, so a talk key pressed during start-up still lands.
         self.serving = asyncio.Event()
         tasks = [asyncio.create_task(self.serve()), asyncio.create_task(self.track_status())]
         if ui:
-            tasks.append(asyncio.create_task(serve_ui(self)))
-            print(f"Player Two window: http://127.0.0.1:{PORT}/", file=sys.stderr)
+            tasks.append(asyncio.create_task(self._serve_ui()))
+            print(f"Player Two window: {window_url()}", file=sys.stderr)
         # Wait for the control channel, or for it to fail (port taken, no permission).
         ready = asyncio.create_task(self.serving.wait())
         await asyncio.wait({ready, tasks[0]}, return_when=asyncio.FIRST_COMPLETED)
@@ -1376,6 +1418,9 @@ class Session:
         await asyncio.gather(self.watch(), *tasks)
 
     def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         if self.window is not None:
             self.window.close()
         self.controls.close()
@@ -1390,10 +1435,11 @@ class Session:
 
 
 async def send(line: str) -> str:
-    reader, writer = await open_control()
+    reader, writer = await asyncio.wait_for(open_control(), 2)
     writer.write((line + "\n").encode())
     await writer.drain()
-    reply = (await reader.readline()).decode().strip()
+    # A session that's stuck must not keep a new start waiting forever.
+    reply = (await asyncio.wait_for(reader.readline(), 2)).decode().strip()
     writer.close()
     return reply
 
@@ -1401,8 +1447,14 @@ async def send(line: str) -> str:
 def already_running() -> bool:
     try:
         return asyncio.run(send("show again")) == "ok"
-    except (OSError, ConnectionError):
+    except (OSError, ConnectionError, TimeoutError):
         return False
+
+
+def _plain(exc: BaseException) -> str:
+    """An error in a few words a person can hear, not a traceback."""
+    text = " ".join(str(exc).split())[:120]
+    return text or type(exc).__name__
 
 
 def say_and_exit(settings: Settings, message: str) -> None:
@@ -1437,12 +1489,20 @@ def main_run(settings: Settings, controls: str | None = None, log: str | None = 
     except SystemExit as exc:
         say_and_exit(settings, str(exc))
         return
+    except Exception as exc:  # noqa: BLE001  whatever it is, the player must hear it
+        say_and_exit(settings, f"Sorry, I couldn't start: {_plain(exc)}. Try starting me "
+                     "again; if it keeps happening, run player-two setup.")
+        return
     if log:
         session.events.log_path = Path(log)
     try:
         asyncio.run(session.run())
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
+    except Exception as exc:  # noqa: BLE001
+        session.close()
+        say_and_exit(settings, f"Sorry, I've stopped working: {_plain(exc)}. Start me "
+                     "again to keep playing.")
     finally:
         session.close()
         print(f"\n{session.muse.usage.calls} model calls, ${session.muse.usage.cost_usd():.3f}",

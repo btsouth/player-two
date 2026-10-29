@@ -84,6 +84,19 @@ async def start_control(client):
     return await asyncio.start_unix_server(client, str(path))
 
 
+CHOICES = {
+    "effort": {"minimal", "low", "medium", "high"},
+    "agent_effort": {"minimal", "low", "medium", "high"},
+    "brain": {"auto", "open", "meta"},
+    "verbosity": {"terse", "quiet", "normal", "detailed"},
+    "output": {"auto", "voice", "screen-reader"},
+    "confirm": {"always", "important", "never"},
+    "controls": {"auto", "gamepad", "keyboard", "dry-run"},
+    "companion": {"auto", "on", "off"},
+}
+RANGES = {"speech_rate": (0.5, 2.5), "watch_fps": (1, 30), "image_max_side": (320, 4096)}
+
+
 @dataclass
 class Settings:
     model: str = "muse-spark-1.3"
@@ -133,23 +146,59 @@ class Settings:
     # The player bound the talk key by hand where Player Two can't check it.
     talk_key_set: bool = False
     extra: dict = field(default_factory=dict)
+    # What was wrong in the settings file, said in the greeting. Not a setting.
+    problems: list = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:
         path = path or CONFIG_DIR / "config.toml"
         data: dict = {}
+        problems: list[str] = []
         if path.exists():
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        known = {f.name for f in fields(cls)}
-        s = cls(**{k: v for k, v in data.items() if k in known})
+            try:
+                data = tomllib.loads(path.read_text(encoding="utf-8"))
+            except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+                problems.append(f"Your settings file has a mistake ({exc}), so I'm using "
+                                "the usual settings for now.")
+        known = {f.name for f in fields(cls)} - {"extra", "problems"}
+        s = cls()
         s.extra = {k: v for k, v in data.items() if k not in known}
         for f in fields(cls):
-            env = os.environ.get(f"PLAYER_TWO_{f.name.upper()}")
-            if env is None or f.name == "extra":
+            if f.name in ("extra", "problems"):
                 continue
-            cur = getattr(s, f.name)
-            setattr(s, f.name, type(cur)(env) if not isinstance(cur, bool) else env == "1")
+            if f.name in data:
+                s._take(f.name, data[f.name], problems)
+            env = os.environ.get(f"PLAYER_TWO_{f.name.upper()}")
+            if env is not None:
+                s._take(f.name, env == "1" if isinstance(getattr(s, f.name), bool) else env,
+                        problems)
+        s.problems = problems
         return s
+
+    def _take(self, name: str, value, problems: list[str]) -> None:
+        """Set a setting from the file or the environment, if it's a sensible value;
+        else keep the default and note why."""
+        default = getattr(self, name)
+        try:
+            if isinstance(default, bool):
+                if not isinstance(value, bool):
+                    raise TypeError
+            elif isinstance(default, int | float):
+                if isinstance(value, bool):
+                    raise TypeError
+                value = type(default)(value)
+                lo, hi = RANGES.get(name, (float("-inf"), float("inf")))
+                if not lo <= value <= hi:
+                    raise ValueError
+            else:
+                value = str(value)
+                if name in CHOICES and value not in CHOICES[name]:
+                    raise ValueError
+        except (TypeError, ValueError):
+            problems.append(f"The setting {name} can't be {value!r}, so I'm using "
+                            f"{default!r}.")
+            return
+        setattr(self, name, value)
 
 
 def toml_value(v) -> str:

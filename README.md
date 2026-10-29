@@ -49,7 +49,8 @@ games for you; there it gives warnings.
 
 ## What you need
 
-- Windows 10 or 11, or Linux (tested on Arch with Hyprland, and GNOME).
+- Windows 10 or 11, or Linux. On Linux it's tested on Hyprland (Omarchy), where it captures
+  just the game window. Other desktops capture the whole first screen, so keep the game on it.
 - A Meta Model API key, from [Meta's developer site](https://dev.meta.ai). Setup asks for it.
 - Speakers or a headset. A headset is best for hands-free.
 - A graphics card is optional: the voice runs on the processor too.
@@ -182,7 +183,7 @@ Meta's API has no text-to-speech model, so the narrator voice is
   "Player Two, stop" works the moment it's heard.
 - **Companion window** (`ui/`): what Player Two sees, says, hears and presses, with big captions
   for low vision, a box to type to it, and settings. It opens in its own app window without taking
-  focus from the game (on another monitor if you have one). `?captions` shows a single caption bar
+  focus from the game (on another monitor if you have one). Adding `&captions` to its address shows a single caption bar
   for streaming.
 - **Finding the game** (`games.py`): the Steam game window first, named from its Steam library;
   otherwise the most recent window that isn't a terminal, browser or app. `window = "..."` picks

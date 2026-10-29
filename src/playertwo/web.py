@@ -6,8 +6,10 @@ One port serves both the page and the live event stream. Only 127.0.0.1 is bound
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import mimetypes
+import secrets
 from http import HTTPStatus
 from importlib import resources
 from typing import TYPE_CHECKING
@@ -22,6 +24,22 @@ if TYPE_CHECKING:
 
 PORT = 47820
 UI = resources.files("playertwo") / "ui"
+# A secret for this run, in the window's address: other programs on the PC (or other
+# users of it) can reach 127.0.0.1 too, and must not get the screen, the mic or the pad.
+TOKEN = secrets.token_urlsafe(18)
+# What the window itself sends; nothing else is taken from it.
+WINDOW_COMMANDS = {"talk-start", "talk-stop", "do", "set", "pause", "resume", "quit", "stop",
+                   "repeat", "describe"}
+
+
+def window_url(port: int = PORT) -> str:
+    return f"http://127.0.0.1:{port}/?k={TOKEN}"
+
+
+def _allowed(path: str) -> bool:
+    query = path.split("?", 1)[1] if "?" in path else ""
+    keys = [v for k, _, v in (part.partition("=") for part in query.split("&")) if k == "k"]
+    return bool(keys) and hmac.compare_digest(keys[0], TOKEN)
 
 
 def _static(path: str) -> Response | None:
@@ -39,6 +57,8 @@ def _static(path: str) -> Response | None:
 
 async def serve_ui(session: Session, port: int = PORT) -> None:
     def process_request(_conn, request):
+        if request.path.split("?", 1)[0] == "/events" and not _allowed(request.path):
+            return Response(HTTPStatus.FORBIDDEN, "Forbidden", Headers(), b"forbidden")
         return _static(request.path)
 
     async def handler(ws):
@@ -51,6 +71,8 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
                 except ValueError:
                     continue
                 if isinstance(data, dict) and isinstance(data.get("command"), str):
+                    if data["command"].partition(" ")[0] not in WINDOW_COMMANDS:
+                        continue
                     try:
                         await session.command(data["command"])
                     except Exception as exc:  # noqa: BLE001  keep the window's commands working

@@ -480,3 +480,35 @@ def test_modal_token_only_goes_to_a_modal_address(tmp_path, monkeypatch):
     key, headers = config.open_credentials("https://ws--ep-server.us-west.modal.direct/v1")
     assert key == "modal" and headers["Modal-Key"] == "wk-1"
     assert config.open_credentials("https://inference.baseten.co/v1") == ("bt-key", {})
+
+
+async def test_two_lines_at_once_are_said_one_after_the_other():
+    import asyncio
+    import time
+
+    import numpy as np
+
+    from playertwo.voice import Voice
+
+    v = Voice.__new__(Voice)
+    v._gen, v._lock, v.first_audio_ms, v.last_spoken = 0, asyncio.Lock(), [], ""
+    heard: list[str] = []
+
+    def synth(sentence):
+        time.sleep(0.01)
+        return np.array([len(heard)], np.float32), sentence
+
+    v._synth = lambda s: synth(s)
+    v.mixer = type("M", (), {"push_speech": lambda self, x: heard.append(x[1]),
+                             "clear_speech": lambda self: None})()
+    await asyncio.gather(v.say("One. Two. Three.", interrupt=False),
+                         v.say("Four. Five. Six.", interrupt=False))
+    assert heard == ["One.", "Two.", "Three.", "Four.", "Five.", "Six."], heard
+    # A line still waiting its turn is dropped by a stop.
+    heard.clear()
+    first = asyncio.create_task(v.say("Seven. Eight.", interrupt=False))
+    waiting = asyncio.create_task(v.say("Nine.", interrupt=False))
+    await asyncio.sleep(0)
+    v.stop()
+    await asyncio.gather(first, waiting)
+    assert "Nine." not in heard

@@ -287,11 +287,17 @@ function handle(ev) {
 }
 
 function send(command) {
-  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ command }));
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ command }));
+    return true;
+  }
+  $("announce").textContent = "Not connected to Player Two yet. Try again in a moment.";
+  return false;
 }
 
 function connect() {
-  socket = new WebSocket(`ws://${location.host}/events`);
+  const key = new URLSearchParams(location.search).get("k") || "";
+  socket = new WebSocket(`ws://${location.host}/events?k=${encodeURIComponent(key)}`);
   socket.onopen = () => {
     connected = true;
     $("gone").hidden = true;
@@ -342,8 +348,7 @@ $("type-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = $("type-box").value.trim();
   if (!text) return;
-  send(`do ${text}`);
-  $("type-box").value = "";
+  if (send(`do ${text}`)) $("type-box").value = "";
 });
 
 // Settings

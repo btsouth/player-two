@@ -237,7 +237,25 @@ class WaylandKeys(Controls):
 
         if self.focus:
             self.focus()
-        subprocess.run(["wtype", *args], check=True, timeout=5)
+        try:
+            subprocess.run(["wtype", *args], check=True, timeout=5, capture_output=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ControlsError(f"keyboard keys didn't go through ({exc})") from exc
+
+    @staticmethod
+    def works() -> bool:
+        """Whether wtype is there and this desktop takes a virtual keyboard (GNOME and
+        X11 don't). Presses nothing."""
+        import shutil
+        import subprocess
+
+        if shutil.which("wtype") is None:
+            return False
+        try:
+            return subprocess.run(["wtype", "-s", "0"], check=False, capture_output=True,
+                                  timeout=3).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     def press(self, button: str, hold_ms: int = 100) -> None:
         key = self.map[button]
@@ -271,7 +289,10 @@ class WaylandKeys(Controls):
             if self.focus:
                 self.focus()
             args = [a for k in keys for a in ("-P", k)] + ["-s", "60000"]
-            self._held = (keys, subprocess.Popen(["wtype", *args]))
+            try:
+                self._held = (keys, subprocess.Popen(["wtype", *args]))
+            except OSError as exc:
+                raise ControlsError(f"keyboard keys didn't go through ({exc})") from exc
 
 
 class WindowsKeys(Controls):
@@ -350,6 +371,10 @@ class WindowsKeys(Controls):
         self.steer(None)
 
 
+class ControlsError(RuntimeError):
+    """Buttons or keys couldn't be pressed."""
+
+
 def keyboard(focus=None) -> Controls:
     return WindowsKeys(focus=focus) if sys.platform == "win32" else WaylandKeys(focus=focus)
 
@@ -386,7 +411,12 @@ def open_controls(kind: str = "auto", focus=None) -> Controls:
             raise
         try:
             keys = keyboard(focus)
+            if isinstance(keys, WaylandKeys) and not WaylandKeys.works():
+                raise ControlsError("no virtual keyboard on this desktop")
         except Exception:  # noqa: BLE001  no keyboard either: record presses only
             keys = DryRun()
+            keys.problem = (pad_problem(exc) + " I can't press keyboard keys on this desktop "
+                            "either, so for now I can only watch and talk.")
+            return keys
         keys.problem = pad_problem(exc) + " I'll press keyboard keys instead."
         return keys
