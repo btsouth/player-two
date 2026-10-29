@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from .walk import Look, _box_means, changed, motion, new_place, phase_shift, small, spot
+from .walk import Look, Transition, _box_means, changed, motion, phase_shift, settle, small, spot
 
 ANGLES = {"up": 0, "up_right": 45, "right": 90, "down_right": 135, "down": 180,
           "down_left": 225, "left": 270, "up_left": 315}
@@ -44,7 +44,7 @@ def words(v: np.ndarray) -> str:
 @dataclass
 class Went:
     # "walked" (the time ran out, still going), "blocked", "new_area", "interrupted",
-    # "stopped", "didnt_move"
+    # "stopped", "didnt_move", "unsure" (the character unknown and the view still)
     outcome: str
     steps: np.ndarray  # over the ground, in character sizes (x right, y down)
     screens: float     # how far the view scrolled, in screen widths
@@ -66,6 +66,11 @@ class Went:
             "stopped": f"stopped by the player after you {went}",
             "didnt_move": f"didnt_move: holding {direction} didn't move your character; a "
                           "text box or menu may be up, or it's a wall",
+            "unsure": "unsure: I couldn't pick out your character, and the view "
+                      + (f"stopped scrolling after you {went}" if self.screens >= 0.05
+                         else "didn't scroll")
+                      + "; it may be at a wall, walking across a still screen, or a text "
+                        "box or menu is up: look",
         }[self.outcome] + f" ({self.seconds:.1f} s)"
 
 
@@ -77,19 +82,22 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
                        log: Callable[[str], None] | None = None) -> Went:
     """Hold `direction` for up to `seconds`, stopping early at a wall, a new place or a
     popup. `me` is the character as last seen by a walk (its colours, where, its size),
-    to follow it; without it, it's the moving thing nearest the middle of the screen,
-    where most 2D games keep the character."""
+    to follow it. Without it only the scroll says how far it went: on real screens
+    someone else walking about is easily taken for it (see find_me to know which one
+    it is), so then a still view is "unsure"."""
     angle = ANGLES[direction]
     unit = np.array([np.sin(np.radians(angle)), -np.cos(np.radians(angle))])
     t0 = time.monotonic()
     rgb, prev = small(await grab())
+    scene = Transition()
+    scene.see(prev)
     h, w = prev.shape
     if me is not None:
         look, at, (bw, bh) = me
         at = np.array(at, float)
     else:
         # About the size of a 2D game's sprite (Crono is a thirtieth of the screen wide),
-        # somewhere on screen: found once it moves.
+        # where most 2D games keep the character, so it is left out of the scroll.
         look, at, (bw, bh) = None, np.array([w / 2, h / 2]), (round(w / 30), round(h / 11))
     known = me is not None
     size = float(max(6, min(bw, bh)))
@@ -113,35 +121,40 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
                 steer(angle)
             await asyncio.sleep(0.04)
             rgb, g = small(await grab())
-            if new_place(prev, g):
-                outcome = "new_area"
-                break
             mask = (int(at[0] - bw), int(at[1] - bh), int(at[0] + bw), int(at[1] + bh))
             sx, sy, _ = phase_shift(prev, g, mask)
+            if scene.see(g, (sx, sy)) != "steady":
+                # A fade, a door: the scroll and the steps mean nothing until it
+                # settles, and holding on might walk back out.
+                steer(None)
+                t = time.monotonic()
+                state, rgb, g = await settle(grab, scene, keep_going)
+                if state == "same":
+                    # A flash, or a false alarm: walk on from here.
+                    paused += time.monotonic() - t
+                    history, popup, prev = [], [], g
+                    steer(angle)
+                    continue
+                outcome = "new_area" if state == "new" else "stopped"
+                break
             scroll = np.array([sx, sy])
             # While the screen scrolls, the camera is following the character: that's how
             # far it went (followers and passers-by would only add noise). On a still
             # screen (a small room, the edge of the map) the character crosses it.
             follow = bool(np.hypot(sx, sy) > 1)
-            # Where it is: by its colours if a walk has seen it, else by what moves
-            # differently from the scenery, near where it was (anywhere, at first).
-            radius = int(2 * max(bw, bh)) if known else w // 2
-            moved_px = motion(prev, g, (sx, sy))
+            # Where it is, by its colours, favouring what moves differently from the
+            # scenery.
             if look is not None:
-                x, y, score = look.find(rgb, (at[0], at[1]), radius, moved_px)
-                found = score > 0.3
-            else:
-                x, y, score = spot(moved_px, (at[0], at[1]), radius, (bw, bh))
-                found = score > 8
-            now = np.array([x, y]) if found else at
+                x, y, score = look.find(rgb, (at[0], at[1]), int(2 * max(bw, bh)),
+                                        motion(prev, g, (sx, sy)))
+                if score > 0.3:
+                    now = np.array([x, y])
+                    if not follow:
+                        ground += now - at
+                    at = now
             if follow:
                 ground -= scroll
-            elif known:
-                ground += now - at
-            known = known or found
-            at = now
             view += scroll
-            at = now
             # A text box, a menu or a battle stops the character, so the view stops too;
             # while it scrolls, layers moving at their own speed (clouds, a far-off
             # background) change much of the picture and mean nothing.
@@ -165,6 +178,20 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
                     break
     finally:
         steer(None)
+    if outcome == "walked":
+        # The time ran out before a second of history said anything: a short walk, or
+        # one that stopped near the end. Its last moments say whether it still moves.
+        total = float(np.dot(ground, unit))
+        end = history[-1][0] if history else 0.0
+        old = [g0 for t1, g0 in history if end - t1 >= 0.4]
+        recent = total - float(np.dot(old[-1], unit)) if old else total
+        if total < 0.5 * size:
+            outcome = "didnt_move"
+        elif recent < 0.2 * size:
+            outcome = "blocked"
+    if not known and outcome in ("blocked", "didnt_move"):
+        # Only the scroll was watched: the view stopping isn't proof the character did.
+        outcome = "unsure"
     if log is not None:
         log(f"keep_walking {direction}: {outcome} after {len(history)} frames, ground "
             f"{(ground / size).round(1).tolist()}, last changes {[round(c, 3) for c in popup]}")
@@ -174,7 +201,8 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
     wobble = (np.abs(steps) < 1.5) & ((np.abs(unit) < 0.1) | (np.sign(steps) != np.sign(unit)))
     steps[wobble] = 0.0
     return Went(outcome, steps, float(np.hypot(*view)) / w,
-                time.monotonic() - t0 - paused, at if outcome != "new_area" else None)
+                time.monotonic() - t0 - paused,
+                at if outcome != "new_area" and known else None)
 
 
 class _Stopped(Exception):

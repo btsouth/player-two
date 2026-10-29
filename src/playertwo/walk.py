@@ -19,6 +19,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 from PIL import Image
@@ -33,11 +34,23 @@ def gray(img: Image.Image, width: int = WIDTH) -> np.ndarray:
     return np.asarray(img.convert("L").resize((width, h), Image.BILINEAR), dtype=np.float32)
 
 
+_last_small: tuple[Image.Image, int, tuple[np.ndarray, np.ndarray]] | None = None
+
+
 def small(img: Image.Image, width: int = WIDTH) -> tuple[np.ndarray, np.ndarray]:
-    """The frame at tracking size: colour (for the character) and gray (for scrolling)."""
+    """The frame at tracking size: colour (for the character) and gray (for scrolling).
+    The same frame asked for again (the map and a walk both look at it) isn't resized
+    twice; the arrays are read only."""
+    global _last_small
+    last = _last_small
+    if last is not None and last[0] is img and last[1] == width:
+        return last[2]
     h = max(1, round(img.height * width / img.width))
     rgb = img.convert("RGB").resize((width, h), Image.BILINEAR)
-    return np.asarray(rgb), np.asarray(rgb.convert("L"), dtype=np.float32)
+    out = np.asarray(rgb), np.asarray(rgb.convert("L"), dtype=np.float32)
+    out[1].setflags(write=False)
+    _last_small = (img, width, out)
+    return out
 
 
 def _bins(rgb: np.ndarray) -> np.ndarray:
@@ -242,15 +255,152 @@ def spot(moved: np.ndarray, center: tuple[float, float], radius: int, size: tupl
     return float(px[iy2, ix2]), float(py[iy2, ix2]), float(sums[iy2, ix2])
 
 
+def _tiny(x: np.ndarray, k: int) -> np.ndarray:
+    h, w = x.shape
+    x = x[: h - h % k, : w - w % k]
+    return x.reshape(h // k, k, w // k, k).mean(axis=(1, 3))
+
+
 def new_place(a: np.ndarray, b: np.ndarray) -> bool:
-    """Whether the picture changed to a different place (a fade, a door), not just
-    scrolled: compared as blurry thumbnails, where a few pixels of scrolling hardly count."""
-    def tiny(x: np.ndarray) -> np.ndarray:
-        h, w = x.shape
-        k = max(1, w // 40)
-        x = x[: h - h % k, : w - w % k]
-        return x.reshape(h // k, k, w // k, k).mean(axis=(1, 3))
-    return float(np.abs(tiny(a) - tiny(b)).mean()) > 40
+    """Whether the picture changed to a different place at once (a cut, a door), not just
+    scrolled: compared as blurry thumbnails, where a few pixels of scrolling hardly count.
+    A fade over several frames changes each one too little: see Transition."""
+    k = max(1, a.shape[1] // 40)
+    return float(np.abs(_tiny(a, k) - _tiny(b, k)).mean()) > 40
+
+
+def cells(a: np.ndarray, b: np.ndarray, shift: tuple[float, float] = (0.0, 0.0),
+          rows: int = 8, cols: int = 1) -> np.ndarray:
+    """How different b is from a scrolled by `shift` (x right, y down), as blurry
+    thumbnails, in each of rows x cols parts of the screen (mean gray levels): the
+    parts say whether a change is all over (a fade, another place) or only in some
+    (a text box, a menu, a far-off layer moving at its own speed)."""
+    h, w = a.shape
+    ix = max(-w // 2, min(round(shift[0]), w // 2))
+    iy = max(-h // 2, min(round(shift[1]), h // 2))
+    # b[y, x] is a[y - iy, x - ix]: the part both show.
+    a = a[max(-iy, 0):h - max(iy, 0), max(-ix, 0):w - max(ix, 0)]
+    b = b[max(iy, 0):h - max(-iy, 0), max(ix, 0):w - max(-ix, 0)]
+    k = max(1, w // 40)
+    d = np.abs(_tiny(a, k) - _tiny(b, k))
+    th, tw = d.shape
+    ys = np.linspace(0, th, min(rows, th) + 1).astype(int)
+    xs = np.linspace(0, tw, min(cols, tw) + 1).astype(int)
+    return np.array([[d[y0:y1, x0:x1].mean() for x0, x1 in pairwise(xs)]
+                     for y0, y1 in pairwise(ys)])
+
+
+def blank(g: np.ndarray) -> bool:
+    """A dark or nearly flat picture: the middle of a fade, a screen between places."""
+    m, sd = float(g.mean()), float(g.std())
+    return sd < 5 or (m < 15 and sd < 10)
+
+
+class Transition:
+    """Notices the picture going to another place, at once or gradually (a fade out and
+    in over many frames, each changing too little for new_place), so that a walk stops
+    counting the scroll and the character's steps (phase_shift on dark frames is noise)
+    and says where it ended up only once the picture settles.
+
+    see() each frame, with the scroll phase_shift measured from the last one. A change
+    counts when the picture goes dark or flat, or differs over most of the screen from a
+    frame about AGE seconds before (allowing for the scroll since): a text box or a menu
+    covers less, walking changes little. Then it waits for the picture to settle and
+    compares it with the one before the change: the same place (a flash, a false alarm)
+    or a new one."""
+
+    AGE = 0.4      # seconds back the frame compared with is
+    CHANGE = 20    # gray levels most of the thumbnail must change by
+    CALM = 4       # and change less than, over CALM_S, to have settled
+    CALM_S = 0.12
+
+    def __init__(self) -> None:
+        self._hist: list[tuple[float, np.ndarray, np.ndarray]] = []  # time, frame, scroll
+        self._scroll = np.zeros(2)
+        self.before: np.ndarray | None = None  # the last frame before the change
+        self.since: float | None = None        # when the change began, or None
+        self._calm: list[tuple[float, np.ndarray]] = []
+        self.state = "steady"
+
+    @property
+    def changing(self) -> bool:
+        return self.since is not None
+
+    def see(self, g: np.ndarray, scroll: tuple[float, float] = (0.0, 0.0),
+            now: float | None = None) -> str:
+        """"steady" (scroll and steps count), "changing" (they don't), then once
+        settled "same" (back to steady) or "new" (another place; steady from here)."""
+        now = time.monotonic() if now is None else now
+        if self.since is None:
+            if self._hist and self._hist[-1][1].shape != g.shape:
+                self._begin(now)
+                return self._settle(g, now)
+            self._scroll = self._scroll + np.asarray(scroll, float)
+            if self._hist:
+                old = [h for h in self._hist if now - h[0] >= self.AGE]
+                _, ref, s0 = old[-1] if old else self._hist[0]
+                last = self._hist[-1][1]
+                if blank(g) or new_place(last, g) or self._spread(ref, g, self._scroll - s0):
+                    self._begin(now)
+                    return self._settle(g, now)
+            self._hist = [h for h in self._hist[-40:] if now - h[0] < self.AGE + 0.3]
+            self._hist.append((now, g, self._scroll.copy()))
+            self.state = "steady"
+            return self.state
+        return self._settle(g, now)
+
+    def _spread(self, a: np.ndarray, b: np.ndarray, shift) -> bool:
+        if a.shape != b.shape:
+            return True
+        # Over three quarters of the screen, so a far-off layer moving at its own speed
+        # (half of it, say) doesn't count.
+        return float(np.quantile(cells(a, b, shift, 4, 4), 0.25)) > self.CHANGE
+
+    def _begin(self, now: float) -> None:
+        self.before = self._hist[-1][1] if self._hist else None
+        self.since = now
+        self._calm = []
+
+    def _settle(self, g: np.ndarray, now: float) -> str:
+        self._calm = [c for c in self._calm if now - c[0] < 1.0]
+        old = [c for c in self._calm if now - c[0] >= self.CALM_S]
+        self._calm.append((now, g))
+        if blank(g) or not old or old[-1][1].shape != g.shape or \
+                float(np.median(cells(old[-1][1], g, (0, 0), 4, 4))) >= self.CALM:
+            self.state = "changing"
+            return self.state
+        same = False
+        if self.before is not None and self.before.shape == g.shape:
+            h = g.shape[0]
+            sx, sy, _ = phase_shift(self.before, g, limit=min(60, h // 2 - 2))
+            same = not self._spread(self.before, g, (sx, sy))
+        self.since, self.before, self._calm = None, None, []
+        self._hist = [(now, g, self._scroll.copy())]
+        self.state = "same" if same else "new"
+        return self.state
+
+
+async def settle(grab: Callable[[], Awaitable[Image.Image]], scene: Transition,
+                 keep_going: Callable[[], Awaitable[bool]] | None = None, wait: float = 3.0
+                 ) -> tuple[str, np.ndarray, np.ndarray]:
+    """Once a change began (see Transition), frames until the picture settles: "same"
+    or "new" with the last frame (rgb, gray), "new" too if it is still changing after
+    `wait` seconds (a screen left black), or "stopped" if the player stopped it."""
+    t0 = time.monotonic()
+    while True:
+        if keep_going is not None:
+            t = time.monotonic()
+            go = await keep_going()
+            t0 += time.monotonic() - t
+            if not go:
+                return "stopped", *small(await grab())
+        await asyncio.sleep(0.04)
+        rgb, g = small(await grab())
+        state = scene.see(g)
+        if state in ("same", "new"):
+            return state, rgb, g
+        if time.monotonic() - t0 > wait:
+            return "new", rgb, g
 
 
 def compass(dx: float, dy: float) -> float:
@@ -371,7 +521,9 @@ class Walker:
     def _done(self, t0: float):
         def done(outcome: str, detail: str) -> Walked:
             self.steer(None)
-            self.memory = self._now if outcome != "new_area" else None
+            # A walk that never saw the character (the target not found) leaves what was
+            # known; a new place forgets it.
+            self.memory = (self._now or self.memory) if outcome != "new_area" else None
             self._now = None  # where it is between walks is memory's, once checked
             if self.size and np.hypot(*self.travel) > self.size:
                 detail += f"; walked {self._words(self.travel, self.size)} in all"
@@ -469,6 +621,9 @@ class Walker:
         moves: list[np.ndarray] = []  # the last few moves over the ground
         drift = np.zeros(2)  # its walking, a frame's worth over the ground
         hid = 0.0  # when it went out of sight behind something, or 0
+        seen = player.copy()  # where it was last really seen (moved with the scroll)
+        scene = Transition()
+        scene.see(g)
         best = (float("inf"), time.monotonic())  # closest to the aim so far, and when
         stick: float | None = None
         popped: list[float] = []  # how much of the screen changed, last few frames
@@ -513,8 +668,9 @@ class Walker:
                     lined, face, across = abs(dy) <= line_y, (90 if dx > 0 else 270), (0, dy)
                 else:
                     lined, face, across = abs(dx) <= line_x, (180 if dy > 0 else 0), (dx, 0)
-                if lined and dist <= reach:
-                    # Face it, so a press of a talks to it or opens it.
+                if lined and dist <= reach and not hid:
+                    # Face it, so a press of a talks to it or opens it. Not while out of
+                    # sight: where it is then is a guess, and it may be stuck short.
                     self.steer(face)
                     await asyncio.sleep(0.08)
                     return done("arrived", f"next to {target}, facing it")
@@ -544,19 +700,37 @@ class Walker:
             await asyncio.sleep(0.01)
             rgb, g = await self._frame()
             steps += 1
-            if new_place(prev, g):
-                return done("new_area", f"the screen changed while walking to {target}; "
-                                        "probably a door or a new area")
             pad = int(size)
             sx, sy, _q = phase_shift(prev, g, (int(player[0]) - pad, int(player[1]) - pad,
                                                int(player[0]) + pad, int(player[1]) + pad))
+            if scene.see(g, (sx, sy)) != "steady":
+                # A door or stairs fading out (or a flash): let go, and see where it
+                # settles. Scroll measured on dark frames is noise.
+                self.steer(None)
+                t_fade = time.monotonic()
+                state, rgb, g = await settle(self.grab, scene, self.keep_going)
+                if state == "new":
+                    return done("new_area", f"the screen changed while walking to {target}; "
+                                            "probably a door or a new area")
+                if state == "stopped":
+                    return done("stopped", "stopped by the player")
+                gap = time.monotonic() - t_fade
+                self.paused += gap
+                best = (best[0], best[1] + gap)
+                last_rel += gap
+                began += gap
+                prev, popped, stick = g, [], None
+                continue
             scroll = np.array([sx, sy])
             for p in points:
                 p += scroll
+            seen = seen + scroll
             moved = motion(prev, g, (sx, sy))
             # Walking changes a few percent of the screen; a text box, a menu or a battle
-            # coming up changes far more. Stop before the held d-pad moves its cursor.
-            popped = [*popped[-2:], changed(prev, g, (sx, sy))]
+            # coming up changes far more, and stops the character, so the view stops too.
+            # While it scrolls, layers moving at their own speed (clouds, a far-off
+            # background) change much of the picture and mean nothing.
+            popped = [*popped[-2:], 0.0 if np.hypot(sx, sy) > 1 else changed(prev, g, (sx, sy))]
             if sum(popped) > 0.15:
                 return done("interrupted", "something came up on screen while walking (a "
                             "text box, a menu or a battle): look before pressing anything")
@@ -582,13 +756,18 @@ class Walker:
                     # keeps going the way it was, and shows up again a little later.
                     hid = hid or time.monotonic()
                     player = guess
-                    self._now = (look, player.copy(), (bw, bh))
+                    self._now = (look, seen.copy(), (bw, bh))  # a sighting, not a guess
                     self.travel += drift
                     last_rel = time.monotonic()
                     prev = g
                     continue
                 elif score < 0.5:
                     look = None
+                    if hid:
+                        # It didn't come out where it should have (stuck behind something
+                        # out of sight): go back to where it was last seen.
+                        self.travel += seen - player
+                        player = seen.copy()
                 hid = 0.0
             if look is None:
                 unsure += 1
@@ -628,6 +807,7 @@ class Walker:
                 continue
             unsure = 0
             player = player + velocity
+            seen = player.copy()
             self._now = (look, player.copy(), (bw, bh))
             if steps % 10 == 0:
                 look.ground(rgb, player)  # the ground changes as it walks

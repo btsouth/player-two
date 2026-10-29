@@ -210,15 +210,65 @@ def test_positions_path_and_picture():
     assert (a == UNSEEN).all(axis=2).sum() > 1000
 
 
+def fade(a, b, steps):
+    """Frames fading from a to black and up to b, over `steps` frames each way, as
+    SNES games do through a door."""
+    a, b = a.astype(np.float32), b.astype(np.float32)
+    out = [a * (1 - k / steps) for k in range(1, steps + 1)]
+    out += [np.zeros_like(a)] * 4
+    out += [b * (k / steps) for k in range(1, steps + 1)]
+    return [f.astype(np.uint8) for f in out]
+
+
 def test_track_measures_scroll_and_starts_over_in_a_new_place():
     world = World()
     area = AreaMap()
+    t = 0.0
     for _ in range(10):
-        assert not area.track(*small(world.step(90)))
+        t += 0.04
+        assert not area.track(*small(world.step(90)), now=t)
     assert area.camera[0] > 25
-    dark = np.zeros((270, 480, 3), np.uint8)
-    assert area.track(dark)
-    assert area.frames == 1 and area.bounds() == (0, 0, 480, 270)
+    # Through a door that fades out and in, each frame changing too little to tell.
+    last = small(world.step(None))[0]
+    world.world = texture(2400, 1400, seed=11)
+    there = small(world.step(None))[0]
+    fresh = []
+    for f in [*fade(last, there, 8), *[there] * 6]:
+        t += 0.04
+        fresh.append(area.track(f, now=t))
+    assert fresh.count(True) == 1 and fresh[-1] is False
+    # Nothing of the fade or the old place is on the new map.
+    assert area.bounds() == (0, 0, 480, 270)
+    assert np.abs(area.picture().astype(int) - there.astype(int)).mean() < 3
+
+
+def test_a_flash_is_not_a_new_place():
+    world = World()
+    area = AreaMap()
+    t = 0.0
+    for _ in range(10):
+        t += 0.04
+        area.track(*small(world.step(90)), now=t)
+    here = small(world.step(None))[0]
+    seen = area.bounds()
+    for f in [*fade(here, here, 3), *[here] * 6]:
+        t += 0.04
+        assert not area.track(f, now=t)
+    assert area.bounds() == seen
+
+
+def test_a_text_box_after_a_gap_keeps_the_map():
+    world = World()
+    area = AreaMap()
+    walk(world, area, [(90, 40)])
+    seen = area.bounds()
+    rgb = small(world.step(None))[0].copy()
+    rgb[180:260, 20:460] = (20, 20, 120)  # a text box over the bottom third
+    assert not area.resume(rgb)
+    assert area.bounds() == seen
+    # and the box isn't drawn into the map
+    pic = area.picture()
+    assert not ((pic[..., 2] == 120) & (pic[..., 0] == 20)).any()
 
 
 def test_after_a_gap_it_finds_the_screen_on_the_map_or_starts_over():

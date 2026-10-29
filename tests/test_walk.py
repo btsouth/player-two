@@ -194,6 +194,57 @@ async def test_a_door_ends_the_walk():
     assert result.outcome == "new_area"
 
 
+async def test_a_door_that_fades_out_ends_the_walk_once_it_settles():
+    # SNES games fade through doors over several frames, each changing too little to
+    # tell from walking; the scroll measured on the dark ones is noise.
+    game = Game()
+    real = game.grab
+    room = np.asarray(texture(960, 540, seed=5), np.float32)
+
+    async def fading():
+        img = await real()
+        n = game.frames - 8
+        if n < 0:
+            return img
+        if n < 8:
+            return Image.fromarray((np.asarray(img) * (1 - n / 8)).astype(np.uint8))
+        if n < 12:
+            return Image.new("RGB", img.size)
+        return Image.fromarray((room * min(1.0, (n - 11) / 8)).astype(np.uint8))
+
+    w = Walker(FakeMuse(game), fading, game.steer)
+    result = await w.walk("the green chest")
+    assert result.outcome == "new_area", result.text()
+    assert game.stick is None and w.memory is None
+
+
+async def test_never_says_arrived_while_the_character_is_hidden_and_stuck():
+    # A wall under a tree canopy: it walks in under the leaves and stops at the wall,
+    # out of sight, short of the target.
+    game = Game(start=(60, 200), goal=(440, 200), cover=(170, 120, 400, 280),
+                wall=(300, 0, 310, 1400))
+    w = Walker(FakeMuse(game), game.grab, game.steer)
+    result = await w.walk("the green chest", timeout=12)
+    assert result.outcome != "arrived", (result.text(), game.pos)
+
+
+async def test_a_walk_that_finds_nothing_keeps_the_character_it_knew():
+    from playertwo.explore import find_me
+
+    game = Game()
+
+    class NoTarget(FakeMuse):
+        async def json(self, *a, **k):
+            r = await super().json(*a, **k)
+            return {**r, "target": None, "note": "off screen"}
+
+    w = Walker(NoTarget(game), game.grab, game.steer)
+    w.memory = await find_me(game.grab, game.steer)
+    assert w.memory is not None
+    assert (await w.walk("the green chest")).outcome == "not_found"
+    assert w.memory is not None  # or the next walk wiggles the d-pad to find it again
+
+
 async def test_the_agent_walks_there_and_lets_go_while_the_player_talks():
     import json
     from types import SimpleNamespace

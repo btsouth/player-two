@@ -91,9 +91,89 @@ async def test_a_far_off_layer_scrolling_at_its_own_speed_is_not_a_popup():
     assert went.outcome == "walked", went
 
 
+async def test_walk_to_isnt_stopped_by_a_far_off_layer_either():
+    from playertwo.walk import Walker
+
+    world = World(far=True, speed=14.0)
+    goal = world.pos + np.array([-380, 200])  # down and left, on screen
+
+    class Muse:
+        async def json(self, *a, **k):
+            cam, (w, h) = world.camera(), world.VIEW
+
+            def box(c, hw, hh):
+                x, y = c - cam
+                return [(x - hw) / w * 1000, (y - hh) / h * 1000, (x + hw) / w * 1000,
+                        (y + hh) / h * 1000]
+            return {"player": box(world.pos, 12, 18), "target": box(goal, 14, 20),
+                    "via": [], "note": ""}
+
+    result = await Walker(Muse(), world.grab, world.steer).walk("the chest", timeout=10)
+    assert result.outcome == "arrived", result.text()
+
+
+async def test_a_short_walk_still_says_whether_it_moved():
+    # Under a second, too short for the usual check over the last second.
+    for wall, seconds, outcome in (((1150, 0, 1180, 1400), 0.6, "didnt_move"),  # right there
+                                   ((1100, 0, 1130, 1400), 1.5, "blocked"),     # a few steps
+                                   (None, 0.6, "walked")):
+        world = World(wall=wall)
+        me = await find_me(world.grab, world.steer)
+        world.pos = np.array([1200.0, 700.0])  # back where it started
+        went = await keep_walking(world.grab, world.steer, "left", seconds, me=me)
+        assert went.outcome == outcome, (wall, went)
+
+
+async def test_a_door_that_fades_out_is_a_new_place():
+    world = World(door=(1040, 600, 1100, 800))
+    real = world.grab
+    room = np.asarray(texture(960, 540, seed=5), np.float32)
+    faded = []
+
+    async def fading():
+        # Walking in, the screen fades out over 8 frames and the room fades in.
+        dark = world.dark
+        world.dark = False
+        img = await real()
+        world.dark = world.dark or dark
+        if not world.dark:
+            return img
+        faded.append(1)
+        n = len(faded)
+        if n <= 8:
+            return Image.fromarray((np.asarray(img) * (1 - n / 8)).astype(np.uint8))
+        if n <= 12:
+            return Image.new("RGB", img.size)
+        return Image.fromarray((room * min(1.0, (n - 12) / 8)).astype(np.uint8))
+
+    went = await keep_walking(fading, world.steer, "left", seconds=6.0)
+    assert went.outcome == "new_area", went
+    assert went.steps[1] == 0  # no made-up steps from scroll measured on dark frames
+
+
+async def test_someone_else_moving_isnt_taken_for_the_character():
+    # The character can't move (speed 0); someone paces nearby. Without knowing which
+    # one is the player's, the one moving before the d-pad was held isn't it.
+    world = World(speed=0.0)
+    real = world.grab
+    t = [0]
+
+    async def with_someone():
+        img = await real()
+        t[0] += 1
+        x, y = world.pos - world.camera() + np.array([90 + 60 * math.sin(t[0] / 4), -40])
+        ImageDraw.Draw(img).rectangle((x - 12, y - 18, x + 12, y + 18), fill=(30, 30, 220))
+        return img
+
+    went = await keep_walking(with_someone, world.steer, "left", seconds=2.0)
+    assert went.outcome == "unsure" and not went.steps.any(), went
+
+
 async def test_stops_at_a_wall_and_says_so():
     world = World(wall=(1050, 0, 1080, 1400))
-    went = await keep_walking(world.grab, world.steer, "left", seconds=6.0)
+    me = await find_me(world.grab, world.steer)
+    world.pos = np.array([1200.0, 700.0])
+    went = await keep_walking(world.grab, world.steer, "left", seconds=6.0, me=me)
     assert went.outcome == "blocked", went
     assert went.seconds < 4
     assert world.stick is None
@@ -108,16 +188,22 @@ async def test_stops_when_it_walks_into_a_new_place():
 
 async def test_follows_the_character_across_a_still_screen():
     world = World(room=True, wall=(1460, 0, 1500, 1400))
-    went = await keep_walking(world.grab, world.steer, "right", seconds=6.0)
+    me = await find_me(world.grab, world.steer)
+    went = await keep_walking(world.grab, world.steer, "right", seconds=6.0, me=me)
     assert went.outcome == "blocked", went
     assert went.steps[0] > 5
+    # Not knowing which one is the player's, a still screen proves nothing.
+    world = World(room=True)
+    went = await keep_walking(world.grab, world.steer, "right", seconds=1.0)
+    assert went.outcome == "unsure", went
+    assert "look" in went.text("right")
 
 
 async def test_a_text_box_stops_it():
     world = World()
     world.text_box = True
     went = await keep_walking(world.grab, world.steer, "up", seconds=3.0)
-    assert went.outcome in ("didnt_move", "interrupted"), went
+    assert went.outcome in ("unsure", "interrupted"), went
 
 
 async def test_the_trail_maps_an_area_and_starts_over_in_a_new_one():

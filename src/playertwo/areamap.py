@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .walk import _edges, motion, new_place, phase_shift
+from .walk import Transition, _edges, motion, phase_shift
 
 UNSEEN = (64, 64, 64)  # never seen yet: a flat grey no game draws over a whole region
 CAP = 8          # how many sightings a colour can bank: a sprite that stood still this long
@@ -52,6 +52,7 @@ class AreaMap:
     measures the scroll and notices a new place), and reset() it on a new area."""
 
     def __init__(self) -> None:
+        self._scene = Transition()  # notices a fade or a cut to another place
         self.reset()
 
     def reset(self) -> None:
@@ -77,28 +78,49 @@ class AreaMap:
 
     def track(self, rgb: np.ndarray, gray: np.ndarray | None = None,
               scroll: tuple[float, float] | None = None,
-              mask: tuple[int, int, int, int] | None = None) -> bool:
+              mask: tuple[int, int, int, int] | None = None,
+              now: float | None = None) -> bool:
         """add() for a caller that has only the frames: measures the scroll from the
         last frame (phase_shift, leaving out `mask`, the character) unless given, and
-        starts a new map when the picture changes to a new place (walk.new_place).
-        True when it started a new map."""
+        starts a new map when the picture changes to a new place, at once or over a
+        fade (walk.Transition). Frames in the middle of a fade aren't laid. True when it
+        started a new map."""
         g = _gray(rgb.astype(np.float32)) if gray is None else gray
-        fresh = False
-        if self._prev is not None and (self._prev.shape != g.shape or new_place(self._prev, g)):
+        if self._prev is None or self._prev.shape != g.shape:
+            fresh = self._prev is not None
             self.reset()
-            fresh = True
+            self._restart_scene(g, now)
+            self.add(rgb, (0.0, 0.0), g)
+            return fresh
         if scroll is None:
-            scroll = (0.0, 0.0) if self._prev is None else phase_shift(self._prev, g, mask)[:2]
+            scroll = phase_shift(self._prev, g, mask)[:2]
+        state = self._scene.see(g, scroll, now)
+        if state == "changing":
+            return False
+        if state == "new":
+            self.reset()
+            self.add(rgb, (0.0, 0.0), g)
+            return True
+        if state == "same":
+            # Back from a flash or a dimmed screen: the camera may have moved a little
+            # meanwhile.
+            return self.resume(rgb, g, now)
         self.add(rgb, scroll, g)
-        return fresh
+        return False
 
-    def resume(self, rgb: np.ndarray, gray: np.ndarray | None = None) -> bool:
+    def _restart_scene(self, g: np.ndarray, now: float | None) -> None:
+        self._scene = Transition()
+        self._scene.see(g, (0.0, 0.0), now)
+
+    def resume(self, rgb: np.ndarray, gray: np.ndarray | None = None,
+               now: float | None = None) -> bool:
         """track() for a frame after a gap (the model thinking, buttons pressed by hand):
         the view may have moved further than a frame's scroll, or to another place. Finds
         the frame on the map near where the screen was, or starts a new map if it isn't
         there. True when it started over."""
         g = _gray(rgb.astype(np.float32)) if gray is None else np.asarray(gray, np.float32)
         h, w = g.shape
+        self._restart_scene(g, now)  # frames from before the gap say nothing about a fade
         if self.frames == 0 or self.view != (w, h):
             fresh = self.frames > 0
             self.reset()
@@ -109,19 +131,45 @@ class AreaMap:
             base, _ = old
             sx, sy, _ = phase_shift(base, g, limit=min(120, h // 2 - 2))
             cam = self.camera - np.array([sx, sy])
-            new = self._known(cam, g.shape)
-            # The same place if the frame matches what the map has there.
-            if new is None or float(np.abs(new[0] - g)[new[1]].mean()) >= RESUME:
+            fit = self._fits(cam, g)
+            if fit is None:
                 cam = self._anywhere(g)  # further than that: look over the whole map
-                new = self._known(cam, g.shape)
-            if new is not None and float(np.abs(new[0] - g)[new[1]].mean()) < RESUME:
+                fit = self._fits(cam, g)
+            if fit is not None:
                 self.camera = cam
                 self._soft = None  # what changed over the gap isn't "moving"
-                self.add(rgb, (0.0, 0.0), g)
+                if fit == "all":
+                    self.add(rgb, (0.0, 0.0), g)
+                else:
+                    # Something over part of it (a text box, a menu): the place is the
+                    # same, but that isn't the ground, so it isn't laid on the map.
+                    self._prev = g
                 return False
         self.reset()
         self.add(rgb, (0.0, 0.0), g)
         return True
+
+    def _fits(self, camera: np.ndarray, g: np.ndarray) -> str | None:
+        """Whether the frame matches the map with the screen at `camera`: "all", "part"
+        (most of the screen does, something covers the rest), or None."""
+        known = self._known(camera, g.shape)
+        if known is None:
+            return None
+        base, sure = known
+        d = np.abs(base - g)
+        if float(d[sure].mean()) < RESUME:
+            return "all"
+        # In a 4 x 4 grid, at least half the parts the map has seen match.
+        h, w = g.shape
+        parts = []
+        for ys in np.array_split(np.arange(h), 4):
+            for xs in np.array_split(np.arange(w), 4):
+                s = sure[ys[0]:ys[-1] + 1, xs[0]:xs[-1] + 1]
+                if s.mean() >= 0.5:
+                    parts.append(float(d[ys[0]:ys[-1] + 1, xs[0]:xs[-1] + 1][s].mean()))
+        if len(parts) >= 6 and float(np.median(parts)) < RESUME:
+            return "part"
+        return None
 
     def _anywhere(self, g: np.ndarray) -> np.ndarray:
         """Where on the whole map the frame fits best (phase correlation of their

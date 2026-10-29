@@ -488,7 +488,7 @@ class Agent:
             elif walker.memory is not None:
                 walker.memory = (walker.memory[0], went.at, walker.memory[2])
                 self.area.character_at(went.at)
-            if went.outcome != "didnt_move":
+            if went.steps.any() or went.outcome not in ("didnt_move", "unsure"):
                 self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
             return went.text(direction.replace("_", " and "))
         return "ok"
@@ -526,7 +526,8 @@ class Agent:
                 # The view may have moved meanwhile (buttons pressed, a door): find it.
                 fresh = await asyncio.to_thread(self.area.resume, rgb, g)
             else:
-                fresh = self.area.track(rgb, g)
+                # Off the event loop, so listening and speech keep up while walking.
+                fresh = await asyncio.to_thread(self.area.track, rgb, g)
         except (ValueError, IndexError) as exc:
             self.area.reset()  # never let the map stop a walk
             fresh = True
