@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import numpy as np
+import openai
 
 from .areamap import AreaMap
 from .controls import BUTTONS, DIRECTIONS, Controls
@@ -31,11 +32,15 @@ TOOLS = [
             "buttons": {"type": "array", "items": {"type": "string", "enum": AGENT_BUTTONS},
                         "description": "Buttons to press one after another."},
             "gap_ms": {"type": "integer", "description": "Pause between presses, default 150."},
+            "say": {"type": "string", "description": "Said out loud before pressing: the "
+                    "dialogue line on screen (who, then the line word for word) when a "
+                    "moves it on, so it's one step."},
         }, "required": ["buttons"]}}},
     {"type": "function", "function": {
         "name": "hold",
-        "description": "Hold a button, or push a stick in a direction, for a while. Use "
-                       "the left stick to walk.",
+        "description": "Hold a button or d-pad direction for a while (2D games walk with "
+                       "the d-pad), or push a stick in a direction (3D games walk with the "
+                       "left stick).",
         "parameters": {"type": "object", "properties": {
             "input": {"type": "string", "enum": ["left_stick", "right_stick", *AGENT_BUTTONS]},
             "direction": {"type": "string", "enum": list(DIRECTIONS)},
@@ -46,8 +51,8 @@ TOOLS = [
         "description": "Walk the player's character to something you can see on screen: "
                        "a door, stairs, a person, a chest, an exit. For games seen from "
                        "above (2D, top-down or angled); it steers by itself, goes around "
-                       "what's in the way, and stops next to it, facing it. Then press a "
-                       "to talk to it or open it. Not for 3D games with the camera behind "
+                       "what's in the way, and stops next to it, facing it. To talk to "
+                       "it, open or search it, use talk_to instead. Not for 3D games with the camera behind "
                        "the character.",
         "parameters": {"type": "object", "properties": {
             "target": {"type": "string", "description": "What to walk to, described so "
@@ -135,7 +140,11 @@ TOOLS = [
 ]
 
 
+FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
 MOVES = {"up", "down", "left", "right", "lb", "rb"}
+# Something broke while walking (not the model's arguments): the model hears it failed.
+WALK_ERRORS = (ValueError, TypeError, IndexError, OSError, RuntimeError, openai.APIError)
+WALK_FAILED = ("blocked", "timeout", "lost", "not_found")
 
 
 def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
@@ -296,19 +305,36 @@ class Agent:
         """
         await asyncio.sleep(0.08)
         still = max(0.004, (noise or 0.0) * 1.3 + 0.002)
-        prev = await self.grab()
+        seen = [(time.monotonic(), await self.grab())]
         end = time.monotonic() + self.max_settle_s
+        calm = 0
         while time.monotonic() < end:
             await asyncio.sleep(0.05)
-            cur = await self.grab()
-            if screen_change(prev, cur) <= still:
+            now, cur = time.monotonic(), await self.grab()
+            # Against a frame a quarter second back, not the last one: text typing out
+            # a few letters at a time looks still from one frame to the next.
+            old = [f for t, f in seen if now - t >= 0.25]
+            seen.append((now, cur))
+            if not old:
+                continue
+            calm = calm + 1 if screen_change(old[-1], cur) <= still else 0
+            if calm >= 2:
                 return cur
-            prev = cur
-        return prev
+        return seen[-1][1]
 
     async def _act(self, name: str, a: dict) -> str:
         if name == "press":
-            buttons = [b for b in a.get("buttons", []) if b in AGENT_BUTTONS][:12]
+            asked = a.get("buttons") or []
+            if isinstance(asked, str):
+                asked = [asked]  # one button given bare, not a list of letters
+            asked = [str(b) for b in asked]
+            buttons = [b for b in asked if b in AGENT_BUTTONS][:12]
+            ignored = [b for b in asked if b not in AGENT_BUTTONS]
+            if not buttons:
+                return (f"nothing pressed: {', '.join(ignored) or 'no buttons'} isn't a "
+                        f"button; use {', '.join(AGENT_BUTTONS)}")
+            if str(a.get("say") or "").strip():
+                await self._speak(str(a["say"]))
             held_back = ""
             if self.look_before_confirm:
                 buttons, held_back = split_before_confirm(buttons)
@@ -326,7 +352,9 @@ class Agent:
                 if i < len(buttons) - 1:
                     await asyncio.sleep(gap / 1000)
             done = f"pressed {' '.join(buttons)}"
-            if buttons == ["a"]:
+            if ignored:
+                done += f" (ignored {', '.join(ignored)}: not buttons)"
+            if buttons == ["a"] and not str(a.get("say") or "").strip():
                 # The player can't read along: a text box skipped is story lost.
                 done += (". If a new line of dialogue shows now, say it word for word "
                          "(who, then the line) before pressing again.")
@@ -338,7 +366,9 @@ class Agent:
             self.on_action(name, a)
         if name == "wait":
             secs = max(0.5, min(float(a.get("seconds") or 2), 8.0))
-            await asyncio.sleep(secs)
+            end = time.monotonic() + secs
+            while time.monotonic() < end and not self.cancelled:
+                await asyncio.sleep(0.05)  # "stop" ends the wait at once
             return f"waited {secs:g} s"
         if name == "hold":
             await self.go.wait()
@@ -352,11 +382,22 @@ class Agent:
                 d = a.get("direction", "up")
                 await asyncio.to_thread(self.controls.stick, inp.split("_")[0], d, ms)
                 return f"held {inp} {d} for {ms} ms"
-            if inp in ANGLES and ms >= 400 and self._walker is not None:
-                # Walking by d-pad in a game it has walked in: watch it, so the model
-                # learns how far it went or what stopped it, not just that it held.
+            if inp in ANGLES and ms >= 400 and self._walker is not None \
+                    and self._walker.memory is not None and await self._still_me(self._walker):
+                # Walking by d-pad where it has walked and the character is in view:
+                # watch it, so the model learns how far it went or what stopped it.
                 return await self._act("keep_walking", {"direction": inp,
                                                         "seconds": ms / 1000})
+            if inp in ANGLES:
+                # Held as a steer, so "stop" lets go at once instead of after the hold.
+                end = time.monotonic() + ms / 1000
+                try:
+                    self.controls.steer(ANGLES[inp])
+                    while time.monotonic() < end and not self.cancelled and self.go.is_set():
+                        await asyncio.sleep(0.02)
+                finally:
+                    self.controls.steer(None)
+                return f"held {inp} for {ms} ms"
             await asyncio.to_thread(self.controls.press, inp, ms)
             return f"held {inp} for {ms} ms"
         if name == "talk_to":
@@ -382,7 +423,7 @@ class Agent:
             try:
                 await self._find_me(walker)
                 walked = await walker.walk(target, me)
-            except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
+            except WALK_ERRORS as exc:
                 # Not the model's arguments: something broke while walking.
                 self.controls.steer(None)
                 return f"walking failed ({exc}); walk with the d-pad instead"
@@ -419,7 +460,7 @@ class Agent:
                 await self._find_me(walker)
                 walked = await walker.walk_toward(
                     lambda: tuple(self.area.to_screen(spot)), label)
-            except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
+            except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"
             steps = walker.travel / walker.size if walker.size else None
@@ -439,7 +480,7 @@ class Agent:
                 went = await keep_walking(self.walker_image, self.controls.steer, direction,
                                           secs, self.walker_keep_going, walker.memory,
                                           walker.log)
-            except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
+            except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc}); hold the d-pad instead"
             if went.at is None:
@@ -452,15 +493,22 @@ class Agent:
             return went.text(direction.replace("_", " and "))
         return "ok"
 
+    async def _still_me(self, walker: Walker) -> bool:
+        """Whether the character last walked is still in view near where it was (it may
+        have been moved by hand, or gone through a door); updates where it is."""
+        rgb = small(await self.walker_image())[0]
+        if walker.memory is None:  # a new place, seen just now
+            return False
+        look, at, (bw, bh) = walker.memory
+        x, y, score = look.find(rgb, (at[0], at[1]), 3 * max(bw, bh))
+        walker.memory = (look, np.array([x, y]), (bw, bh)) if score > 0.6 else None
+        return walker.memory is not None
+
     async def _find_me(self, walker: Walker) -> None:
         """New to this area: which character is the player's, by moving it a little. The
         model often can't tell (two people with red hair, a mother at the bedside)."""
         if walker.memory is not None:
-            # Still there? It may have been moved since (by hand, or through a door).
-            look, at, (bw, bh) = walker.memory
-            rgb = small(await self.walker_image())[0]
-            x, y, score = look.find(rgb, (at[0], at[1]), 3 * max(bw, bh))
-            walker.memory = (look, np.array([x, y]), (bw, bh)) if score > 0.6 else None
+            await self._still_me(walker)
         if walker.memory is None:
             walker.memory = await find_me(self.walker_image, self.controls.steer,
                                           self.walker_keep_going, walker.log)
@@ -486,6 +534,11 @@ class Agent:
                 self._walker.log(f"area map reset ({exc})")
         if fresh:
             self._map_gen += 1  # a new place: points on the old map mean nothing
+            # Somewhere else now: where the character was and the walks so far belong
+            # to the last place (a walk through a door also says how it got here).
+            if self._walker is not None:
+                self._walker.memory = None
+            self.trail.clear("entered this area")
         now = self._walker._now if self._walker is not None else None
         if now is not None:
             self.area.character_at(now[1])
@@ -508,8 +561,25 @@ class Agent:
                                   self.walker_keep_going, note, say=self._speak)
         return self._walker
 
+    def _check_walk(self, name: str, result: str) -> str:
+        """Two walks in a row that didn't get there: say plainly that way is cut off, so
+        the model stops rewording the same target."""
+        if name not in ("walk_to", "talk_to", "walk_to_map"):
+            return result
+        if result.split(":", 1)[0] not in WALK_FAILED:
+            self._failed_walks = 0
+            return result
+        self._failed_walks += 1
+        if self._failed_walks >= 2:
+            result += (". That's two walks in a row that didn't get there: that way is cut "
+                       "off from here. Don't aim at it again, however you name it; look at "
+                       "area_map, or keep_walking a direction you haven't tried, or tell the "
+                       "player.")
+        return result
+
     async def run(self, request: str, frame: Frame | None = None) -> Run:
         t0 = time.monotonic()
+        self._failed_walks = 0
         run = Run(request)
         self.cancelled = False
         self.said: list[str] = []
@@ -530,7 +600,8 @@ class Agent:
                 run.outcome = "cancelled"
                 break
             t_model = time.monotonic()
-            msg = await self.muse.tools(trim_images(msgs), TOOLS)
+            last_turn = _turn == self.max_turns - 1
+            msg = await self.muse.tools(trim_images(msgs), FINISH_ONLY if last_turn else TOOLS)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
@@ -564,9 +635,18 @@ class Agent:
                     args = {}
                 step = Step(c.function.name, args, time.monotonic() - t0)
                 run.steps.append(step)
-                if c.function.name == "say":
-                    await self._speak(args.get("text", ""))
-                    result = "said"
+                if finished is not None:
+                    result = "ignored: it came after finish"
+                elif c.function.name == "finish" and acted:
+                    # It hasn't seen what its presses did: no telling the player yet.
+                    result = "not finished: look at the screen after those actions first"
+                elif c.function.name == "say":
+                    text = str(args.get("text") or "")
+                    if self._already_said(text):
+                        result = "you just said that; don't say it again"
+                    else:
+                        await self._speak(text)
+                        result = "said"
                 elif c.function.name == "ask_player":
                     question = args.get("question", "")
                     if self.ask is None:
@@ -588,6 +668,7 @@ class Agent:
                     except (TypeError, ValueError, KeyError) as exc:
                         result = f"bad arguments ({exc}); fix them and try again"
                     acted = True
+                    result = self._check_walk(c.function.name, result)
                 step.result = result
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
             if self.cancelled:
@@ -596,11 +677,13 @@ class Agent:
             if finished is not None:
                 if finished and not self._already_said(finished):
                     await self._speak(finished)
-                run.outcome = finished
+                # Kept for the next request's history even when say already said it.
+                run.outcome = finished or (self.said[-1] if self.said else "done")
                 break
             turn["act_s"] = round(time.monotonic() - t_act, 2)
             t_look = time.monotonic()
-            frame = await self._settled(noise) if acted else await self.grab()
+            # After a say too: the model may be waiting for text still typing out.
+            frame = await self._settled(noise)
             turn["look_s"] = round(time.monotonic() - t_look, 2)
             last = _turn == self.max_turns - 2
             shown = []

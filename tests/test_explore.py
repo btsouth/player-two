@@ -361,3 +361,55 @@ async def test_the_agent_maps_the_area_and_walks_back_to_a_spot_on_the_map():
     muse.replies = [("walk_to_map", through_a_door), ("finish", {"text": "ok"})]
     await agent.run("go back there")
     assert "different area" in muse.results[-1], muse.results
+
+
+async def test_holding_the_d_pad_in_a_menu_is_just_a_hold():
+    import json
+    from types import SimpleNamespace
+
+    from playertwo.agent import Agent
+    from playertwo.controls import DryRun
+    from playertwo.screen import Frame
+
+    world = World()
+    menu = False
+
+    class Pad(DryRun):
+        def steer(self, angle, strength=1.0):
+            super().steer(angle, strength)
+            world.steer(angle)
+
+    class Muse:
+        s = SimpleNamespace(image_max_side=640)
+
+        def __init__(self):
+            self.replies: list = []
+            self.results: list = []
+
+        async def tools(self, messages, tools, effort=None, max_tokens=0):
+            self.results = [m["content"] for m in messages if m["role"] == "tool"]
+            name, args = self.replies.pop(0)
+            call = SimpleNamespace(id="c", function=SimpleNamespace(
+                name=name, arguments=json.dumps(args)),
+                model_dump=lambda: {"id": "c", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(args)}})
+            return SimpleNamespace(content="", tool_calls=[call])
+
+    async def grab():
+        if menu:  # a full-screen menu: no character anywhere
+            return Frame(Image.new("RGB", World.VIEW, (20, 20, 90)), 0)
+        return Frame(await world.grab(), 0)
+
+    async def speak(_text):
+        pass
+
+    pad, muse = Pad(), Muse()
+    agent = Agent(muse, pad, grab, speak, max_settle_s=0.1)
+    muse.replies = [("keep_walking", {"direction": "left", "seconds": 1}),
+                    ("finish", {"text": "ok"})]
+    await agent.run("walk left a bit")
+    menu = True
+    pad.log.clear()
+    muse.replies = [("hold", {"input": "down", "ms": 600}), ("finish", {"text": "ok"})]
+    await agent.run("scroll down the list")
+    assert pad.log == ["steer:180", "steer:off"], pad.log  # no wiggle left and right first

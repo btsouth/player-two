@@ -512,3 +512,70 @@ async def test_two_lines_at_once_are_said_one_after_the_other():
     v.stop()
     await asyncio.gather(first, waiting)
     assert "Nine." not in heard
+
+
+class TestAgentHonesty:
+    make = TestAgent.make
+
+    def test_a_bare_button_name_is_one_press_and_nonsense_presses_nothing(self):
+        agent, pad, _, _, muse = self.make([
+            [("press", {"buttons": "start"})],
+            [("press", {"buttons": ["jump"]})],
+            [("finish", {"text": "ok"})],
+        ])
+        run(agent.run("open the menu"))
+        assert pad.log == ["start"]  # not s, t, a, r, t
+        results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+        assert results[1].startswith("nothing pressed")
+
+    def test_the_line_is_said_before_the_press_that_moves_it_on(self):
+        agent, pad, said, _, _ = self.make([
+            [("press", {"buttons": ["a"], "say": "Mom: Crono! Wake up!"})],
+            [("finish", {"text": "Mom's waking you up."})],
+        ])
+        run(agent.run("read it to me"))
+        assert said[0] == "Mom: Crono! Wake up!" and pad.log == ["a"]
+
+    def test_no_finishing_before_looking_and_no_saying_it_twice(self):
+        agent, _pad, said, _, muse = self.make([
+            [("press", {"buttons": ["b"]}), ("finish", {"text": "Closed it."})],
+            [("say", {"text": "The menu is closed."})],
+            [("say", {"text": "The menu is closed."})],
+            [("finish", {"text": ""})],
+        ])
+        result = run(agent.run("close the menu"))
+        results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+        assert results[1].startswith("not finished")
+        assert said == ["The menu is closed."]
+        assert "don't say it again" in results[3]
+        assert result.outcome == "The menu is closed."  # kept for the next request
+
+    def test_two_failed_walks_in_a_row_say_that_way_is_cut_off(self):
+        agent, _, _, _, muse = self.make([
+            [("walk_to", {"target": "the fair"})],
+            [("walk_to", {"target": "the colorful tents"})],
+            [("finish", {"text": "I can't get there from here."})],
+        ])
+
+        async def blocked(name, a):
+            return "blocked: something is in the way, about 6 steps up from it (20.0 s)"
+
+        agent._act = blocked
+        run(agent.run("take me to the fair"))
+        results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+        assert "cut off" not in results[0] and "cut off" in results[1]
+
+    def test_the_last_turn_can_only_finish(self):
+        agent, _, _, _, muse = self.make([[("wait", {"seconds": 0.5})]] * 2
+                                         + [[("finish", {"text": "Still loading."})]])
+        agent.max_turns = 3
+        tools_seen = []
+        real = muse.tools
+
+        async def tools(messages, tools, **kw):
+            tools_seen.append([t["function"]["name"] for t in tools])
+            return await real(messages, tools, **kw)
+
+        muse.tools = tools
+        run(agent.run("wait for it"))
+        assert tools_seen[-1] == ["finish"] and len(tools_seen[0]) > 1
