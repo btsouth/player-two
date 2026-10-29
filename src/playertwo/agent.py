@@ -245,7 +245,7 @@ class Agent:
             held_back = ""
             if self.look_before_confirm:
                 buttons, held_back = split_before_confirm(buttons)
-            gap = max(60, min(int(a.get("gap_ms") or 150), 1000))
+            gap = max(60, min(int(float(a.get("gap_ms") or 150)), 1000))
             if self.on_action:
                 self.on_action(name, {**a, "buttons": buttons})
             # One press at a time, so "stop" takes effect between presses.
@@ -259,6 +259,10 @@ class Agent:
                 if i < len(buttons) - 1:
                     await asyncio.sleep(gap / 1000)
             done = f"pressed {' '.join(buttons)}"
+            if buttons == ["a"]:
+                # The player can't read along: a text box skipped is story lost.
+                done += (". If a new line of dialogue shows now, say it word for word "
+                         "(who, then the line) before pressing again.")
             if held_back:
                 done += (". Stopped before confirming: look at what is highlighted now. If it "
                          "is what the player wants, press a on its own; if not, fix it first.")
@@ -273,7 +277,7 @@ class Agent:
             await self.go.wait()
             if self.cancelled:
                 return "stopped by the player"
-            ms = max(50, min(int(a.get("ms") or 500), 5000))
+            ms = max(50, min(int(float(a.get("ms") or 500)), 5000))
             inp = a.get("input") or "left_stick"
             if not (inp in ("left_stick", "right_stick") or inp in AGENT_BUTTONS):
                 return f"can't hold {inp!r}"

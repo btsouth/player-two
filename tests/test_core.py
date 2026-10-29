@@ -140,6 +140,15 @@ class TestAgent:
         assert said == ["Done."]
         assert result.outcome == "Done."
 
+    def test_numbers_sent_as_text_or_decimals_still_work(self):
+        agent, pad, _, _, _ = self.make([
+            [("hold", {"input": "left_stick", "direction": "up", "ms": "400.0"})],
+            [("press", {"buttons": ["down", "down"], "gap_ms": 90.5})],
+            [("finish", {"text": "Done."})],
+        ])
+        run(agent.run("walk up"))
+        assert pad.log == ["left:up:400", "down", "down"]
+
     def test_an_answer_isnt_followed_by_done(self):
         agent, _, said, _, _ = self.make([
             [("say", {"text": "You're on a stage, with Yosuke next to you."})],
