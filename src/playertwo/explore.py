@@ -217,8 +217,8 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
     """Which character is the player's: tap the d-pad one way and back, and see what
     starts and stops moving with it. Someone else on screen (another person with red
     hair, a mother at the bedside) walks on their own time, and a party member following
-    catches up after the d-pad is let go. None if nothing moved with it (a text box, a
-    cutscene)."""
+    catches up after the d-pad is let go, and what moved has to have gone the way it was
+    held. None if nothing moved with it (a text box, a cutscene)."""
     rgb, prev = small(await grab())
     h, w = prev.shape
     bw, bh = round(w / 30), round(h / 11)
@@ -228,12 +228,14 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
 
     last = np.zeros((h, w), np.float32)
 
-    async def watch(angle: float | None, secs: float) -> np.ndarray:
+    async def watch(angle: float | None, secs: float) -> tuple[np.ndarray, np.ndarray]:
+        """What moved, on average a frame, and how far the view scrolled."""
         nonlocal rgb, prev, last
         if keep_going is not None and not await keep_going():
             raise _Stopped
         steer(angle)
         total = np.zeros((h, w), np.float32)
+        scrolled = np.zeros(2)
         frames = 0
         end = time.monotonic() + secs
         while time.monotonic() < end:
@@ -247,20 +249,23 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
             sx, sy, _ = phase_shift(prev, g)
             last = motion(prev, g, (sx, sy))
             total += last
+            scrolled += (sx, sy)
             frames += 1
             prev = g
-        return total / max(frames, 1)
+        return total / max(frames, 1), scrolled
 
     try:
-        rest += await watch(None, 0.25)
+        rest += (await watch(None, 0.25))[0]
         rests += 1
         for there, back in ((270, 90), (0, 180)):
-            moved = [await watch(there, 0.3)]
-            rest += await watch(None, 0.3)
-            moved.append(await watch(back, 0.3))
+            went, view_there = await watch(there, 0.3)
+            gone = last  # where it moved last going there
+            rest += (await watch(None, 0.3))[0]
+            came, view_back = await watch(back, 0.3)
             now = last  # where it moved last, so where it is
-            rest += await watch(None, 0.3)
+            rest += (await watch(None, 0.3))[0]
             rests += 2
+            moved = [went, came]
             still = _box_means(rest / rests, bw, bh)
             # What moved both ways (or the one way it could, up against a wall), and not
             # while the d-pad was let go.
@@ -272,6 +277,12 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
             iy, ix = np.unravel_index(int(np.argmax(score)), score.shape)
             # Over the way it walked, there and back: where it is now is the end of it.
             x, y, _ = spot(now, (ix + bw / 2, iy + bh / 2), max(bw, bh), (bw, bh))
+            out = spot(gone, (x, y), 2 * max(bw, bh), (bw, bh))
+            if not _with_the_pad(there, view_there, view_back, np.array(out[:2]),
+                                 np.array([x, y]), bw):
+                if log is not None:
+                    log(f"find_me: what moved at {x:.0f},{y:.0f} didn't go the way held")
+                continue
             best = (x, y, float(score[iy, ix]))
             break
     except _Stopped:
@@ -289,6 +300,18 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
     if not look.usable:
         return None
     return look, np.array([x, y]), (bw, bh)
+
+
+def _with_the_pad(there: float, view_there: np.ndarray, view_back: np.ndarray,
+                  after_there: np.ndarray, after_back: np.ndarray, size: float) -> bool:
+    """Whether what moved went the way the d-pad was held, `there` and back: the view
+    scrolled against it (the camera following the character), or on a still screen it
+    was further that way after going there than after coming back. Someone pacing on
+    their own time rarely does both."""
+    u = np.array([np.sin(np.radians(there)), -np.cos(np.radians(there))])
+    if float(np.dot(-view_there, u)) > 2 or float(np.dot(view_back, u)) > 2:
+        return True
+    return float(np.dot(after_there - after_back, u)) > 0.5 * size
 
 
 @dataclass

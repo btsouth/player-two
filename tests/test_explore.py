@@ -1,8 +1,10 @@
 """Walking on into what isn't on screen yet, and the rough map of an area."""
 
+import asyncio
 import math
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw, ImageFilter
 
 from playertwo.explore import Trail, find_me, keep_walking, words
@@ -306,13 +308,23 @@ class Crowd(World):
         return view
 
 
-async def test_finds_which_character_is_the_players_by_moving_it():
+def slow(world, seconds):
+    """world.grab, taking `seconds` longer, like a slow capture (Windows CI)."""
+    async def grab():
+        await asyncio.sleep(seconds)
+        return await world.grab()
+    return grab
+
+
+@pytest.mark.parametrize("lag", [0.0, 0.04])
+async def test_finds_which_character_is_the_players_by_moving_it(lag):
     # In a room, the other one pacing in the middle of the screen, where a guess would
     # look first, and the player's character off to the side.
     for kw in ({}, {"room": True, "start": (960, 560), "other": (1180, 670)},
                {"follower": True}):
-        world = Crowd(**kw)
-        me = await find_me(world.grab, world.steer)
+        # The same speed a second, as in a real game: a frame takes about 35 ms here.
+        world = Crowd(speed=7.0 * (1 + lag / 0.035), **kw)
+        me = await find_me(slow(world, lag), world.steer)
         assert me is not None, kw
         _look, at, _size = me
         # On screen, in the tracked (480 wide) frame.
@@ -321,10 +333,13 @@ async def test_finds_which_character_is_the_players_by_moving_it():
         assert world.stick is None
 
 
-async def test_finds_nobody_when_the_d_pad_moves_nothing():
+@pytest.mark.parametrize("lag", [0.0, 0.03, 0.08])
+async def test_finds_nobody_when_the_d_pad_moves_nothing(lag):
+    # Someone pacing behind a text box mustn't be taken for the character, however
+    # their steps line up with the d-pad's.
     world = Crowd()
     world.text_box = True
-    assert await find_me(world.grab, world.steer) is None
+    assert await find_me(slow(world, lag), world.steer) is None
 
 
 async def test_the_agent_remembers_what_it_learned_about_a_game(tmp_path):
