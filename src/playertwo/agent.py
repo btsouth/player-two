@@ -144,7 +144,7 @@ def trim_images(msgs: list[dict], keep: int = KEEP_IMAGES) -> list[dict]:
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
-                 max_turns: int = 24, max_settle_s: float = 1.5,
+                 max_turns: int = 32, max_settle_s: float = 1.5,
                  ask: Callable[[str], Awaitable[str]] | None = None,
                  confirm: str = "important", language: str = "English",
                  on_action: Callable[[str, dict], None] | None = None,
