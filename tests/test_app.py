@@ -277,5 +277,8 @@ async def test_scripted_presses_for_a_known_start(tmp_path):
     assert await s.command("press start wait0 down*2 a") == "ok"
     assert s.controls.log == ["start", "down", "down", "a"]
     assert (await s.command("press jump")).startswith("unknown button")
+    assert (await s.command("press a*x")).startswith("can't read")
+    assert s.controls.log == ["start", "down", "down", "a"]  # nothing pressed for a bad line
+    assert (await s.command("shot now.png")).startswith("give")
     await s.command(f"shot {tmp_path / 'now.png'}")
     assert Image.open(tmp_path / "now.png").size == (64, 36)

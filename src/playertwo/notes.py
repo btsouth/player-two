@@ -41,16 +41,24 @@ class GameNotes:
         return [line.strip()[2:].strip() if line.strip().startswith("- ") else line.strip()
                 for line in text.splitlines() if line.strip()]
 
-    def add(self, game: str, note: str) -> str:
-        """Keep `note` for `game`. A note much like an older one replaces it (the newer
-        is the better), so correcting a note doesn't leave both."""
+    def add(self, game: str, note: str, instead_of: str = "") -> str:
+        """Keep `note` for `game`. `instead_of` names an older note it corrects, which
+        goes; the same note again isn't kept twice. Notes that only sound alike ("the
+        inn is north of the square", "the shop is north of the square") both stay."""
         note = " ".join(note.split())[:300]
         if not game or not note:
             return "nothing to remember"
         notes = self.read(game)
-        new = _words(note)
-        kept = [n for n in notes
-                if not new or len(_words(n) & new) / max(len(_words(n) | new), 1) < 0.6]
+
+        def like(a: str, b: str) -> float:
+            wa, wb = _words(a), _words(b)
+            return len(wa & wb) / max(len(wa | wb), 1)
+
+        kept = [n for n in notes if like(n, note) < 0.9]
+        if instead_of.strip():
+            old = max(kept, key=lambda n: like(n, instead_of), default=None)
+            if old is not None and like(old, instead_of) >= 0.5:
+                kept.remove(old)
         replaced = len(kept) < len(notes)
         kept = [*kept, note][-MAX_NOTES:]
         self.folder.mkdir(parents=True, exist_ok=True)

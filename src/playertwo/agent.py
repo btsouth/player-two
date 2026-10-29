@@ -9,6 +9,8 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from .areamap import AreaMap
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .explore import ANGLES, Trail, find_me, keep_walking
@@ -118,10 +120,12 @@ TOOLS = [
                        "seen it hold: which button opens the menu or skips text, how "
                        "battles work, where a place or person is and how to get there, "
                        "what the player's character looks like. Not things that change "
-                       "(health, what's on screen now). A new note replaces a similar "
-                       "older one.",
-        "parameters": {"type": "object", "properties": {"note": {"type": "string"}},
-                       "required": ["note"]}}},
+                       "(health, what's on screen now).",
+        "parameters": {"type": "object", "properties": {
+            "note": {"type": "string"},
+            "instead_of": {"type": "string", "description": "An earlier note this one "
+                           "corrects, as it was written, so the wrong one goes."},
+        }, "required": ["note"]}}},
     {"type": "function", "function": {
         "name": "finish",
         "description": "The request is done (or can't be done). Tell the player in one "
@@ -220,6 +224,9 @@ class Agent:
         self.trail = Trail()  # a rough map of the area from where walks went
         self.area = AreaMap()  # the area as seen while walking, stitched together
         self._map_image = None  # the map as last shown to the model
+        self._map_shown = -1    # which map that was (_map_gen when shown)
+        self._map_gen = 0       # counts new maps: one per area
+        self._map_fed = 0.0     # when a frame last went on it
         self._show_map = False
         self.notes = notes or GameNotes()
         # Cleared while the player holds the talk key: no presses or speech until it's
@@ -383,14 +390,19 @@ class Agent:
             self.trail.add(f"walk_to {target}", walked.outcome, steps)
             return walked.text()
         if name == "area_map":
-            if not self.area.frames:
+            await self.walker_image()  # the screen now: maybe somewhere new since
+            if self.area.frames < 2:
                 return "no map yet: nothing has been walked in this area"
             self._map_image = self.area.image(marks=None)
+            self._map_shown = self._map_gen
             self._show_map = True
             return "the map comes with the next screen"
         if name == "walk_to_map":
             if self._map_image is None:
                 return "look at area_map first"
+            await self.walker_image()
+            if self._map_shown != self._map_gen:
+                return "this is a different area from the map you saw: look at area_map again"
             try:
                 x = max(0.0, min(float(a.get("x")), 1000.0))
                 y = max(0.0, min(float(a.get("y")), 1000.0))
@@ -434,6 +446,7 @@ class Agent:
                 walker.memory = None
             elif walker.memory is not None:
                 walker.memory = (walker.memory[0], went.at, walker.memory[2])
+                self.area.character_at(went.at)
             if went.outcome != "didnt_move":
                 self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
             return went.text(direction.replace("_", " and "))
@@ -442,16 +455,37 @@ class Agent:
     async def _find_me(self, walker: Walker) -> None:
         """New to this area: which character is the player's, by moving it a little. The
         model often can't tell (two people with red hair, a mother at the bedside)."""
+        if walker.memory is not None:
+            # Still there? It may have been moved since (by hand, or through a door).
+            look, at, (bw, bh) = walker.memory
+            rgb = small(await self.walker_image())[0]
+            x, y, score = look.find(rgb, (at[0], at[1]), 3 * max(bw, bh))
+            walker.memory = (look, np.array([x, y]), (bw, bh)) if score > 0.6 else None
         if walker.memory is None:
             walker.memory = await find_me(self.walker_image, self.controls.steer,
                                           self.walker_keep_going, walker.log)
+        if walker.memory is not None:
+            self.area.character_at(walker.memory[1])
 
     async def walker_image(self):
         img = (await self.grab()).image
         # Every frame a walk looks at goes on the map; it starts over in a new place.
         rgb, g = small(img)
-        if self.area.track(rgb, g):
-            self._map_image = None  # a new place: points on the old map mean nothing
+        gap = time.monotonic() - self._map_fed > 0.3
+        self._map_fed = time.monotonic()
+        try:
+            if gap:
+                # The view may have moved meanwhile (buttons pressed, a door): find it.
+                fresh = await asyncio.to_thread(self.area.resume, rgb, g)
+            else:
+                fresh = self.area.track(rgb, g)
+        except (ValueError, IndexError) as exc:
+            self.area.reset()  # never let the map stop a walk
+            fresh = True
+            if self._walker is not None:
+                self._walker.log(f"area map reset ({exc})")
+        if fresh:
+            self._map_gen += 1  # a new place: points on the old map mean nothing
         now = self._walker._now if self._walker is not None else None
         if now is not None:
             self.area.character_at(now[1])
@@ -543,7 +577,8 @@ class Agent:
                         result = f'The player said: "{answer}"' if answer else (
                             "No answer. Don't do it; finish and say you'll wait.")
                 elif c.function.name == "remember":
-                    result = self.notes.add(self.game, str(args.get("note") or ""))
+                    result = self.notes.add(self.game, str(args.get("note") or ""),
+                                            str(args.get("instead_of") or ""))
                 elif c.function.name == "finish":
                     finished = (args.get("text") or "").strip()
                     result = "finished"

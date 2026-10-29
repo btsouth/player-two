@@ -278,12 +278,18 @@ async def test_the_agent_remembers_what_it_learned_about_a_game(tmp_path):
                  ("finish", {"text": "ok"})])
     await Agent(muse, DryRun(), grab, speak, game="Chrono Trigger", notes=notes).run("hi")
     # A later session, a fresh agent: it knows them from the start.
-    muse = Muse([("remember", {"note": "Y opens the main menu."}), ("finish", {"text": "ok"})])
+    muse = Muse([("remember", {"note": "Y opens the main menu.",
+                               "instead_of": "X opens the main menu."}),
+                 ("remember", {"note": "The inn is north of the square."}),
+                 ("remember", {"note": "The shop is north of the square."}),
+                 ("finish", {"text": "ok"})])
     await Agent(muse, DryRun(), grab, speak, game="Chrono Trigger", notes=notes).run("hi")
     assert "X opens the main menu." in muse.systems[0]
     # A correction replaces the old note rather than keeping both.
     assert notes.read("Chrono Trigger") == ["Battles don't pause: set Battle Mode to Wait.",
-                                            "Y opens the main menu."]
+                                            "Y opens the main menu.",
+                                            "The inn is north of the square.",
+                                            "The shop is north of the square."]
     assert notes.read("Another Game") == []
 
 
@@ -346,3 +352,12 @@ async def test_the_agent_maps_the_area_and_walks_back_to_a_spot_on_the_map():
     assert muse.images[2] == 2  # the map, then the screen
     assert muse.results[2].startswith("arrived"), muse.results
     assert np.hypot(*(world.pos - start)) < 80, (world.pos, start)
+
+    # Through a door between requests: the old map's spots aren't here.
+    def through_a_door():
+        world.world = texture(2400, 1400, seed=11)
+        return {"x": 500, "y": 500}
+
+    muse.replies = [("walk_to_map", through_a_door), ("finish", {"text": "ok"})]
+    await agent.run("go back there")
+    assert "different area" in muse.results[-1], muse.results

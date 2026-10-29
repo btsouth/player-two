@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
 import sys
 import time
@@ -1197,17 +1198,26 @@ class Session:
         elif cmd == "press" and arg:
             # For scripted setups (tests, a known start for a task): no model involved.
             # "start wait2 down*2 a": buttons, pauses in seconds, repeats.
+            plan: list[tuple[str, float]] = []
             for token in arg.split():
-                if token.startswith("wait"):
-                    await asyncio.sleep(min(float(token[4:] or 1), 30))
-                    continue
-                button, _, times = token.partition("*")
-                if button not in BUTTONS:
-                    return f"unknown button: {button}"
-                for _ in range(int(times or 1)):
+                try:
+                    if token.startswith("wait"):
+                        plan.append(("", min(float(token[4:] or 1), 30)))
+                        continue
+                    button, _, times = token.partition("*")
+                    n = int(times or 1)
+                except ValueError:
+                    return f"can't read {token!r}: use a button, button*N or waitSECONDS"
+                if button not in BUTTONS or not 1 <= n <= 50:
+                    return f"unknown button or count: {token}"
+                plan += [(button, 0.25)] * n
+            for button, pause in plan:
+                if button:
                     await asyncio.to_thread(self.controls.press, button)
-                    await asyncio.sleep(0.25)
+                await asyncio.sleep(pause)
         elif cmd == "shot" and arg:
+            if not os.path.isabs(arg):
+                return "give the screenshot a full path"
             (await self.grab_now()).image.save(arg)
         elif cmd == "set":
             key, _, value = arg.partition(" ")

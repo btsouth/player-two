@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .walk import motion, new_place, phase_shift
+from .walk import _edges, motion, new_place, phase_shift
 
 UNSEEN = (64, 64, 64)  # never seen yet: a flat grey no game draws over a whole region
 CAP = 8          # how many sightings a colour can bank: a sprite that stood still this long
@@ -32,6 +32,7 @@ MOVED = 24       # gray levels a pixel changes by, beyond the scroll, to count a
 SEARCH = 2       # pixels each way the placement is checked against the map
 STEP = 3         # every STEP-th pixel each way is compared when checking
 GROW = 256       # the canvas grows by at least this much at a time
+RESUME = 20      # mean gray difference under which a frame after a gap is the same place
 
 
 def _gray(rgb: np.ndarray) -> np.ndarray:
@@ -83,13 +84,72 @@ class AreaMap:
         True when it started a new map."""
         g = _gray(rgb.astype(np.float32)) if gray is None else gray
         fresh = False
-        if self._prev is not None and new_place(self._prev, g):
+        if self._prev is not None and (self._prev.shape != g.shape or new_place(self._prev, g)):
             self.reset()
             fresh = True
         if scroll is None:
             scroll = (0.0, 0.0) if self._prev is None else phase_shift(self._prev, g, mask)[:2]
         self.add(rgb, scroll, g)
         return fresh
+
+    def resume(self, rgb: np.ndarray, gray: np.ndarray | None = None) -> bool:
+        """track() for a frame after a gap (the model thinking, buttons pressed by hand):
+        the view may have moved further than a frame's scroll, or to another place. Finds
+        the frame on the map near where the screen was, or starts a new map if it isn't
+        there. True when it started over."""
+        g = _gray(rgb.astype(np.float32)) if gray is None else np.asarray(gray, np.float32)
+        h, w = g.shape
+        if self.frames == 0 or self.view != (w, h):
+            fresh = self.frames > 0
+            self.reset()
+            self.add(rgb, (0.0, 0.0), g)
+            return fresh
+        old = self._known(self.camera, g.shape)
+        if old is not None:
+            base, _ = old
+            sx, sy, _ = phase_shift(base, g, limit=min(120, h // 2 - 2))
+            cam = self.camera - np.array([sx, sy])
+            new = self._known(cam, g.shape)
+            # The same place if the frame matches what the map has there.
+            if new is None or float(np.abs(new[0] - g)[new[1]].mean()) >= RESUME:
+                cam = self._anywhere(g)  # further than that: look over the whole map
+                new = self._known(cam, g.shape)
+            if new is not None and float(np.abs(new[0] - g)[new[1]].mean()) < RESUME:
+                self.camera = cam
+                self._soft = None  # what changed over the gap isn't "moving"
+                self.add(rgb, (0.0, 0.0), g)
+                return False
+        self.reset()
+        self.add(rgb, (0.0, 0.0), g)
+        return True
+
+    def _anywhere(self, g: np.ndarray) -> np.ndarray:
+        """Where on the whole map the frame fits best (phase correlation of their
+        detail), as a camera position."""
+        seen = self._n >= 2
+        m = np.where(seen, self._g, np.float32(self._g[seen].mean()))
+        m = _edges(m) * seen
+        h, w = g.shape
+        f = np.zeros_like(m)
+        f[:h, :w] = _edges(g) * np.outer(np.hanning(h), np.hanning(w)).astype(np.float32)
+        r = np.fft.fft2(m) * np.conj(np.fft.fft2(f))
+        r /= np.abs(r) + 1e-9
+        c = np.fft.ifft2(r).real
+        dy, dx = np.unravel_index(int(np.argmax(c)), c.shape)
+        return np.array([dx + self._origin[0], dy + self._origin[1]], float)
+
+    def _known(self, camera: np.ndarray, shape) -> tuple[np.ndarray, np.ndarray] | None:
+        """The map in gray where a screen at `camera` would be, unseen spots filled in,
+        and which spots were seen; None if too little of it was."""
+        h, w = shape
+        ix, iy = round(camera[0]), round(camera[1])
+        self._fit_canvas(ix, iy, ix + w, iy + h)
+        x0, y0 = ix - self._origin[0], iy - self._origin[1]
+        mg = self._g[y0:y0 + h, x0:x0 + w]
+        sure = self._n[y0:y0 + h, x0:x0 + w] >= 2
+        if sure.mean() < 0.2:
+            return None
+        return np.where(sure, mg, np.float32(mg[sure].mean())), sure
 
     def add(self, rgb: np.ndarray, scroll: tuple[float, float],
             gray: np.ndarray | None = None) -> np.ndarray:

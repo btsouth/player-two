@@ -372,6 +372,7 @@ class Walker:
         def done(outcome: str, detail: str) -> Walked:
             self.steer(None)
             self.memory = self._now if outcome != "new_area" else None
+            self._now = None  # where it is between walks is memory's, once checked
             if self.size and np.hypot(*self.travel) > self.size:
                 detail += f"; walked {self._words(self.travel, self.size)} in all"
             return Walked(outcome, detail, time.monotonic() - t0)

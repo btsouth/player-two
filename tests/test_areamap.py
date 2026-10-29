@@ -219,3 +219,29 @@ def test_track_measures_scroll_and_starts_over_in_a_new_place():
     dark = np.zeros((270, 480, 3), np.uint8)
     assert area.track(dark)
     assert area.frames == 1 and area.bounds() == (0, 0, 480, 270)
+
+
+def test_after_a_gap_it_finds_the_screen_on_the_map_or_starts_over():
+    world = World()
+    area = AreaMap()
+    cam0 = walk(world, area, [(90, 60), (180, 30), (270, 60)])
+    # Moved by hand while nobody watched: back where it came in, further than any
+    # frame-to-frame scroll.
+    world.pos = np.array([1200.0, 700.0])
+    assert np.hypot(*(world.camera() / 2 - cam0 - area.camera)) > 60
+    assert not area.resume(*small(world.step(None)))
+    assert np.hypot(*(area.camera - (world.camera() / 2 - cam0))) < 2
+    # Through a door: somewhere else.
+    world.world = texture(2400, 1400, seed=11)
+    assert area.resume(*small(world.step(None)))
+    assert area.frames == 1
+
+
+def test_a_frame_of_another_size_starts_a_new_map_instead_of_failing():
+    world = World()
+    area = AreaMap()
+    for _ in range(5):
+        area.track(*small(world.step(90)))
+    taller = np.zeros((360, 480, 3), np.uint8)
+    assert area.track(taller)
+    assert area.resume(np.zeros((270, 480, 3), np.uint8))
