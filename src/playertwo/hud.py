@@ -156,14 +156,25 @@ class HudWatch:
         self.low, self.critical = low, critical
         self.state: dict[str, str] = {}
         self.last_alert_t: dict[str, float] = {}
+        self._dropped: set[str] = set()  # gone from healthy to empty in one reading
 
     def update(self, img: Image.Image, t: float) -> list[Alert]:
         alerts = []
+        # A fade, a loading screen: the bars are gone, not empty.
+        g = np.asarray(img.convert("L").resize((64, 36)), dtype=np.float32)
+        if g.std() < 5 or (g.mean() < 15 and g.std() < 10):
+            return alerts
         for m in self.meters:
             v = m.measure(img)
             if v is None:
                 continue
             prev = self.state.get(m.name, "ok")
+            if v <= 0.05 and prev == "ok" and m.name not in self._dropped:
+                # Healthy a moment ago and empty now: more often the bar covered (a menu,
+                # a cutscene) than a one-hit loss. Believe it if it's still so next time.
+                self._dropped.add(m.name)
+                continue
+            self._dropped.discard(m.name)
             is_health = "health" in m.name.lower() or m.name.lower() in ("hp", "life")
             if is_health:
                 if v <= self.critical:

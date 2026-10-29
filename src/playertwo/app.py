@@ -32,6 +32,9 @@ LOCAL = [
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
       r"|what do you see|what'?s (going on|happening)"), "describe"),
     (r"help|what can you do|what can i say|commands|list (the )?commands", "help"),
+    # Moving dialogue along without a model turn: a press of a, then the narrator reads
+    # the new line. Not "continue": that's a title screen option.
+    (r"next|next line|next page|press a|hit a", "next"),
     ((r"what'?s wrong|what is wrong|(are you|is everything) (ok|okay|working)|check yourself"
       r"|self check|status( report)?|what'?s (broken|not working)"), "check"),
     (r"(be )?terse|terse mode|just the facts", "terse"),
@@ -70,9 +73,10 @@ def local_action(text: str) -> str | None:
 
 
 HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
-        "open the menu, or: use a potion on Yosuke. You can also say: describe, repeat, "
-        "stop, help, what's wrong, terse, more detail, slower, faster, pause narration, resume "
-        "narration, watch my health, or goodbye.")
+        "open the menu, or: use a potion on Yosuke. You can also say: next, to press A and "
+        "hear the next line, describe, repeat, stop, help, what's wrong, terse, more "
+        "detail, slower, faster, pause narration, resume narration, watch my health, or "
+        "goodbye.")
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
                "window, where you can type to me instead.")
@@ -930,6 +934,12 @@ class Session:
                 self.answer.set_result("")
                 await self.announce("Okay, I won't.", interrupt=True)
                 return
+            if action and action != "next" and not self.agent.cancelled:
+                # "Help", "describe", "slower": a command of its own, not the answer. The
+                # question still waits.
+                await self.local(action)
+                self.voice.cue("listening")
+                return
             if not self.agent.cancelled:
                 self.answer.set_result(text)
                 return
@@ -958,6 +968,9 @@ class Session:
         try:
             run = await self.agent.run(text, self.latest if self.game is not False else None)
         except asyncio.CancelledError:
+            self.controls.steer(None)  # never leave the d-pad held
+            self.events.emit("agent", request=text, outcome="cancelled", steps=[], turns=[],
+                             seconds=0)
             raise
         except Exception as exc:  # noqa: BLE001  say it out loud instead of going silent
             self.trouble(exc, "agent", answer=True)
@@ -1149,11 +1162,26 @@ class Session:
                 self.answer.set_result("")
             if self.agent_task and not self.agent_task.done():
                 # Said now, not when the model's reply comes back: no more presses or
-                # words come from the run after this.
+                # words come from the run after this, and narration is back at once.
                 self.agent.cancel()
+                self.agent_task.cancel()
                 await self.announce("Okay, stopped.", interrupt=True)
         elif action == "repeat":
             await self.voice.say(self.events.last_said or "I haven't said anything yet.")
+        elif action == "next":
+            if self.agent_task and not self.agent_task.done():
+                await self.announce("I'm in the middle of something. Say stop first.")
+                return
+            try:
+                await asyncio.to_thread(self.controls.press, "a")
+            except Exception as exc:  # noqa: BLE001
+                self.trouble(exc, "next", answer=True)
+                return
+            if self.paused:
+                # Narration is off, so read the new screen once, after the text types out.
+                await asyncio.sleep(0.8)
+                with contextlib.suppress(Exception):
+                    self._start_narration(await self.grab_now(), describe=True)
         elif action == "describe":
             try:
                 frame = await self.grab_now()

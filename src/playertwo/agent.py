@@ -35,6 +35,10 @@ TOOLS = [
             "say": {"type": "string", "description": "Said out loud before pressing: the "
                     "dialogue line on screen (who, then the line word for word) when a "
                     "moves it on, so it's one step."},
+            "skipping": {"type": "boolean", "description": "true only when the player asked "
+                         "to skip or fast-forward text or a cutscene: then a can be pressed "
+                         "several times. Otherwise any a after another press waits for you to "
+                         "look first."},
         }, "required": ["buttons"]}}},
     {"type": "function", "function": {
         "name": "hold",
@@ -141,10 +145,13 @@ TOOLS = [
 
 
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 MOVES = {"up", "down", "left", "right", "lb", "rb"}
 # Something broke while walking (not the model's arguments): the model hears it failed.
 WALK_ERRORS = (ValueError, TypeError, IndexError, OSError, RuntimeError, openai.APIError)
-WALK_FAILED = ("blocked", "timeout", "lost", "not_found")
+WALK_FAILED = ("blocked", "timeout", "lost", "not_found", "walking failed")
+# A text box or a cutscene in the way: not the way being cut off, nor a walk that got there.
+WALK_PAUSED = ("didnt_move", "interrupted")
 
 
 def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
@@ -153,16 +160,15 @@ def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
 
 
 def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
-    """Cut a press list just before an `a` that follows cursor movement.
+    """Cut a press list just before an `a` that follows any other press.
 
-    Moving and confirming blind is where wrong picks come from, so the agent has to look
-    at the highlight before every confirm. A lone `a` (advancing dialogue) is fine.
+    Pressing and confirming blind is where wrong picks come from (a menu opened with
+    start, a Yes/No that defaults to Yes, a second `a` that skips a line of dialogue the
+    player never heard), so the agent looks at the screen before every confirm. An `a`
+    first, or on its own, is fine.
     """
-    moved = False
     for i, b in enumerate(buttons):
-        if b in MOVES:
-            moved = True
-        elif b == "a" and moved:
+        if b == "a" and i > 0:
             return buttons[:i], "a"
     return buttons, ""
 
@@ -260,10 +266,11 @@ class Agent:
             await self.speak(text)
 
     def _already_said(self, text: str) -> bool:
-        """Whether the last say already said it (a finish that restates it). Never when
-        the numbers or a "not" differ: "I couldn't open the map" after "I'll open the
-        map" is news."""
-        if not self.said:
+        """Whether the last say already said it (a finish that restates it). Only a say
+        since the last action counts: "Saved the game" after "I'll save the game" and a
+        press is news. Never when the numbers or a "not" differ either: "I couldn't open
+        the map" after "I'll open the map" is news."""
+        if len(self.said) <= self._said_before_act:
             return False
         said = self.said[-1]
 
@@ -336,7 +343,8 @@ class Agent:
             if str(a.get("say") or "").strip():
                 await self._speak(str(a["say"]))
             held_back = ""
-            if self.look_before_confirm:
+            if self.look_before_confirm and not (
+                    a.get("skipping") is True and set(buttons) <= {"a", "b", "start"}):
                 buttons, held_back = split_before_confirm(buttons)
             gap = max(60, min(int(float(a.get("gap_ms") or 150)), 1000))
             if self.on_action:
@@ -398,8 +406,13 @@ class Agent:
                 finally:
                     self.controls.steer(None)
                 return f"held {inp} for {ms} ms"
+            if inp == "a" and ms > 400 and self.look_before_confirm:
+                return ("not held: holding a confirms and skips text the player can't read; "
+                        "press a once and look")
             await asyncio.to_thread(self.controls.press, inp, ms)
             return f"held {inp} for {ms} ms"
+        if name not in TOOL_NAMES:
+            return f"no tool called {name}; use one of {', '.join(sorted(TOOL_NAMES))}"
         if name == "talk_to":
             walked = await self._act("walk_to", a)
             if not walked.startswith("arrived"):
@@ -572,7 +585,9 @@ class Agent:
         the model stops rewording the same target."""
         if name not in ("walk_to", "talk_to", "walk_to_map"):
             return result
-        if result.split(":", 1)[0] not in WALK_FAILED:
+        if result.startswith(WALK_PAUSED):
+            return result
+        if not result.startswith(WALK_FAILED):
             self._failed_walks = 0
             return result
         self._failed_walks += 1
@@ -589,6 +604,7 @@ class Agent:
         run = Run(request)
         self.cancelled = False
         self.said: list[str] = []
+        self._said_before_act = 0  # how many lines were said before the last action
         frame = frame or await self.grab()
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
         trail = self.trail.notes()
@@ -620,8 +636,13 @@ class Agent:
             if not calls:
                 if msg.content:
                     await self._speak(msg.content)
-                run.outcome = msg.content or "done"
-                break
+                    run.outcome = msg.content
+                    break
+                # Nothing at all (its thinking ran out of room): ask again rather than
+                # end in silence.
+                msgs.append({"role": "user", "content": "You replied with nothing. Call a "
+                             "tool; if you're done, finish with what to tell the player."})
+                continue
             acted = False
             finished = None
             noise = None
@@ -643,9 +664,17 @@ class Agent:
                 run.steps.append(step)
                 if finished is not None:
                     result = "ignored: it came after finish"
+                elif last_turn and c.function.name != "finish":
+                    result = "not done: only finish is left now"
                 elif c.function.name == "finish" and acted:
                     # It hasn't seen what its presses did: no telling the player yet.
                     result = "not finished: look at the screen after those actions first"
+                elif c.function.name == "finish" and not str(args.get("text") or "").strip() \
+                        and len(self.said) <= self._said_before_act:
+                    result = "not finished: give the text to tell the player what happened"
+                elif c.function.name == "say" and acted:
+                    # Nor say what happened before seeing it.
+                    result = "not said: look at the screen after those actions first"
                 elif c.function.name == "say":
                     text = str(args.get("text") or "")
                     if self._already_said(text):
@@ -674,6 +703,7 @@ class Agent:
                     except (TypeError, ValueError, KeyError) as exc:
                         result = f"bad arguments ({exc}); fix them and try again"
                     acted = True
+                    self._said_before_act = len(self.said)
                     result = self._check_walk(c.function.name, result)
                 step.result = result
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})

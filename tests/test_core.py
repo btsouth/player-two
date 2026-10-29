@@ -251,10 +251,15 @@ class TestAgent:
 def test_never_confirms_without_looking():
     from playertwo.agent import split_before_confirm
 
-    assert split_before_confirm(["a", "a", "a"]) == (["a", "a", "a"], "")
+    # A second a skips a line the player never heard; start then a picks from a menu
+    # unseen; b then a answers a Yes/No nobody read.
+    assert split_before_confirm(["a", "a", "a"]) == (["a"], "a")
     assert split_before_confirm(["down", "down", "a"]) == (["down", "down"], "a")
     assert split_before_confirm(["a", "right", "a", "a"]) == (["a", "right"], "a")
+    assert split_before_confirm(["start", "a"]) == (["start"], "a")
+    assert split_before_confirm(["b", "b", "a"]) == (["b", "b"], "a")
     assert split_before_confirm(["down"]) == (["down"], "")
+    assert split_before_confirm(["a"]) == (["a"], "")
 
 
 class TestNarrator:
@@ -564,6 +569,68 @@ class TestAgentHonesty:
         run(agent.run("take me to the fair"))
         results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
         assert "cut off" not in results[0] and "cut off" in results[1]
+
+    def test_skipping_text_the_player_asked_to_skip_is_allowed(self):
+        agent, pad, _, _, _ = self.make([
+            [("press", {"buttons": ["a", "a", "a"], "skipping": True})],
+            [("press", {"buttons": ["down", "a"], "skipping": True})],  # not a skip
+            [("finish", {"text": "Skipped the intro."})],
+        ])
+        run(agent.run("skip the intro"))
+        assert pad.log == ["a", "a", "a", "down"]
+
+    def test_holding_a_doesnt_get_around_looking(self):
+        agent, pad, _, _, muse = self.make([
+            [("hold", {"input": "a", "ms": 3000})],
+            [("finish", {"text": "ok"})],
+        ])
+        run(agent.run("go"))
+        assert pad.log == []
+        assert next(m["content"] for m in muse.seen[-1] if m["role"] == "tool").startswith(
+            "not held")
+
+    def test_done_is_said_after_saying_what_it_was_about_to_do(self):
+        agent, _, said, _, _ = self.make([
+            [("say", {"text": "I'll save the game in slot 1."}),
+             ("press", {"buttons": ["a"]})],
+            [("finish", {"text": "Saved the game in slot 1."})],
+        ])
+        run(agent.run("save in slot 1"))
+        assert said == ["I'll save the game in slot 1.", "Saved the game in slot 1."]
+
+    def test_nothing_is_said_about_an_action_before_looking(self):
+        agent, _, said, _, muse = self.make([
+            [("press", {"buttons": ["start"]}), ("say", {"text": "The menu is open now."})],
+            [("finish", {"text": "The menu is open."})],
+        ])
+        run(agent.run("open the menu"))
+        assert said == ["The menu is open."]
+        assert [m["content"] for m in muse.seen[-1] if m["role"] == "tool"][1].startswith(
+            "not said")
+
+    def test_never_ends_in_silence(self):
+        agent, _, said, _, muse = self.make([
+            [],  # nothing at all: its thinking ran out of room
+            [("press", {"buttons": ["b"]})],
+            [("finish", {})],  # finished without saying anything
+            [("finish", {"text": "Closed the menu."})],
+        ])
+        run(agent.run("close the menu"))
+        assert said == ["Closed the menu."]
+        results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+        assert results[1].startswith("not finished: give the text")
+
+    def test_tools_not_offered_dont_run(self):
+        agent, pad, _, _, muse = self.make([
+            [("teleport", {"to": "the fair"})],
+            [("press", {"buttons": ["down", "down"]})],
+            [("finish", {"text": "ok"})],
+        ])
+        agent.max_turns = 2
+        run(agent.run("go"))
+        results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+        assert results[0].startswith("no tool called teleport")
+        assert pad.log == []  # the last turn could only finish
 
     def test_the_last_turn_can_only_finish(self):
         agent, _, _, _, muse = self.make([[("wait", {"seconds": 0.5})]] * 2

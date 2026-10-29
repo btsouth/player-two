@@ -370,3 +370,103 @@ def test_whats_wrong_is_answered_out_loud():
     words = s.self_check()
     assert "don't see a game" in words and "can't press anything" in words
     assert "microphone" in words and "last problem" in words
+
+
+def bare_session():
+    """A Session with just what local commands touch."""
+    from types import SimpleNamespace
+
+    from playertwo.app import Session
+    from playertwo.controls import DryRun
+
+    s = Session.__new__(Session)
+    s.controls = DryRun()
+    s.events = SimpleNamespace(emit=lambda *a, **k: None, last_said="")
+    s._tasks = set()
+    s.emit_settings = lambda: None
+    s.agent_task = None
+    s.answer = None
+    s.paused = False
+    s.said = []
+    cues = []
+    s.voice = SimpleNamespace(stop=lambda: None, cue=cues.append)
+    s.cues = cues
+    s.stop_side = lambda: None
+
+    async def announce(text, **k):
+        s.said.append(text)
+
+    s.announce = announce
+    return s
+
+
+async def test_next_presses_a_without_the_model():
+    import asyncio
+
+    from playertwo.app import local_action
+
+    assert local_action("next") == "next" and local_action("Player Two, next please") == "next"
+    assert local_action("continue") is None  # a title screen option, for the agent
+    s = bare_session()
+    await s.local("next")
+    assert s.controls.log == ["a"]
+    # Not in the middle of something the agent is doing.
+    s.agent_task = asyncio.create_task(asyncio.sleep(10))
+    await s.local("next")
+    assert s.controls.log == ["a"] and "stop first" in s.said[-1]
+    s.agent_task.cancel()
+
+
+async def test_stop_ends_the_agent_at_once():
+    import asyncio
+    from types import SimpleNamespace
+
+    s = bare_session()
+    cancelled = []
+    s.agent = SimpleNamespace(cancel=lambda: cancelled.append(1))
+    s.agent_task = asyncio.create_task(asyncio.sleep(30))  # a model call still running
+    await s.local("stop")
+    await asyncio.sleep(0)
+    assert cancelled and s.agent_task.cancelled()
+    assert s.said == ["Okay, stopped."]
+
+
+async def test_a_command_said_during_a_question_isnt_the_answer():
+    import asyncio
+    from types import SimpleNamespace
+
+    s = bare_session()
+    s.agent = SimpleNamespace(cancelled=False, cancel=lambda: None)
+    s.answer = asyncio.get_running_loop().create_future()
+    ran = []
+
+    async def local(action):
+        ran.append(action)
+
+    s.local = local
+    await s.handle("help")
+    assert ran == ["help"] and not s.answer.done()  # still waiting for the answer
+    await s.handle("next")  # could be the answer ("the next one")
+    assert s.answer.result() == "next"
+
+
+def test_a_hidden_health_bar_is_not_empty():
+    import numpy as np
+    from PIL import Image
+
+    from playertwo.hud import HudWatch, Meter
+
+    def bar(fill):
+        arr = np.full((200, 400, 3), 200, np.uint8)
+        arr[20:30, 40:240] = (60, 60, 60)
+        arr[20:30, 40:40 + int(200 * fill)] = (170, 40, 40)
+        return Image.fromarray(arr)
+
+    m = Meter("health", (0.09, 0.09, 0.61, 0.16), (170, 40, 40), estimate=1.0)
+    m.locate(bar(1.0))
+    watch = HudWatch([m])
+    assert watch.update(bar(1.0), 0) == []
+    black = Image.new("RGB", (400, 200))
+    assert watch.update(black, 1) == [] and watch.update(black, 6) == []  # a fade
+    assert watch.update(bar(0.0), 7) == []  # once: likely covered, not a one-hit loss
+    assert [a.level for a in watch.update(bar(0.0), 8)] == ["critical"]  # still so
