@@ -20,6 +20,10 @@ developer has to build.
 - **Answers questions.** "What's on screen?" "Who's here?" "Which enemy is hurt?"
 - **Plays when you ask.** "Skip to the battle and hit the left one with Zio." It looks, moves the
   cursor, checks the highlight, confirms, then looks again to make sure it worked.
+- **Walks you there in 2D games.** "Take me to the man at the stall." Muse Spark points out your
+  character and the stall once, then code on your PC steers there about a dozen times a second,
+  goes around what's in the way, and stops next to it, facing it, so the next "talk to him" works.
+  In Chrono Trigger it walks to what's on screen in a few seconds.
 - **Works hands-free.** For players who can't easily press a key, it can listen all the time and
   act on what starts with its name: "Player Two, open the menu." A small speech detector runs on
   your PC, so only speech is sent to be transcribed, and talk in the room that isn't for Player
@@ -36,7 +40,9 @@ developer has to build.
   be played in English), and a team-up mode for games that already narrate their own menus.
 
 It works best in turn-based and menu-driven games: RPGs, JRPGs, visual novels, card games,
-strategy, point and click. It does not play fast action games for you; there it gives warnings.
+strategy, point and click. It walks you around 2D games; in 3D games it walks by holding the
+stick a second at a time, which is slow. It does not play fast action games for you; there it
+gives warnings.
 
 ## How it uses Meta's models
 
@@ -86,9 +92,15 @@ Meta's API has no text-to-speech model, so the narrator voice is
   are always moving (a flickering TV, rain), and fires once when a new screen has stopped moving.
 - **Narrator** (`narrator.py`): streams Muse Spark's answer into the voice sentence by sentence, so
   speech starts before the model has finished.
-- **Agent** (`agent.py`): a tool loop with `press`, `hold`, `say`, `ask_player` and `finish`. A rule
-  in code stops any press sequence just before a confirm that follows cursor movement, so it always
-  looks at the highlight before pressing A.
+- **Agent** (`agent.py`): a tool loop with `press`, `hold`, `walk_to`, `say`, `ask_player` and
+  `finish`. A rule in code stops any press sequence just before a confirm that follows cursor
+  movement, so it always looks at the highlight before pressing A.
+- **Walking** (`walk.py`): one Muse Spark call finds your character, the target and a way around
+  anything in the way. Then plain image math takes over: phase correlation follows the scenery as
+  it scrolls, your character is pinned down by what moves differently from the scenery and then
+  followed by its colours (which hold when the sprite turns), and the stick and d-pad steer it in
+  eight directions. It asks Muse Spark again only when it's stuck or loses track, and stops when
+  the screen fades to a new place.
 - **Controller** (`controls.py`): a uinput Xbox 360 pad on Linux, ViGEm on Windows, or keyboard
   keys for PC-only games.
 - **Hands-free listening** (`listen.py`): Silero VAD (a 2 MB model on the CPU, well under a
@@ -154,6 +166,7 @@ loud and says how to fix it, instead of printing it where you can't see it.
 |---|---|
 | anything about the game | Player Two looks and answers, or does it |
 | "Player Two" first (hands-free) | the same, with no key; "Player Two" alone, then the request, works too |
+| "take me to the stairs" / "go talk to her" | walks your character there (2D games) |
 | "describe" / "what's on screen" | a full spoken tour of the screen |
 | "repeat" | says the last line again |
 | "stop" / "quiet" / "cancel that" | stops talking (and cancels a running command) |
@@ -189,6 +202,9 @@ hands_free = false        # listen all the time for "Player Two, ..."; no talk k
 
 - Single-player only. Virtual controllers can trip anti-cheat in online games.
 - It never deletes or overwrites saves, quits, or makes story choices without asking.
+- Walking goes to what it can see. Finding a place that's off screen, in a town or forest it
+  hasn't seen, is hit and miss: it explores without a map yet, so tell it which way when you
+  know.
 - It reads the screen, not game memory, so it can misread tiny or blurry text. It says so when it
   can't read something instead of guessing.
 - On Windows, the virtual controller needs the ViGEmBus driver. Its maintainer has retired it; it
