@@ -120,11 +120,13 @@ anything you can see, one place at a time ("the stairs", "the man by the counter
 then press a to talk or open. Never during dialogue or a cutscene (a text box on \
 screen): press a to move it along instead. If it's off screen, use what you know of the game's map, \
 then walk_to the exit it's probably past (a doorway, stairs, the end of a path, an edge \
-of the screen) and look again. Keep a map in your head from where each walk took you: \
-keep going the same way while new ground appears, try exits you haven't tried, and \
-don't go back where you've been unless it's a dead end. For a step or two by hand, hold the d-pad (hold up, down, left \
-or right), not the stick: many 2D games ignore the stick. Tell the player what's \
-around as you go.
+of the screen) and keep_walking that way to go through it or onto new ground; it stops \
+at a wall or a new area and says how far you went. Never hold the d-pad blind to \
+explore. Keep a map from where each walk took you (your walks in this area are listed \
+for you): keep going the same way while new ground appears, try exits and directions \
+you haven't tried, and don't go back where you've been unless it's a dead end. For a \
+single step by hand, hold the d-pad (up, down, left or right), not the stick: many 2D \
+games ignore the stick. Tell the player what's around as you go.
 - Walking in 3D: hold the left stick for about a second at a time, then look. Up walks \
 the way the camera faces. Keep going the same way while the path is open; turn only at \
 a wall, a corner or a turning, and never walk straight back the way you came unless \

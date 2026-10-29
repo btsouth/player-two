@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from .controls import BUTTONS, DIRECTIONS, Controls
+from .explore import ANGLES, Trail, keep_walking
 from .muse import Muse, image_part
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame, thumb
@@ -52,6 +53,18 @@ TOOLS = [
                    "player's, so it isn't mixed up with others: \"the boy with spiky red "
                    "hair\"."},
         }, "required": ["target"]}}},
+    {"type": "function", "function": {
+        "name": "keep_walking",
+        "description": "Walk on in one direction toward somewhere not on screen yet, "
+                       "in games seen from above. It watches as it goes and stops at a "
+                       "wall, at a new area (a door, an exit) or when something comes up, "
+                       "then tells you how far it went. Better than holding the d-pad "
+                       "blind.",
+        "parameters": {"type": "object", "properties": {
+            "direction": {"type": "string", "enum": list(ANGLES)},
+            "seconds": {"type": "number", "description": "At most how long, 1 to 8; "
+                        "default 3."},
+        }, "required": ["direction"]}}},
     {"type": "function", "function": {
         "name": "wait",
         "description": "Wait without pressing anything: loading screens, fades, movies, "
@@ -165,6 +178,7 @@ class Agent:
         self.said: list[str] = []
         self.cancelled = False
         self._walker: Walker | None = None
+        self.trail = Trail()  # a rough map of the area from where walks went
         # Cleared while the player holds the talk key: no presses or speech until it's
         # known whether they said stop, asked something else, or just wanted a repeat.
         self.go = asyncio.Event()
@@ -295,32 +309,58 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             me = str(a.get("me") or "").strip()
+            walker = self.walker()
             try:
-                return (await self.walker().walk(target, me)).text()
+                walked = await walker.walk(target, me)
             except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
                 # Not the model's arguments: something broke while walking.
                 self.controls.steer(None)
                 return f"walking failed ({exc}); walk with the d-pad instead"
+            steps = walker.travel / walker.size if walker.size else None
+            self.trail.add(f"walk_to {target}", walked.outcome, steps)
+            return walked.text()
+        if name == "keep_walking":
+            direction = str(a.get("direction") or "")
+            if direction not in ANGLES:
+                return f"direction must be one of {', '.join(ANGLES)}"
+            secs = max(1.0, min(float(a.get("seconds") or 3), 8.0))
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            walker = self.walker()
+            try:
+                went = await keep_walking(self.walker_image, self.controls.steer, direction,
+                                          secs, self.walker_keep_going, walker.memory)
+            except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
+                self.controls.steer(None)
+                return f"walking failed ({exc}); hold the d-pad instead"
+            if went.at is None:
+                walker.memory = None
+            elif walker.memory is not None:
+                walker.memory = (walker.memory[0], went.at, walker.memory[2])
+            if went.outcome != "didnt_move":
+                self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
+            return went.text(direction.replace("_", " and "))
         return "ok"
+
+    async def walker_image(self):
+        return (await self.grab()).image
+
+    async def walker_keep_going(self) -> bool:
+        if not self.go.is_set():
+            self.controls.steer(None)  # let go while the player is talking
+            await self.go.wait()
+        return not self.cancelled
 
     def walker(self) -> Walker:
         """One walker for the whole session, so what it learns about the camera stays."""
         if self._walker is None:
-            async def image():
-                return (await self.grab()).image
-
-            async def keep_going() -> bool:
-                if not self.go.is_set():
-                    self.controls.steer(None)  # let go while the player is talking
-                    await self.go.wait()
-                return not self.cancelled
-
             def note(text: str) -> None:
                 if self.on_action:
                     self.on_action("walk_note", {"text": text})
 
-            self._walker = Walker(self.muse, image, self.controls.steer, keep_going, note,
-                                  say=self._speak)
+            self._walker = Walker(self.muse, self.walker_image, self.controls.steer,
+                                  self.walker_keep_going, note, say=self._speak)
         return self._walker
 
     async def run(self, request: str, frame: Frame | None = None) -> Run:
@@ -330,11 +370,13 @@ class Agent:
         self.said: list[str] = []
         frame = frame or await self.grab()
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
+        trail = self.trail.notes()
         msgs: list[dict] = [
             {"role": "system", "content": self.system()},
             {"role": "user", "content": [
                 image_part(frame.image, self.muse.s.image_max_side),
                 {"type": "text", "text": (f"Earlier requests:\n{recent}\n\n" if recent else "")
+                 + (f"{trail}\n\n" if trail else "")
                  + f'The player says: "{request}"'},
             ]},
         ]
@@ -361,7 +403,8 @@ class Agent:
             acted = False
             finished = None
             noise = None
-            if any(c.function.name in ("press", "hold", "walk_to") for c in calls):
+            if any(c.function.name in ("press", "hold", "walk_to", "keep_walking")
+                   for c in calls):
                 noise = await self._noise()
             t_act = time.monotonic()
             for c in calls:

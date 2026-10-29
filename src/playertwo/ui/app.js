@@ -259,7 +259,8 @@ function handle(ev) {
         `${ev.direction || ""} ${(ev.ms / 1000).toFixed(1)}s`.trim());
       break;
     case "walk":
-      showPresses(["ls"], `walking to ${ev.target || "it"}`);
+      showPresses(["ls"], ev.direction ? `walking ${ev.direction}`
+        : `walking to ${ev.target || "it"}`);
       break;
     case "where": {
       const box = $("marks");

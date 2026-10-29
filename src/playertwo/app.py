@@ -402,6 +402,9 @@ class Session:
                              direction=args.get("direction", ""), ms=args.get("ms", 0))
         elif name == "walk_to":
             self.events.emit("walk", target=args.get("target", ""))
+        elif name == "keep_walking":
+            way = str(args.get("direction", "")).replace("_", " and ")
+            self.events.emit("walk", target="", direction=way)
         elif name == "walk_note":
             self.events.emit("walk_note", text=args.get("text", ""))
 
