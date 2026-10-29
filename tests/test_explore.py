@@ -285,3 +285,64 @@ async def test_the_agent_remembers_what_it_learned_about_a_game(tmp_path):
     assert notes.read("Chrono Trigger") == ["Battles don't pause: set Battle Mode to Wait.",
                                             "Y opens the main menu."]
     assert notes.read("Another Game") == []
+
+
+async def test_the_agent_maps_the_area_and_walks_back_to_a_spot_on_the_map():
+    import json
+    from types import SimpleNamespace
+
+    from playertwo.agent import Agent
+    from playertwo.controls import DryRun
+    from playertwo.screen import Frame
+
+    world = World()
+    start = world.pos.copy()
+
+    class Pad(DryRun):
+        def steer(self, angle, strength=1.0):
+            super().steer(angle, strength)
+            world.steer(angle)
+
+    def back_to_start():
+        # Where it started is the middle of the first screen: map (240, 135).
+        x0, y0, s = agent.area._fit
+        img = agent._map_image
+        return {"x": (240 - x0) * s / img.width * 1000,
+                "y": (135 - y0) * s / img.height * 1000, "label": "where we came in"}
+
+    class Muse:
+        s = SimpleNamespace(image_max_side=640)
+
+        def __init__(self):
+            self.replies = [("keep_walking", {"direction": "left", "seconds": 2.5}),
+                            ("area_map", {}), ("walk_to_map", back_to_start),
+                            ("finish", {"text": "Back."})]
+            self.results: list[str] = []
+            self.images: list[int] = []
+
+        async def tools(self, messages, tools, effort=None, max_tokens=0):
+            self.results = [m["content"] for m in messages if m["role"] == "tool"]
+            last = messages[-1]["content"]
+            self.images.append(sum(1 for c in last if c.get("type") == "image_url"))
+            name, args = self.replies.pop(0)
+            args = args() if callable(args) else args
+            call = SimpleNamespace(id="c", function=SimpleNamespace(
+                name=name, arguments=json.dumps(args)),
+                model_dump=lambda: {"id": "c", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(args)}})
+            return SimpleNamespace(content="", tool_calls=[call])
+
+    async def grab():
+        return Frame(await world.grab(), 0)
+
+    async def speak(_text):
+        pass
+
+    pad, muse = Pad(), Muse()
+    agent = Agent(muse, pad, grab, speak, max_settle_s=0.1)
+    result = await agent.run("look around and come back")
+    assert result.outcome == "Back.", muse.results
+    assert muse.results[0].startswith("walked"), muse.results
+    assert muse.images[2] == 2  # the map, then the screen
+    assert muse.results[2].startswith("arrived"), muse.results
+    assert np.hypot(*(world.pos - start)) < 80, (world.pos, start)

@@ -9,13 +9,14 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from .areamap import AreaMap
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .explore import ANGLES, Trail, find_me, keep_walking
 from .muse import Muse, image_part
 from .notes import GameNotes
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame, thumb
-from .walk import Walker
+from .walk import Walker, small
 
 # Never the guide button: it opens the Steam overlay or the system menu, not the game.
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
@@ -78,6 +79,21 @@ TOOLS = [
             "seconds": {"type": "number", "description": "At most how long, 1 to 8; "
                         "default 3."},
         }, "required": ["direction"]}}},
+    {"type": "function", "function": {
+        "name": "area_map",
+        "description": "See a map of this area so far, stitched from everything on "
+                       "screen while walking (2D games): exits, gaps, paths and people "
+                       "that have scrolled off. You get it with the next screen.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "walk_to_map",
+        "description": "Walk to a spot on the area map you were shown last, even if it's "
+                       "off screen now: x and y on that map image, 0 to 1000 each way "
+                       "(0, 0 the top left). Stops next to it, at a wall or at a new area.",
+        "parameters": {"type": "object", "properties": {
+            "x": {"type": "number"}, "y": {"type": "number"},
+            "label": {"type": "string", "description": "What's there, in a few words."},
+        }, "required": ["x", "y"]}}},
     {"type": "function", "function": {
         "name": "wait",
         "description": "Wait without pressing anything: loading screens, fades, movies, "
@@ -202,6 +218,9 @@ class Agent:
         self.cancelled = False
         self._walker: Walker | None = None
         self.trail = Trail()  # a rough map of the area from where walks went
+        self.area = AreaMap()  # the area as seen while walking, stitched together
+        self._map_image = None  # the map as last shown to the model
+        self._show_map = False
         self.notes = notes or GameNotes()
         # Cleared while the player holds the talk key: no presses or speech until it's
         # known whether they said stop, asked something else, or just wanted a repeat.
@@ -363,6 +382,37 @@ class Agent:
             steps = walker.travel / walker.size if walker.size else None
             self.trail.add(f"walk_to {target}", walked.outcome, steps)
             return walked.text()
+        if name == "area_map":
+            if not self.area.frames:
+                return "no map yet: nothing has been walked in this area"
+            self._map_image = self.area.image(marks=None)
+            self._show_map = True
+            return "the map comes with the next screen"
+        if name == "walk_to_map":
+            if self._map_image is None:
+                return "look at area_map first"
+            try:
+                x = max(0.0, min(float(a.get("x")), 1000.0))
+                y = max(0.0, min(float(a.get("y")), 1000.0))
+            except (TypeError, ValueError):
+                return "x and y must be numbers from 0 to 1000"
+            label = str(a.get("label") or "that spot on the map")
+            spot = self.area.from_image((x / 1000 * self._map_image.width,
+                                         y / 1000 * self._map_image.height))
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            walker = self.walker()
+            try:
+                await self._find_me(walker)
+                walked = await walker.walk_toward(
+                    lambda: tuple(self.area.to_screen(spot)), label)
+            except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
+                self.controls.steer(None)
+                return f"walking failed ({exc})"
+            steps = walker.travel / walker.size if walker.size else None
+            self.trail.add(f"walk_to_map {label}", walked.outcome, steps)
+            return walked.text()
         if name == "keep_walking":
             direction = str(a.get("direction") or "")
             if direction not in ANGLES:
@@ -397,7 +447,15 @@ class Agent:
                                           self.walker_keep_going, walker.log)
 
     async def walker_image(self):
-        return (await self.grab()).image
+        img = (await self.grab()).image
+        # Every frame a walk looks at goes on the map; it starts over in a new place.
+        rgb, g = small(img)
+        if self.area.track(rgb, g):
+            self._map_image = None  # a new place: points on the old map mean nothing
+        now = self._walker._now if self._walker is not None else None
+        if now is not None:
+            self.area.character_at(now[1])
+        return img
 
     async def walker_keep_going(self) -> bool:
         if not self.go.is_set():
@@ -456,7 +514,8 @@ class Agent:
             acted = False
             finished = None
             noise = None
-            if any(c.function.name in ("press", "hold", "walk_to", "talk_to", "keep_walking")
+            if any(c.function.name in ("press", "hold", "walk_to", "talk_to", "walk_to_map",
+                                       "keep_walking")
                    for c in calls):
                 noise = await self._noise()
             t_act = time.monotonic()
@@ -509,7 +568,16 @@ class Agent:
             frame = await self._settled(noise) if acted else await self.grab()
             turn["look_s"] = round(time.monotonic() - t_look, 2)
             last = _turn == self.max_turns - 2
+            shown = []
+            if self._show_map and self._map_image is not None:
+                self._show_map = False
+                shown = [image_part(self._map_image, 1024), {"type": "text", "text": (
+                    "The map of this area so far: dark grey is not seen yet, the yellow box "
+                    "is the screen now, the cyan line is where you walked and its dot is "
+                    "you. People shown may have moved since. For walk_to_map, x and y are "
+                    "on this map, 0 to 1000 each way.")}]
             msgs.append({"role": "user", "content": [
+                *shown,
                 image_part(frame.image, self.muse.s.image_max_side),
                 {"type": "text", "text": "The screen now." + (
                     " You're out of steps: call finish now, telling the player plainly how "

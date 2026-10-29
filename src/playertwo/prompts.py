@@ -130,7 +130,11 @@ for, talk to it: don't stop next to it. Never during dialogue or a cutscene (a t
 screen): press a to move it along instead. If it's off screen, use what you know of the game's map, \
 then walk_to the exit it's probably past (a doorway, stairs, the end of a path, an edge \
 of the screen) and keep_walking that way to go through it or onto new ground; it stops \
-at a wall or a new area and says how far you went. Never hold the d-pad blind to \
+at a wall or a new area and says how far you went. Once you've walked around an area, \
+look at area_map before choosing where to go next: it shows everything that has \
+scrolled past (openings in fences, paths, doors, people), and walk_to_map goes to any \
+spot on it. Head for the edges of what's been seen where the ground goes on, not for \
+walls and dark grey you can't reach. Never hold the d-pad blind to \
 explore. Keep a map from where each walk took you (your walks in this area are listed \
 for you): keep going the same way while new ground appears, try exits and directions \
 you haven't tried, and don't go back where you've been unless it's a dead end. If \
