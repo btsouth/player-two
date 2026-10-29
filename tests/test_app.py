@@ -565,3 +565,25 @@ def test_a_window_left_by_a_crash_is_replaced(tmp_path):
     desktop.stale_window(profile)
     assert old.poll() is not None and time.monotonic() - t < 2.5
     assert desktop.profile_owner(profile) is None
+
+
+def test_orca_lines_starting_with_a_dash_are_spoken_not_options():
+    from playertwo.screenreader import ORCA
+
+    cmd = ORCA[0].call(ORCA[0].path, "org.gnome.Orca1.Service.PresentMessage", "-30 gold")
+    assert cmd[-2:] == ["--", "-30 gold"]
+
+
+@linux_only
+def test_gdbus_takes_a_dash_line_after_the_separator():
+    import shutil
+    import subprocess
+
+    if not shutil.which("gdbus"):
+        pytest.skip("no gdbus")
+    # Option parsing fails before any bus is reached, so no session bus is needed.
+    for args, ok in ((["-30 gold"], False), (["--", "-30 gold"], True)):
+        r = subprocess.run(["gdbus", "call", "--session", "--dest", "x.y", "--object-path",
+                            "/x", "--method", "x.y.Z", *args], capture_output=True,
+                           text=True, timeout=10, env={"PATH": "/usr/bin:/bin"}, check=False)
+        assert r.stderr.startswith("Usage:") != ok, r.stderr

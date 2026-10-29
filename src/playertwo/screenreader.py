@@ -37,7 +37,8 @@ class Bus:
 
     def call(self, path: str, method: str, *args: str) -> list[str]:
         return ["gdbus", "call", "--session", "--dest", self.name, "--object-path", path,
-                "--method", method, *args]
+                # "--" so a line like "-30 gold" isn't read as an option.
+                "--method", method, "--", *args]
 
 
 ORCA = [
