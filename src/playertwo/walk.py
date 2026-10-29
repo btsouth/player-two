@@ -87,7 +87,7 @@ class Look:
         pb = self.bg / max(self.bg.sum(), 1)
         self.weights = np.where(self.fg >= 3, pf / (pf + pb + 1e-9), 0.0)
 
-    def _best(self, b, cx, cy, rx, ry, moved=None):
+    def _best(self, b, cx, cy, rx, ry, moved=None, ahead=None):
         win = _window(b.shape, cx, cy, self.w, self.h, rx, ry)
         if win is None:
             return cx, cy, 0.0
@@ -103,15 +103,22 @@ class Look:
         ys, xs = np.mgrid[0:sums.shape[0], 0:sums.shape[1]]
         px, py = x0 + xs + w / 2, y0 + ys + h / 2
         # Of equally good spots, the one nearest where it should be.
-        far = ((px - cx) / max(rx, 1)) ** 2 + ((py - cy) / max(ry, 1)) ** 2
+        dx, dy = (px - cx) / max(rx, 1), (py - cy) / max(ry, 1)
+        far = dx ** 2 + dy ** 2
+        if ahead is not None:
+            # Behind it, a party member following looks the same: count that twice as far.
+            back = np.minimum(dx * ahead[0] + dy * ahead[1], 0)
+            far += 3 * back ** 2
         iy, ix = np.unravel_index(int(np.argmax(rank - 0.15 * rank.max() * far)), sums.shape)
         return float(px[iy, ix]), float(py[iy, ix]), float(sums[iy, ix])
 
     def find(self, rgb: np.ndarray, center: tuple[float, float], radius: int,
-             moved: np.ndarray | None = None) -> tuple[float, float, float]:
+             moved: np.ndarray | None = None, ahead: tuple[float, float] | None = None
+             ) -> tuple[float, float, float]:
         """The character's middle near `center`, and how sure (1: as clear as at first).
-        `moved` (see motion) favours what is moving, while the character walks."""
-        x, y, m = self._best(_bins(rgb), center[0], center[1], radius, radius, moved)
+        `moved` (see motion) favours what is moving, while the character walks, and
+        `ahead` (the way it walks, a unit vector) what is in front."""
+        x, y, m = self._best(_bins(rgb), center[0], center[1], radius, radius, moved, ahead)
         return x, y, m / self.base
 
 
@@ -425,6 +432,8 @@ class Walker:
         slide = 0
         steps = 0
         moves: list[np.ndarray] = []  # the last few moves over the ground
+        drift = np.zeros(2)  # its walking, a frame's worth over the ground
+        hid = 0.0  # when it went out of sight behind something, or 0
         best = (float("inf"), time.monotonic())  # closest to the aim so far, and when
         stick: float | None = None
         popped: list[float] = []  # how much of the screen changed, last few frames
@@ -488,7 +497,12 @@ class Walker:
             # Eight ways, like a d-pad: most 2D games walk no other way. Keep the last
             # one until the aim is well past the halfway line, so it doesn't flicker.
             if stick is None or abs(wrap(want - stick)) > 30:
-                stick = (round(want / 45) * 45) % 360
+                new = (round(want / 45) * 45) % 360
+                # It walks the new way now, at the same pace.
+                t = math.radians(new - (stick or 0))
+                drift = np.array([math.cos(t) * drift[0] - math.sin(t) * drift[1],
+                                  math.sin(t) * drift[0] + math.cos(t) * drift[1]])
+                stick = new
                 moves = []  # moves the other way say nothing about this one
             self.steer(stick)
             await asyncio.sleep(0.01)
@@ -511,12 +525,35 @@ class Walker:
                 return done("interrupted", "something came up on screen while walking (a "
                             "text box, a menu or a battle): look before pressing anything")
             if look is not None:
-                nx, ny, score = look.find(rgb, (player[0], player[1]), int(size), moved)
+                # Looked for where it should be by now, and in front rather than behind:
+                # a party member following a step behind looks just like it.
+                guess = player + scroll + drift
+                a = math.radians(stick)
+                ahead = drift / np.hypot(*drift) if np.hypot(*drift) > 0.6 else (
+                    math.sin(a), -math.cos(a))
+                # Out of sight, it may be further off than guessed: look wider.
+                r = int(2 * size) if hid else int(size)
+                nx, ny, score = look.find(rgb, (guess[0], guess[1]), r, moved,
+                                          (ahead[0], ahead[1]))
                 velocity = np.array([nx, ny]) - player
                 fast = float(np.hypot(*scroll))
                 # Moving just like the scenery: that's the ground, not the character.
-                if score < 0.5 or (fast > 2 and np.hypot(*(velocity - scroll)) < 0.3 * fast):
+                if fast > 2 and np.hypot(*(velocity - scroll)) < 0.3 * fast and score >= 0.5:
                     look = None
+                elif score < 0.5 and np.hypot(*drift) > 0.6 and (
+                        not hid or time.monotonic() - hid < 2):
+                    # Out of sight behind something (a tree, a roof) while walking: it
+                    # keeps going the way it was, and shows up again a little later.
+                    hid = hid or time.monotonic()
+                    player = guess
+                    self._now = (look, player.copy(), (bw, bh))
+                    self.travel += drift
+                    last_rel = time.monotonic()
+                    prev = g
+                    continue
+                elif score < 0.5:
+                    look = None
+                hid = 0.0
             if look is None:
                 unsure += 1
                 x, y, how = spot(moved, (player[0], player[1]), int(2 * size), (bw, bh))
@@ -564,6 +601,8 @@ class Walker:
             moves = [*moves[-3:], velocity - scroll]
             self.travel += velocity - scroll
             rel = np.mean(moves, axis=0) if len(moves) > 1 else np.zeros(2)
+            if len(moves) > 1:
+                drift = rel
             if float(np.hypot(*rel)) > 0.6:
                 last_rel = time.monotonic()
                 if slide:

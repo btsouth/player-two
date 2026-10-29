@@ -22,7 +22,7 @@ class Game:
     VIEW = (960, 540)
 
     def __init__(self, start=(150, 700), goal=(880, 560), wall=None, speed=7.0,
-                 camera_turn=0.0):
+                 camera_turn=0.0, cover=None, cover_colour=(30, 90, 40), follower=False):
         self.world = texture(2400, 1400)
         self.pos = np.array(start, float)
         self.goal = np.array(goal, float)
@@ -33,6 +33,10 @@ class Game:
         self.frames = 0
         self.asked = []
         self.held_when_asked = []
+        self.cover = cover  # (x0, y0, x1, y1) drawn over the character: a tree canopy
+        self.cover_colour = cover_colour
+        # A party member much like the character, a step behind where it walked.
+        self.trail = [self.pos + np.array([d, 0]) for d in range(-28, 1, 7)] if follower else None
 
     def steer(self, angle):
         self.stick = angle
@@ -57,6 +61,8 @@ class Game:
             nxt = self.pos + step
             if not self._blocked(nxt):
                 self.pos = nxt
+                if self.trail is not None:
+                    self.trail.append(self.pos.copy())
         cam = self.camera()
         w, h = self.VIEW
         view = self.world.crop((int(cam[0]), int(cam[1]), int(cam[0]) + w, int(cam[1]) + h))
@@ -67,9 +73,18 @@ class Game:
         gx, gy = self.goal - cam
         d.rectangle((gx - 14, gy - 20, gx + 14, gy + 20), fill=(30, 160, 30))
         px, py = self.pos - cam
-        # The character: a red body with a white face, so it's easy to follow.
-        d.rectangle((px - 12, py - 18, px + 12, py + 18), fill=(200, 30, 30))
-        d.rectangle((px - 6, py - 14, px + 6, py - 4), fill=(250, 250, 250))
+        sprites = [((px, py), (250, 250, 250))]
+        if self.trail is not None:
+            # 4 steps of 7 behind, overlapping it when they walk up or down.
+            sprites.append((self.trail[-5] - cam, (250, 230, 200)))
+        # The one lower on the screen is in front, as in most 2D games.
+        for (x, y), face in sorted(sprites, key=lambda s: s[0][1]):
+            # The character: a red body with a white face, so it's easy to follow.
+            d.rectangle((x - 12, y - 18, x + 12, y + 18), fill=(200, 30, 30))
+            d.rectangle((x - 6, y - 14, x + 6, y - 4), fill=face)
+        if self.cover:
+            x0, y0, x1, y1 = self.cover
+            d.rectangle((x0 - cam[0], y0 - cam[1], x1 - cam[0], y1 - cam[1]), fill=self.cover_colour)
         return view
 
     def box(self, center, hw, hh):
@@ -329,3 +344,53 @@ async def test_a_text_box_or_battle_popping_up_stops_the_walk():
     w = Walker(FakeMuse(game), popup, game.steer)
     result = await w.walk("the green chest")
     assert result.outcome == "interrupted" and game.stick is None
+
+
+class Watch:
+    """Where the walker thinks the character is, against where it is, every frame."""
+
+    def __init__(self, game):
+        self.game = game
+        self.walker = None
+        self.off = []
+
+    async def grab(self):
+        w = self.walker
+        if w is not None and w._now is not None:
+            real = (self.game.pos - self.game.camera()) / 2  # tracked at half size
+            self.off.append(float(np.hypot(*(w._now[1] - real))))
+        return await self.game.grab()
+
+
+async def test_keeps_going_behind_a_tree_and_finds_the_character_after():
+    # A canopy over the way, wide enough to hide the character for over a second, in
+    # a corner of the world where the camera stays put and the character crosses it.
+    # A red awning, too, much the colour of the character.
+    for start, goal, cover, colour in (
+            ((60, 200), (440, 200), (170, 140, 330, 260), (30, 90, 40)),
+            ((60, 120), (400, 120), (170, 60, 330, 180), (30, 90, 40)),
+            ((60, 200), (440, 200), (170, 150, 330, 250), (190, 40, 30))):
+        game = Game(start=start, goal=goal, cover=cover, cover_colour=colour)
+        watch = Watch(game)
+        w = Walker(FakeMuse(game), watch.grab, game.steer)
+        watch.walker = w
+        result = await w.walk("the green chest")
+        assert result.outcome == "arrived", result.text()
+        assert np.hypot(*(game.pos - game.goal)) < 80
+        assert len(game.asked) == 1, game.asked  # no need to ask again
+        assert watch.off[-1] < 12, watch.off[-1]  # and on the character again after
+
+
+async def test_stays_on_the_leader_with_a_follower_behind():
+    # Across the world as it scrolls, and in a corner where the camera stays put.
+    for start, goal in (((150, 700), (880, 560)), ((900, 300), (500, 500)),
+                        ((120, 120), (440, 300)), ((300, 1300), (330, 900)),
+                        ((300, 120), (330, 480))):
+        game = Game(start=start, goal=goal, follower=True)
+        watch = Watch(game)
+        w = Walker(FakeMuse(game), watch.grab, game.steer)
+        watch.walker = w
+        result = await w.walk("the green chest")
+        assert result.outcome == "arrived", result.text()
+        assert np.hypot(*(game.pos - game.goal)) < 80
+        assert max(watch.off) < 6, max(watch.off)  # not on the follower, 14 behind
