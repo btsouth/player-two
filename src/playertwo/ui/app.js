@@ -258,6 +258,9 @@ function handle(ev) {
       showPresses([ev.input === "left_stick" ? "ls" : ev.input],
         `${ev.direction || ""} ${(ev.ms / 1000).toFixed(1)}s`.trim());
       break;
+    case "walk":
+      showPresses(["ls"], `walking to ${ev.target || "it"}`);
+      break;
     case "where": {
       const box = $("marks");
       box.replaceChildren(...(ev.points || []).map(([x, y], i) => {
