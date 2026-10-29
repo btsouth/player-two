@@ -314,3 +314,18 @@ def test_keyboards_walk_with_the_arrow_keys(monkeypatch):
     keys.steer(None)
     assert len(started) == 1 and "Down" in started[0] and "Right" in started[0]
     assert ran == [("-p", "Down", "-p", "Right")]
+
+
+async def test_a_text_box_or_battle_popping_up_stops_the_walk():
+    game = Game()
+    real = game.grab
+
+    async def popup():
+        img = await real()
+        if game.frames >= 10:
+            ImageDraw.Draw(img).rectangle((40, 380, 920, 520), fill=(30, 30, 120))
+        return img
+
+    w = Walker(FakeMuse(game), popup, game.steer)
+    result = await w.walk("the green chest")
+    assert result.outcome == "interrupted" and game.stick is None

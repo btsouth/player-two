@@ -144,7 +144,13 @@ def phase_shift(a: np.ndarray, b: np.ndarray, mask: tuple[int, int, int, int] | 
     fa, fb = np.fft.fft2(a * win), np.fft.fft2(b * win)
     r = fb * np.conj(fa)
     r /= np.abs(r) + 1e-9
-    c = np.fft.fftshift(np.fft.ifft2(r).real)
+    # Weighted toward coarse detail: a move of a pixel and a half otherwise splits the
+    # peak in two, and a long straight wall (the same at every shift along it) wins.
+    fy = np.fft.fftfreq(a.shape[0])[:, None]
+    fx = np.fft.fftfreq(a.shape[1])[None, :]
+    weight = np.exp(-(fx ** 2 + fy ** 2) / (2 * 0.15 ** 2)).astype(np.float32)
+    r *= weight
+    c = np.fft.fftshift(np.fft.ifft2(r).real) / float(weight.mean())
     h, w = c.shape
     cy, cx = h // 2, w // 2
     near = c[cy - limit:cy + limit + 1, cx - limit:cx + limit + 1]
@@ -189,6 +195,20 @@ def _window(shape, cx: float, cy: float, w: int, h: int, rx: int, ry: int):
     x1 = min(W, max(round(cx + w / 2 + rx), x0 + w))
     y1 = min(H, max(round(cy + h / 2 + ry), y0 + h))
     return x0, y0, x1, y1
+
+
+def _blur(x: np.ndarray, k: int = 2) -> np.ndarray:
+    pad = np.pad(x, k, mode="edge")
+    c = np.pad(pad.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    n = 2 * k + 1
+    return ((c[n:, n:] - c[:-n, n:] - c[n:, :-n] + c[:-n, :-n]) / (n * n))[: x.shape[0], : x.shape[1]]
+
+
+def changed(a: np.ndarray, b: np.ndarray, scroll: tuple[float, float]) -> float:
+    """How much of the screen changed from a to b beyond scrolling, 0 to 1. Compared
+    slightly blurred, so a scroll measured a pixel off (a half-pixel step) doesn't make
+    fine detail everywhere look changed; a text box or a menu coming up still does."""
+    return float((motion(_blur(a), _blur(b), scroll) > 40).mean())
 
 
 def _box_means(x: np.ndarray, w: int, h: int) -> np.ndarray:
@@ -300,7 +320,7 @@ async def locate(muse: Muse, img: Image.Image, target: str, context: str = "",
 @dataclass
 class Walked:
     # "arrived", "new_area", "blocked", "lost", "not_found", "stopped", "timeout",
-    # "didnt_move"
+    # "didnt_move", "interrupted"
     outcome: str
     detail: str
     seconds: float
@@ -407,6 +427,7 @@ class Walker:
         moves: list[np.ndarray] = []  # the last few moves over the ground
         best = (float("inf"), time.monotonic())  # closest to the aim so far, and when
         stick: float | None = None
+        popped: list[float] = []  # how much of the screen changed, last few frames
         while True:
             if time.monotonic() - t0 - self.paused > timeout:
                 return done("timeout", f"still {self._words(points[-1] - player, size)} "
@@ -483,6 +504,12 @@ class Walker:
             for p in points:
                 p += scroll
             moved = motion(prev, g, (sx, sy))
+            # Walking changes a few percent of the screen; a text box, a menu or a battle
+            # coming up changes far more. Stop before the held d-pad moves its cursor.
+            popped = [*popped[-2:], changed(prev, g, (sx, sy))]
+            if sum(popped) > 0.15:
+                return done("interrupted", "something came up on screen while walking (a "
+                            "text box, a menu or a battle): look before pressing anything")
             if look is not None:
                 nx, ny, score = look.find(rgb, (player[0], player[1]), int(size), moved)
                 velocity = np.array([nx, ny]) - player
