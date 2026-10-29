@@ -1500,7 +1500,9 @@ class Session:
             # The address holds this run's secret: show where to find it, not the secret.
             from .desktop import start_page
 
-            print(f"Player Two window: {start_page(window_url()).as_uri()}", file=sys.stderr)
+            with contextlib.suppress(OSError):
+                print(f"Player Two window: {start_page(window_url()).as_uri()}",
+                      file=sys.stderr)
         # Wait for the control channel, or for it to fail (port taken, no permission).
         ready = asyncio.create_task(self.serving.wait())
         await asyncio.wait({ready, tasks[0]}, return_when=asyncio.FIRST_COMPLETED)

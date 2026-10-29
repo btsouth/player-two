@@ -173,7 +173,10 @@ class CompanionWindow:
             # session, or every "show the window" adds another.
             if self.tab_opened:
                 return True
-            self.tab_opened = webbrowser.open(start_page(url).as_uri())
+            try:
+                self.tab_opened = webbrowser.open(start_page(url).as_uri())
+            except OSError:
+                return False
             return self.tab_opened
         profile = self.profile
         profile.mkdir(parents=True, exist_ok=True)
@@ -183,7 +186,10 @@ class CompanionWindow:
         stale_window(profile)
         if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
             place_rule(window_workspace(game))
-        page = start_page(url).as_uri()
+        try:
+            page = start_page(url).as_uri()
+        except OSError:
+            return False
         cmd = [exe, f"--app={page}", f"--user-data-dir={profile}", "--no-first-run",
                "--no-default-browser-check", "--window-size=560,900",
                "--disable-features=Translate", "--autoplay-policy=no-user-gesture-required"]
