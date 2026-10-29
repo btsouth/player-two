@@ -457,13 +457,14 @@ class Walker:
             dist = float(np.hypot(*off))
             if dist < best[0] - 0.3 * size:
                 best = (dist, time.monotonic())
-            elif time.monotonic() - best[1] > 2.5:
+            elif time.monotonic() - best[1] > 2.0:
                 # Moving, but not getting closer (sliding along a long wall).
                 best = (dist, time.monotonic())
                 stuck_turns += 1
-                if stuck_turns > 2:
-                    return done("blocked", f"something is in the way, "
-                                f"{self._words(points[-1] - player, size)} from {target}")
+                if stuck_turns > 1:
+                    return done("blocked", "something is in the way, maybe out of reach "
+                                f"from here, {self._words(points[-1] - player, size)} from "
+                                f"{target}")
                 img2, loc2 = await self._again(target, "the straight way is blocked; give a "
                                                "way around", "Something's in the way. Finding "
                                                "a way around.")
@@ -613,8 +614,9 @@ class Walker:
                 if slide > 4:
                     slide = 0
                     stuck_turns += 1
-                    if stuck_turns > 2:
-                        return done("blocked", f"something is in the way, "
+                    if stuck_turns > 1:
+                        return done("blocked", "something is in the way, maybe out of "
+                                    "reach from here, "
                                     f"{self._words(points[-1] - player, size)} from {target}")
                     img2, loc2 = await self._again(target, "the straight way is blocked; give "
                                                    "a way around", "Something's in the way. "
