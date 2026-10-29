@@ -9,6 +9,7 @@ Windows, watched by Player Two itself.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import shutil
@@ -66,8 +67,41 @@ def window_workspace(game: dict | None) -> str | None:
     return str(others[0]["activeWorkspace"]["id"])
 
 
-# Chromium names app windows after the page's host ("chrome-127.0.0.1__-Default").
-APP_CLASS = r".*127\.0\.0\.1__.*"
+# Chromium names app windows after the address it opened: the host for a web page
+# ("chrome-127.0.0.1__-Default"), the path for the start page ("..._player-two-window...").
+PAGE = "player-two-window.html"
+APP_CLASS = r".*(127\.0\.0\.1__|player-two-window).*"
+
+
+def private_dir() -> Path:
+    """A folder only this user can read: the runtime dir, else one under the cache."""
+    run = os.environ.get("XDG_RUNTIME_DIR")
+    base = Path(run) / "player-two" if run and os.path.isdir(run) else CACHE_DIR / "private"
+    base.mkdir(parents=True, exist_ok=True)
+    if sys.platform != "win32":
+        base.chmod(0o700)
+    return base
+
+
+def start_page(url: str) -> Path:
+    """A page that goes straight to `url`, for opening the window by.
+
+    The address holds this run's secret, and a browser's command line can be read by
+    every user of the PC; this file can only be read by the player.
+    """
+    import html
+    import json
+
+    path = private_dir() / PAGE
+    tmp = path.with_suffix(".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write('<!doctype html><meta charset="utf-8"><title>Player Two</title>'
+                f'<meta http-equiv="refresh" content="0;url={html.escape(url)}">'
+                f"<script>location.replace({json.dumps(url)})</script>\n")
+    os.replace(tmp, path)
+    return path
 
 
 def place_rule(workspace: str | None) -> None:
@@ -99,6 +133,23 @@ def profile_owner(profile: Path) -> int | None:
     return pid
 
 
+def stale_window(profile: Path, wait_s: float = 3.0) -> None:
+    """End the browser still running `profile`, if any, and wait for it to go."""
+    import signal
+
+    pid = profile_owner(profile)
+    if pid is None:
+        return
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGTERM)
+    end = time.monotonic() + wait_s
+    while profile_owner(profile) == pid and time.monotonic() < end:
+        time.sleep(0.05)
+    if profile_owner(profile) == pid:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+
+
 class CompanionWindow:
     def __init__(self):
         self.proc: subprocess.Popen | None = None
@@ -122,18 +173,18 @@ class CompanionWindow:
             # session, or every "show the window" adds another.
             if self.tab_opened:
                 return True
-            self.tab_opened = webbrowser.open(url)
+            self.tab_opened = webbrowser.open(start_page(url).as_uri())
             return self.tab_opened
         profile = self.profile
         profile.mkdir(parents=True, exist_ok=True)
-        # A window left by an earlier session reconnects by itself; adopt it, so it
-        # closes with this session instead of a second one opening.
-        self.pid = profile_owner(profile)
-        if self.pid is not None:
-            return True
+        # A window left by a session that crashed has that run's secret and can't
+        # reconnect: close it and open a fresh one (asked to open the page again, the
+        # running browser would only add a second window).
+        stale_window(profile)
         if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
             place_rule(window_workspace(game))
-        cmd = [exe, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
+        page = start_page(url).as_uri()
+        cmd = [exe, f"--app={page}", f"--user-data-dir={profile}", "--no-first-run",
                "--no-default-browser-check", "--window-size=560,900",
                "--disable-features=Translate", "--autoplay-policy=no-user-gesture-required"]
         flags = {"creationflags": 0x08000000} if sys.platform == "win32" else {}

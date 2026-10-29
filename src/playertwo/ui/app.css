@@ -72,7 +72,8 @@ h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: .2px; }
   background: var(--p2); animation: pulse .8s infinite; }
 [data-state="speaking"] .status { color: var(--text); }
 [data-state="speaking"] .status .dot { background: var(--p2); }
-[data-state="paused"] .status .dot { background: var(--dim); }
+[data-state="paused"] .status .dot, [data-state="disconnected"] .status .dot {
+  background: var(--dim); }
 
 /* The ring comes alive with the state */
 [data-state="listening"] .q2 { stroke: var(--you); filter: drop-shadow(0 0 8px var(--you));

@@ -29,6 +29,8 @@ const VERBOSITY_HINT = {
 
 let socket = null;
 let connected = false;
+let toldGone = false;
+let quitting = false;
 let pressTimer = null;
 let lastPress = 0;
 let liveTimer = null;
@@ -189,6 +191,9 @@ function setHandsFree(on) {
 
 function handle(ev) {
   switch (ev.kind) {
+    case "bye":
+      quitting = true;
+      break;
     case "ready":
       setGame(ev.game, ev.found !== false);
       if (ev.talk_key) { talkKey = ev.talk_key; $("talk-key").textContent = ev.talk_key; }
@@ -300,14 +305,18 @@ function connect() {
   socket = new WebSocket(`ws://${location.host}/events?k=${encodeURIComponent(key)}`);
   socket.onopen = () => {
     connected = true;
+    toldGone = false;
     $("gone").hidden = true;
   };
   socket.onmessage = (m) => handle(JSON.parse(m.data));
   socket.onclose = () => {
-    setState("paused");
-    $("status-text").textContent = "Reconnecting";
+    // Said once (refused or dropped), not on every retry; not when quitting.
+    if (!quitting && !toldGone) $("announce").textContent = "Disconnected from Player Two";
+    toldGone = true;
+    app.dataset.state = lastState = "disconnected";
+    $("status-text").textContent = quitting ? "Quitting" : "Reconnecting";
     // Gone for a moment is a hiccup; gone for longer means Player Two stopped.
-    if (connected) setTimeout(() => { if (socket.readyState !== WebSocket.OPEN) $("gone").hidden = false; }, 2500);
+    if (connected && !quitting) setTimeout(() => { if (socket.readyState !== WebSocket.OPEN) $("gone").hidden = false; }, 2500);
     connected = false;
     setTimeout(connect, 1500);
   };
@@ -424,7 +433,7 @@ $("quit").addEventListener("click", () => {
     return;
   }
   clearTimeout(quitArmed);
-  send("quit");
+  quitting = send("quit");
   dialog.close();
 });
 

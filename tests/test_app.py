@@ -517,3 +517,51 @@ async def test_the_talk_button_never_waits_behind_a_slow_setting():
             assert got[-1] == "pause"  # the rest still run, in order
     finally:
         server.cancel()
+
+
+@linux_only
+def test_window_secret_stays_out_of_command_lines(home, monkeypatch, tmp_path):
+    from playertwo.web import TOKEN, window_url
+
+    run = tmp_path / "run"
+    run.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run))
+    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
+    argv = tmp_path / "argv"
+    fake = tmp_path / "chromium"
+    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {argv}\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(desktop, "browser", lambda: str(fake))
+    monkeypatch.setattr(desktop, "CACHE_DIR", tmp_path / "cache")
+    win = desktop.CompanionWindow()
+    win.profile = tmp_path / "profile"
+    assert win.open(window_url())
+    win.proc.wait(5)
+    args = argv.read_text()
+    assert TOKEN not in args and "--app=file://" in args
+    page = run / "player-two" / desktop.PAGE
+    assert (run / "player-two").stat().st_mode & 0o777 == 0o700
+    assert page.stat().st_mode & 0o777 == 0o600
+    assert TOKEN in page.read_text() and page.as_uri() in args
+    import re
+
+    assert re.fullmatch(desktop.APP_CLASS, "chrome-127.0.0.1__-Default")
+    assert re.fullmatch(desktop.APP_CLASS, f"chrome-__run_user_1000_player-two_{desktop.PAGE}-Default")
+
+
+@linux_only
+def test_a_window_left_by_a_crash_is_replaced(tmp_path):
+    import subprocess
+    import threading
+    import time
+
+    old = subprocess.Popen(["sleep", "30"])
+    threading.Thread(target=old.wait, daemon=True).start()  # reap it once it ends
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "SingletonLock").symlink_to(f"host-{old.pid}")
+    assert desktop.profile_owner(profile) == old.pid
+    t = time.monotonic()
+    desktop.stale_window(profile)
+    assert old.poll() is not None and time.monotonic() - t < 2.5
+    assert desktop.profile_owner(profile) is None

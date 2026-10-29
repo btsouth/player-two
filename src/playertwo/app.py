@@ -1261,6 +1261,7 @@ class Session:
         self.voice.stop()
         if self.agent_task and not self.agent_task.done():
             self.agent_task.cancel()
+        self.events.emit("bye")  # the window closes now: not a lost connection
         await self.announce("Bye for now. Have fun.")
         await self.voice.wait_idle(5)
         if self.main is not None:
@@ -1451,7 +1452,10 @@ class Session:
         tasks = [asyncio.create_task(self.serve()), asyncio.create_task(self.track_status())]
         if ui:
             tasks.append(asyncio.create_task(self._serve_ui()))
-            print(f"Player Two window: {window_url()}", file=sys.stderr)
+            # The address holds this run's secret: show where to find it, not the secret.
+            from .desktop import start_page
+
+            print(f"Player Two window: {start_page(window_url()).as_uri()}", file=sys.stderr)
         # Wait for the control channel, or for it to fail (port taken, no permission).
         ready = asyncio.create_task(self.serving.wait())
         await asyncio.wait({ready, tasks[0]}, return_when=asyncio.FIRST_COMPLETED)
