@@ -41,11 +41,44 @@ class GameHidden(NoGame):
 
 BLANK = ("Your game looks solid black to me. If it's in exclusive fullscreen, switch it "
          "to borderless or windowed in its display settings, and I'll see it.")
+# GNOME, KDE and other Wayland desktops hand X11 screenshots back black (or refuse them).
+WAYLAND = ("I can't see your screen on this desktop yet. Screen capture works on Hyprland "
+           "or in an X11 session: log out, pick the X11 or Xorg session at the login "
+           "screen, and start me again.")
+
+
+class CaptureError(Exception):
+    """The screen can't be captured here at all; the message says how to fix it."""
 
 
 class Capture:
+    """Something that grabs the game's picture.
+
+    Exclusive fullscreen games (and Wayland desktops, for X11 capture) come out black.
+    When a game has shown nothing but black for BLANK_S, `notice` says how to fix it,
+    once per game window (a loading screen in a game that has shown pictures isn't that).
+    """
+
     # Something to tell the player about the capture itself, once (the watch loop says it).
     notice = ""
+    BLANK_S = 20.0
+    _dark_since: float | None = None
+    _seen: frozenset = frozenset()  # windows that have shown a picture, or been warned
+
+    def blank_notice(self) -> str:
+        return BLANK
+
+    def _blank_check(self, img: Image.Image, key: object, now: float) -> None:
+        if key in self._seen:
+            return
+        if img.convert("L").resize((64, 36)).getextrema()[1] > 12:
+            self._seen = self._seen | {key}
+            self._dark_since = None
+            return
+        self._dark_since = self._dark_since or now
+        if now - self._dark_since > self.BLANK_S:
+            self._seen = self._seen | {key}
+            self.notice = self.blank_notice()
 
     def grab(self) -> Frame:
         raise NotImplementedError
@@ -116,7 +149,10 @@ class HyprlandCapture(Capture):
     def grab(self) -> Frame:
         now = time.monotonic()
         if self.target is None or now - self._checked > 2.0:
-            self.target = self.pick()
+            picked = self.pick()
+            if (picked or {}).get("stableId") != (self.target or {}).get("stableId"):
+                self._dark_since = None
+            self.target = picked
             self._checked = now
         if self.target is not None:
             try:
@@ -124,8 +160,9 @@ class HyprlandCapture(Capture):
                     ["grim", "-t", "ppm", "-T", str(self.target["stableId"]), "-"],
                     timeout=3, stderr=subprocess.DEVNULL)
                 if data:
-                    return Frame(Image.open(io.BytesIO(data)), now,
-                                 label=self.target.get("title", ""))
+                    img = Image.open(io.BytesIO(data))
+                    self._blank_check(img, self.target.get("stableId"), now)
+                    return Frame(img, now, label=self.target.get("title", ""))
             except (subprocess.SubprocessError, OSError, KeyError):
                 pass
             # Older Hyprland can't capture one window: show the monitor it's on.
@@ -135,7 +172,9 @@ class HyprlandCapture(Capture):
             raise NoGame
         cmd = ["grim", "-t", "ppm"] + (["-o", self.output] if self.output else []) + ["-"]
         data = subprocess.check_output(cmd, timeout=3)
-        return Frame(Image.open(io.BytesIO(data)), now)
+        img = Image.open(io.BytesIO(data))
+        self._blank_check(img, self.target.get("stableId") if self.target else None, now)
+        return Frame(img, now)
 
 
 def monitor_name(monitor_id: int) -> str | None:
@@ -146,18 +185,40 @@ def monitor_name(monitor_id: int) -> str | None:
     return next((m["name"] for m in mons if m.get("id") == monitor_id), None)
 
 
+def wayland() -> bool:
+    return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get(
+        "XDG_SESSION_TYPE") == "wayland"
+
+
 class MssCapture(Capture):
-    """Windows and X11."""
+    """The whole screen, on X11 (and any other desktop mss can read).
+
+    Opened on the first grab, so a desktop it can't read fails in the watch loop, which
+    tells the player, rather than stopping Player Two from starting.
+    """
 
     def __init__(self, monitor: int = 1):
-        import mss
+        self.monitor_id = monitor
+        self.sct = None
 
-        self.sct = mss.mss()
-        self.monitor = self.sct.monitors[monitor]
+    def blank_notice(self) -> str:
+        return WAYLAND if sys.platform == "linux" and wayland() else BLANK
 
     def grab(self) -> Frame:
-        shot = self.sct.grab(self.monitor)
-        return Frame(Image.frombytes("RGB", shot.size, shot.rgb), time.monotonic())
+        try:
+            import mss
+
+            if self.sct is None:
+                self.sct = mss.mss()
+            shot = self.sct.grab(self.sct.monitors[self.monitor_id])
+        except Exception as exc:
+            if sys.platform == "linux" and wayland():
+                raise CaptureError(WAYLAND) from exc
+            raise
+        now = time.monotonic()
+        img = Image.frombytes("RGB", shot.size, shot.rgb)
+        self._blank_check(img, self.monitor_id, now)
+        return Frame(img, now)
 
     def game(self) -> str:
         from .games import running_steam_game
@@ -173,12 +234,9 @@ class WindowsCapture(Capture):
     own pixels are asked for, and if Windows can't give them, grab raises GameHidden so
     Player Two never describes some other program as the game.
 
-    Exclusive fullscreen games can't be copied by any of this and come out black. When a
-    game has shown nothing but black for a while, `notice` says how to fix it, once per
-    game window (a loading screen in a game that has shown pictures isn't that).
+    Exclusive fullscreen games can't be copied by any of this and come out black; the
+    blank check in Capture says how to fix that.
     """
-
-    BLANK_S = 20.0
 
     def __init__(self, window: str = "", whole_screen: bool = False):
         import mss
@@ -192,8 +250,6 @@ class WindowsCapture(Capture):
         self.whole_screen = whole_screen
         self.target: dict | None = None
         self._checked = 0.0
-        self._dark_since: float | None = None
-        self._seen: set[int] = set()  # windows that have shown a picture, or been warned
 
     def pick(self) -> dict | None:
         from .games import pick_game
@@ -224,18 +280,6 @@ class WindowsCapture(Capture):
         shot = self.sct.grab({"left": left, "top": top, "width": right - left,
                               "height": bottom - top})
         return Image.frombytes("RGB", shot.size, shot.rgb)
-
-    def _blank_check(self, img: Image.Image, hwnd: int, now: float) -> None:
-        if hwnd in self._seen:
-            return
-        if img.convert("L").resize((64, 36)).getextrema()[1] > 12:
-            self._seen.add(hwnd)
-            self._dark_since = None
-            return
-        self._dark_since = self._dark_since or now
-        if now - self._dark_since > self.BLANK_S:
-            self._seen.add(hwnd)
-            self.notice = BLANK
 
     def grab(self) -> Frame:
         now = time.monotonic()

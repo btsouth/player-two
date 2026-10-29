@@ -813,6 +813,7 @@ source = { editable = "." }
 dependencies = [
     { name = "evdev", marker = "sys_platform == 'linux'" },
     { name = "kokoro-onnx" },
+    { name = "mss" },
     { name = "numpy" },
     { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
     { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -830,7 +831,6 @@ cuda = [
 ]
 windows = [
     { name = "accessible-output2" },
-    { name = "mss" },
     { name = "vgamepad" },
 ]
 
@@ -846,7 +846,7 @@ requires-dist = [
     { name = "accessible-output2", marker = "extra == 'windows'", specifier = ">=0.17" },
     { name = "evdev", marker = "sys_platform == 'linux'", specifier = ">=1.7" },
     { name = "kokoro-onnx", specifier = ">=0.4" },
-    { name = "mss", marker = "extra == 'windows'", specifier = ">=9" },
+    { name = "mss", specifier = ">=9" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = ">=1.20" },
     { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=1.23" },

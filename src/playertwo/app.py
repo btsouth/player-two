@@ -19,7 +19,15 @@ from .controls import BUTTONS, ControlsError, open_controls
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
-from .screen import Capture, ChangeWatcher, Frame, GameHidden, NoGame, auto_capture
+from .screen import (
+    Capture,
+    CaptureError,
+    ChangeWatcher,
+    Frame,
+    GameHidden,
+    NoGame,
+    auto_capture,
+)
 from .screenreader import open_voice
 
 # Short commands handled without the model. They must be the whole utterance: "keep going,
@@ -619,8 +627,10 @@ class Session:
                 if self.capture_failures == 5:  # a few seconds of it: say so, once
                     self.events.emit("error", where="capture", message=str(exc)[:300])
                     self.voice.cue("error")
-                    self.announce("I can't see the screen right now. I'll keep trying.",
-                                  status=True, wait_turn=True)
+                    # A desktop capture can't work on says how to fix it.
+                    say = (str(exc) if isinstance(exc, CaptureError)
+                           else "I can't see the screen right now. I'll keep trying.")
+                    self.announce(say, status=True, wait_turn=True)
                 await asyncio.sleep(1.0)
                 continue
             if self.capture_failures >= 5:

@@ -16,6 +16,8 @@ dependencies = [
     # Downloads check certificates against the system's own store (Python on Windows
     # doesn't, and would fail behind any TLS-inspecting antivirus or proxy too).
     "truststore>=0.10",
+    # Screen capture on Windows and X11 desktops.
+    "mss>=9",
     "evdev>=1.7; sys_platform == 'linux'",
     # The GPU build also runs on the CPU. Linux x86_64 gets it (install with
     # --excludes uv-excludes.txt so the CPU build doesn't land on top); Windows and
@@ -25,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-windows = ["mss>=9", "vgamepad>=0.1", "accessible_output2>=0.17"]
+windows = ["vgamepad>=0.1", "accessible_output2>=0.17"]
 # CUDA and cuDNN as pip wheels, for NVIDIA cards without a system CUDA install.
 cuda = ["onnxruntime-gpu[cuda,cudnn]>=1.23"]
 
