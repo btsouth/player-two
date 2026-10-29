@@ -14,7 +14,7 @@ from pathlib import Path
 from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
-from .controls import open_controls
+from .controls import BUTTONS, open_controls
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
@@ -1192,6 +1192,21 @@ class Session:
                      "team_up", "solo", "pause", "resume", "hud", "hud_off", "quit", "help",
                      "slower", "faster"):
             self.spawn(self.local(cmd))
+        elif cmd == "press" and arg:
+            # For scripted setups (tests, a known start for a task): no model involved.
+            # "start wait2 down*2 a": buttons, pauses in seconds, repeats.
+            for token in arg.split():
+                if token.startswith("wait"):
+                    await asyncio.sleep(min(float(token[4:] or 1), 30))
+                    continue
+                button, _, times = token.partition("*")
+                if button not in BUTTONS:
+                    return f"unknown button: {button}"
+                for _ in range(int(times or 1)):
+                    await asyncio.to_thread(self.controls.press, button)
+                    await asyncio.sleep(0.25)
+        elif cmd == "shot" and arg:
+            (await self.grab_now()).image.save(arg)
         elif cmd == "set":
             key, _, value = arg.partition(" ")
             return await self.set_setting(key, value)

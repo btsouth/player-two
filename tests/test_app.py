@@ -258,3 +258,24 @@ def test_hidden_game_is_said_plainly():
     from playertwo.screen import GameHidden
 
     assert "minimized" in trouble_words(GameHidden())[1]
+
+
+async def test_scripted_presses_for_a_known_start(tmp_path):
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.controls import DryRun
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    s.controls = DryRun()
+
+    async def grab_now(show=False):
+        return Frame(Image.new("RGB", (64, 36), (9, 9, 9)), 0)
+
+    s.grab_now = grab_now
+    assert await s.command("press start wait0 down*2 a") == "ok"
+    assert s.controls.log == ["start", "down", "down", "a"]
+    assert (await s.command("press jump")).startswith("unknown button")
+    await s.command(f"shot {tmp_path / 'now.png'}")
+    assert Image.open(tmp_path / "now.png").size == (64, 36)

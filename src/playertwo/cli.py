@@ -211,6 +211,7 @@ def main(argv: list[str] | None = None) -> None:
 
     c = sub.add_parser("ctl", help="send a command to the running session "
                        "(talk-start, talk-stop, talk, repeat, describe, stop, status, events, "
+                       "press BUTTONS, shot PATH, "
                        "do TEXT)")
     c.add_argument("command", nargs="+")
 
