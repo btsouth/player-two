@@ -21,8 +21,11 @@ class World:
 
     VIEW = (960, 540)
 
-    def __init__(self, start=(1200, 700), wall=None, door=None, room=False, speed=7.0):
+    def __init__(self, start=(1200, 700), wall=None, door=None, room=False, speed=7.0,
+                 far=False):
         self.world = texture(2400, 1400)
+        # A far-off layer over half the screen, scrolling at half speed (clouds, a sky).
+        self.far = texture(2400, 1400, seed=9) if far else None
         self.pos = np.array(start, float)
         self.wall = wall  # (x0, y0, x1, y1): can't be walked through
         self.door = door  # (x0, y0, x1, y1): walking in fades to a new place
@@ -58,6 +61,9 @@ class World:
             return Image.new("RGB", (w, h))
         cam = self.camera()
         view = self.world.crop((int(cam[0]), int(cam[1]), int(cam[0]) + w, int(cam[1]) + h))
+        if self.far is not None:
+            fx, fy = int(cam[0] / 2), int(cam[1] / 2)
+            view.paste(self.far.crop((fx, fy, fx + w // 2, fy + h)), (0, 0))
         d = ImageDraw.Draw(view)
         if self.wall:
             x0, y0, x1, y1 = self.wall
@@ -77,6 +83,12 @@ async def test_keeps_walking_onto_new_ground_and_says_how_far():
     assert world.stick is None  # let go
     assert went.steps[0] < -5 and abs(went.steps[1]) < 2
     assert "still going left" in went.text("left")
+
+
+async def test_a_far_off_layer_scrolling_at_its_own_speed_is_not_a_popup():
+    world = World(far=True, speed=14.0)
+    went = await keep_walking(world.grab, world.steer, "down", seconds=1.5)
+    assert went.outcome == "walked", went
 
 
 async def test_stops_at_a_wall_and_says_so():
@@ -168,8 +180,13 @@ async def test_the_agent_explores_and_remembers_where_it_went():
     assert walks[0].startswith("blocked: something stops you going left"), walks
     assert walks[1].startswith("walked: still going up"), walks
     assert world.stick is None and pad.log[-1] == "steer:off"
+    # Once it has walked here, holding the d-pad is watched too.
+    muse.replies = [("hold", {"input": "up", "ms": 1200}), ("finish", {"text": "ok"})]
+    await agent.run("go up a bit")
+    assert muse.results[-1].startswith("walked: still going up"), muse.results
     # The next request knows where this one went.
     muse.replies = [("finish", {"text": "ok"})]
     await agent.run("where have we been?")
     notes = muse.asked[-1]
     assert "keep_walking left: blocked; now" in notes and "steps up and" in notes
+    assert "keep_walking up: walked" in notes

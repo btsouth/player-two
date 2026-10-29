@@ -124,7 +124,10 @@ of the screen) and keep_walking that way to go through it or onto new ground; it
 at a wall or a new area and says how far you went. Never hold the d-pad blind to \
 explore. Keep a map from where each walk took you (your walks in this area are listed \
 for you): keep going the same way while new ground appears, try exits and directions \
-you haven't tried, and don't go back where you've been unless it's a dead end. For a \
+you haven't tried, and don't go back where you've been unless it's a dead end. If \
+walk_to is blocked twice on the same thing, it's out of reach from here (scenery, or \
+across a drop): stop trying it and look for another way: keep_walking each open \
+direction in turn, along the edges of the ground you're on. For a \
 single step by hand, hold the d-pad (up, down, left or right), not the stick: many 2D \
 games ignore the stick. Tell the player what's around as you go.
 - Walking in 3D: hold the left stick for about a second at a time, then look. Up walks \

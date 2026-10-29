@@ -299,6 +299,11 @@ class Agent:
                 d = a.get("direction", "up")
                 await asyncio.to_thread(self.controls.stick, inp.split("_")[0], d, ms)
                 return f"held {inp} {d} for {ms} ms"
+            if inp in ANGLES and ms >= 400 and self._walker is not None:
+                # Walking by d-pad in a game it has walked in: watch it, so the model
+                # learns how far it went or what stopped it, not just that it held.
+                return await self._act("keep_walking", {"direction": inp,
+                                                        "seconds": ms / 1000})
             await asyncio.to_thread(self.controls.press, inp, ms)
             return f"held {inp} for {ms} ms"
         if name == "walk_to":
@@ -323,14 +328,15 @@ class Agent:
             direction = str(a.get("direction") or "")
             if direction not in ANGLES:
                 return f"direction must be one of {', '.join(ANGLES)}"
-            secs = max(1.0, min(float(a.get("seconds") or 3), 8.0))
+            secs = max(0.4, min(float(a.get("seconds") or 3), 8.0))
             await self.go.wait()
             if self.cancelled:
                 return "stopped by the player"
             walker = self.walker()
             try:
                 went = await keep_walking(self.walker_image, self.controls.steer, direction,
-                                          secs, self.walker_keep_going, walker.memory)
+                                          secs, self.walker_keep_going, walker.memory,
+                                          walker.log)
             except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc}); hold the d-pad instead"

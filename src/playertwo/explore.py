@@ -72,7 +72,8 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
                        steer: Callable[[float | None], None], direction: str,
                        seconds: float = 3.0,
                        keep_going: Callable[[], Awaitable[bool]] | None = None,
-                       me: tuple[Look, np.ndarray, tuple[int, int]] | None = None) -> Went:
+                       me: tuple[Look, np.ndarray, tuple[int, int]] | None = None,
+                       log: Callable[[str], None] | None = None) -> Went:
     """Hold `direction` for up to `seconds`, stopping early at a wall, a new place or a
     popup. `me` is the character as last seen by a walk (its colours, where, its size),
     to follow it; without it, it's the moving thing nearest the middle of the screen,
@@ -86,8 +87,10 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
         look, at, (bw, bh) = me
         at = np.array(at, float)
     else:
-        # About the size of a 2D game's sprite (Crono is a thirtieth of the screen wide).
+        # About the size of a 2D game's sprite (Crono is a thirtieth of the screen wide),
+        # somewhere on screen: found once it moves.
         look, at, (bw, bh) = None, np.array([w / 2, h / 2]), (round(w / 30), round(h / 11))
+    known = me is not None
     size = float(max(6, min(bw, bh)))
     ground = np.zeros(2)   # how far the character went over the ground, in pixels
     view = np.zeros(2)     # how far the scenery scrolled
@@ -115,23 +118,33 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
             mask = (int(at[0] - bw), int(at[1] - bh), int(at[0] + bw), int(at[1] + bh))
             sx, sy, _ = phase_shift(prev, g, mask)
             scroll = np.array([sx, sy])
-            # Where the character is now: by its colours if a walk has seen it, else by
-            # what moved, near where it was.
-            radius = int(2 * max(bw, bh))
+            # While the screen scrolls, the camera is following the character: that's how
+            # far it went (followers and passers-by would only add noise). On a still
+            # screen (a small room, the edge of the map) the character crosses it.
+            follow = bool(np.hypot(sx, sy) > 1)
+            # Where it is: by its colours if a walk has seen it, else by what moves
+            # differently from the scenery, near where it was (anywhere, at first).
+            radius = int(2 * max(bw, bh)) if known else w // 2
             moved_px = motion(prev, g, (sx, sy))
             if look is not None:
-                x, y, score = look.find(rgb, (at[0] + sx, at[1] + sy), radius, moved_px)
+                x, y, score = look.find(rgb, (at[0], at[1]), radius, moved_px)
                 found = score > 0.3
             else:
-                x, y, score = spot(moved_px, (at[0] + sx, at[1] + sy), radius, (bw, bh))
+                x, y, score = spot(moved_px, (at[0], at[1]), radius, (bw, bh))
                 found = score > 8
-            now = np.array([x, y]) if found else at + scroll
-            # Over the ground: the character's move on screen, less the scenery's.
-            step = (now - at) - scroll
-            ground += step
+            now = np.array([x, y]) if found else at
+            if follow:
+                ground -= scroll
+            elif known:
+                ground += now - at
+            known = known or found
+            at = now
             view += scroll
             at = now
-            popup = [*popup[-2:], changed(prev, g, (sx, sy))]
+            # A text box, a menu or a battle stops the character, so the view stops too;
+            # while it scrolls, layers moving at their own speed (clouds, a far-off
+            # background) change much of the picture and mean nothing.
+            popup = [*popup[-2:], 0.0 if follow else changed(prev, g, (sx, sy))]
             prev = g
             t = time.monotonic() - paused
             history.append((t, ground.copy()))
@@ -145,10 +158,15 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
                 if gone > 0.5 * size:
                     ever = True
                 elif gone < 0.3 * size:
-                    outcome = "blocked" if ever or np.hypot(*ground) > size else "didnt_move"
+                    # A step or so and then a wall still counts as having moved.
+                    went = float(np.dot(ground, unit)) > 0.5 * size
+                    outcome = "blocked" if ever or went else "didnt_move"
                     break
     finally:
         steer(None)
+    if log is not None:
+        log(f"keep_walking {direction}: {outcome} after {len(history)} frames, ground "
+            f"{(ground / size).round(1).tolist()}, last changes {[round(c, 3) for c in popup]}")
     return Went(outcome, ground / size, float(np.hypot(*view)) / w,
                 time.monotonic() - t0 - paused, at if outcome != "new_area" else None)
 
