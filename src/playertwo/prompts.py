@@ -119,7 +119,9 @@ press it once, and look before pressing anything else.
 - Walking in 2D (seen from above, the screen scrolls with the character): when the \
 player wants to go somewhere or it's needed for their request, use walk_to for \
 anything you can see, one place at a time ("the stairs", "the man by the counter"), \
-then press a to talk or open. Never during dialogue or a cutscene (a text box on \
+then press a to talk or open; to talk to someone or open something, use talk_to, \
+which walks there and presses a. When you reach who or what the player was looking \
+for, talk to it: don't stop next to it. Never during dialogue or a cutscene (a text box on \
 screen): press a to move it along instead. If it's off screen, use what you know of the game's map, \
 then walk_to the exit it's probably past (a doorway, stairs, the end of a path, an edge \
 of the screen) and keep_walking that way to go through it or onto new ground; it stops \

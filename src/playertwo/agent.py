@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from .controls import BUTTONS, DIRECTIONS, Controls
-from .explore import ANGLES, Trail, keep_walking
+from .explore import ANGLES, Trail, find_me, keep_walking
 from .muse import Muse, image_part
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame, thumb
@@ -52,6 +52,18 @@ TOOLS = [
             "me": {"type": "string", "description": "Which character on screen is the "
                    "player's, so it isn't mixed up with others: \"the boy with spiky red "
                    "hair\"."},
+        }, "required": ["target"]}}},
+    {"type": "function", "function": {
+        "name": "talk_to",
+        "description": "Walk to a person (or a sign, a chest, a door) you can see on "
+                       "screen and press a when there, in games seen from above: walk_to "
+                       "and the press in one. Look at the screen after to read what they "
+                       "say.",
+        "parameters": {"type": "object", "properties": {
+            "target": {"type": "string", "description": "Who or what, described so it "
+                       "can be found on this screen."},
+            "me": {"type": "string", "description": "Which character is the player's, "
+                   "if it's unclear."},
         }, "required": ["target"]}}},
     {"type": "function", "function": {
         "name": "keep_walking",
@@ -281,7 +293,7 @@ class Agent:
                 done += (". Stopped before confirming: look at what is highlighted now. If it "
                          "is what the player wants, press a on its own; if not, fix it first.")
             return done
-        if self.on_action:
+        if self.on_action and name != "talk_to":  # its walk_to says it
             self.on_action(name, a)
         if name == "wait":
             secs = max(0.5, min(float(a.get("seconds") or 2), 8.0))
@@ -306,6 +318,17 @@ class Agent:
                                                         "seconds": ms / 1000})
             await asyncio.to_thread(self.controls.press, inp, ms)
             return f"held {inp} for {ms} ms"
+        if name == "talk_to":
+            walked = await self._act("walk_to", a)
+            if not walked.startswith("arrived"):
+                return walked
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            await asyncio.to_thread(self.controls.press, "a")
+            await asyncio.sleep(0.3)
+            return (f"{walked}; pressed a. If they speak now, say the line word for word "
+                    "(who, then the line) before pressing again.")
         if name == "walk_to":
             target = str(a.get("target") or "").strip()
             if not target:
@@ -316,6 +339,7 @@ class Agent:
             me = str(a.get("me") or "").strip()
             walker = self.walker()
             try:
+                await self._find_me(walker)
                 walked = await walker.walk(target, me)
             except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
                 # Not the model's arguments: something broke while walking.
@@ -334,6 +358,7 @@ class Agent:
                 return "stopped by the player"
             walker = self.walker()
             try:
+                await self._find_me(walker)
                 went = await keep_walking(self.walker_image, self.controls.steer, direction,
                                           secs, self.walker_keep_going, walker.memory,
                                           walker.log)
@@ -348,6 +373,13 @@ class Agent:
                 self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
             return went.text(direction.replace("_", " and "))
         return "ok"
+
+    async def _find_me(self, walker: Walker) -> None:
+        """New to this area: which character is the player's, by moving it a little. The
+        model often can't tell (two people with red hair, a mother at the bedside)."""
+        if walker.memory is None:
+            walker.memory = await find_me(self.walker_image, self.controls.steer,
+                                          self.walker_keep_going, walker.log)
 
     async def walker_image(self):
         return (await self.grab()).image
@@ -409,7 +441,7 @@ class Agent:
             acted = False
             finished = None
             noise = None
-            if any(c.function.name in ("press", "hold", "walk_to", "keep_walking")
+            if any(c.function.name in ("press", "hold", "walk_to", "talk_to", "keep_walking")
                    for c in calls):
                 noise = await self._noise()
             t_act = time.monotonic()

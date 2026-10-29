@@ -5,7 +5,7 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from playertwo.explore import Trail, keep_walking, words
+from playertwo.explore import Trail, find_me, keep_walking, words
 
 
 def texture(w, h, seed=3):
@@ -190,3 +190,52 @@ async def test_the_agent_explores_and_remembers_where_it_went():
     notes = muse.asked[-1]
     assert "keep_walking left: blocked; now" in notes and "steps up and" in notes
     assert "keep_walking up: walked" in notes
+
+
+class Crowd(World):
+    """The world above, with someone else of the same colours pacing up and down near
+    the middle (a mother at the bedside), and a party member a step behind."""
+
+    def __init__(self, follower=False, other=(1130, 700), **kw):
+        super().__init__(**kw)
+        self.t = 0
+        self.home = np.array(other, float)
+        self.trail = [self.pos.copy() for _ in range(5)] if follower else None
+
+    def other(self):
+        return self.home + np.array([0.0, 40 * math.sin(self.t / 3)])
+
+    async def grab(self):
+        self.t += 1
+        before = self.pos.copy()
+        view = await super().grab()
+        if self.trail is not None and np.hypot(*(self.pos - before)) > 0:
+            self.trail = [*self.trail[1:], before]
+        d = ImageDraw.Draw(view)
+        cam = self.camera()
+        for p in [self.other()] + ([self.trail[0]] if self.trail else []):
+            px, py = p - cam
+            d.rectangle((px - 12, py - 18, px + 12, py + 18), fill=(200, 30, 30))
+            d.rectangle((px - 6, py - 14, px + 6, py - 4), fill=(250, 250, 250))
+        return view
+
+
+async def test_finds_which_character_is_the_players_by_moving_it():
+    # In a room, the other one pacing in the middle of the screen, where a guess would
+    # look first, and the player's character off to the side.
+    for kw in ({}, {"room": True, "start": (960, 560), "other": (1180, 670)},
+               {"follower": True}):
+        world = Crowd(**kw)
+        me = await find_me(world.grab, world.steer)
+        assert me is not None, kw
+        _look, at, _size = me
+        # On screen, in the tracked (480 wide) frame.
+        true = (world.pos - world.camera()) / 2
+        assert np.hypot(*(at - true)) < 10, (kw, at, true)
+        assert world.stick is None
+
+
+async def test_finds_nobody_when_the_d_pad_moves_nothing():
+    world = Crowd()
+    world.text_box = True
+    assert await find_me(world.grab, world.steer) is None

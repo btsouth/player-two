@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from .walk import Look, changed, motion, new_place, phase_shift, small, spot
+from .walk import Look, _box_means, changed, motion, new_place, phase_shift, small, spot
 
 ANGLES = {"up": 0, "up_right": 45, "right": 90, "down_right": 135, "down": 180,
           "down_left": 225, "left": 270, "up_left": 315}
@@ -175,6 +175,92 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
     steps[wobble] = 0.0
     return Went(outcome, steps, float(np.hypot(*view)) / w,
                 time.monotonic() - t0 - paused, at if outcome != "new_area" else None)
+
+
+class _Stopped(Exception):
+    pass
+
+
+async def find_me(grab: Callable[[], Awaitable[Image.Image]],
+                  steer: Callable[[float | None], None],
+                  keep_going: Callable[[], Awaitable[bool]] | None = None,
+                  log: Callable[[str], None] | None = None
+                  ) -> tuple[Look, np.ndarray, tuple[int, int]] | None:
+    """Which character is the player's: tap the d-pad one way and back, and see what
+    starts and stops moving with it. Someone else on screen (another person with red
+    hair, a mother at the bedside) walks on their own time, and a party member following
+    catches up after the d-pad is let go. None if nothing moved with it (a text box, a
+    cutscene)."""
+    rgb, prev = small(await grab())
+    h, w = prev.shape
+    bw, bh = round(w / 30), round(h / 11)
+    rest = np.zeros((h, w), np.float32)
+    rests = 0
+    best: tuple[float, float, float] | None = None
+
+    last = np.zeros((h, w), np.float32)
+
+    async def watch(angle: float | None, secs: float) -> np.ndarray:
+        nonlocal rgb, prev, last
+        if keep_going is not None and not await keep_going():
+            raise _Stopped
+        steer(angle)
+        total = np.zeros((h, w), np.float32)
+        frames = 0
+        end = time.monotonic() + secs
+        while time.monotonic() < end:
+            await asyncio.sleep(0.03)
+            if keep_going is not None:
+                t = time.monotonic()
+                # The player talking: let go, and don't count what moved meanwhile.
+                if not await keep_going() or time.monotonic() - t > 0.1:
+                    raise _Stopped
+            rgb, g = small(await grab())
+            sx, sy, _ = phase_shift(prev, g)
+            last = motion(prev, g, (sx, sy))
+            total += last
+            frames += 1
+            prev = g
+        return total / max(frames, 1)
+
+    try:
+        rest += await watch(None, 0.25)
+        rests += 1
+        for there, back in ((270, 90), (0, 180)):
+            moved = [await watch(there, 0.3)]
+            rest += await watch(None, 0.3)
+            moved.append(await watch(back, 0.3))
+            now = last  # where it moved last, so where it is
+            rest += await watch(None, 0.3)
+            rests += 2
+            still = _box_means(rest / rests, bw, bh)
+            # What moved both ways (or the one way it could, up against a wall), and not
+            # while the d-pad was let go.
+            scores = [_box_means(m, bw, bh) - 3 * still for m in moved]
+            going = [s for s in scores if s.max() > 6]
+            if not going:
+                continue
+            score = np.minimum.reduce(going)
+            iy, ix = np.unravel_index(int(np.argmax(score)), score.shape)
+            # Over the way it walked, there and back: where it is now is the end of it.
+            x, y, _ = spot(now, (ix + bw / 2, iy + bh / 2), max(bw, bh), (bw, bh))
+            best = (x, y, float(score[iy, ix]))
+            break
+    except _Stopped:
+        return None
+    finally:
+        steer(None)
+    if best is None or best[2] <= 6:
+        if log is not None:
+            log("find_me: nothing moved with the d-pad")
+        return None
+    x, y, how = best
+    look = Look(rgb, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2))
+    if log is not None:
+        log(f"find_me: the character is at {x:.0f},{y:.0f} (moved {how:.0f})")
+    if not look.usable:
+        return None
+    return look, np.array([x, y]), (bw, bh)
 
 
 @dataclass

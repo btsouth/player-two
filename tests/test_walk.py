@@ -247,6 +247,53 @@ async def test_the_agent_walks_there_and_lets_go_while_the_player_talks():
     assert "steer:off" in pad.log
 
 
+async def test_talk_to_walks_there_and_presses_a():
+    import json
+    from types import SimpleNamespace
+
+    from playertwo.agent import Agent
+    from playertwo.controls import DryRun
+    from playertwo.screen import Frame
+
+    game = Game()
+
+    class Pad(DryRun):
+        def steer(self, angle, strength=1.0):
+            super().steer(angle, strength)
+            game.steer(angle)
+
+    class Muse(FakeMuse):
+        def __init__(self, game):
+            super().__init__(game)
+            self.s = SimpleNamespace(image_max_side=640)
+            self.replies = [("talk_to", {"target": "the green chest"}),
+                            ("finish", {"text": "Opened."})]
+            self.results: list[str] = []
+
+        async def tools(self, messages, tools, effort=None, max_tokens=0):
+            self.results += [m["content"] for m in messages if m["role"] == "tool"]
+            name, args = self.replies.pop(0)
+            call = SimpleNamespace(id="c", function=SimpleNamespace(
+                name=name, arguments=json.dumps(args)),
+                model_dump=lambda: {"id": "c", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(args)}})
+            return SimpleNamespace(content="", tool_calls=[call])
+
+    async def grab():
+        return Frame(await game.grab(), 0)
+
+    async def speak(_text):
+        pass
+
+    pad, muse = Pad(), Muse(game)
+    agent = Agent(muse, pad, grab, speak, max_settle_s=0.1)
+    result = await agent.run("open the chest")
+    assert result.outcome == "Opened."
+    assert muse.results[0].startswith("arrived") and "pressed a" in muse.results[0]
+    # Let go of the d-pad first, then a.
+    assert pad.log[-1] == "a" and pad.log[-2] == "steer:off", pad.log[-3:]
+
+
 async def test_a_character_that_wont_move_ends_the_walk_quickly():
     game = Game(speed=0.0)  # a cutscene: the stick does nothing
     result, _ = await walk(game)
