@@ -73,6 +73,7 @@ class AreaMap:
         self._prev: np.ndarray | None = None        # last frame in gray
         self._soft: np.ndarray | None = None        # the same, blurred a little
         self._fit: tuple[float, float, float] | None = None  # last image(): x0, y0, scale
+        self._covered = False  # something over part of the screen (a text box) since a gap
 
     # Placing frames
 
@@ -105,6 +106,14 @@ class AreaMap:
             # Back from a flash or a dimmed screen: the camera may have moved a little
             # meanwhile.
             return self.resume(rgb, g, now)
+        if self._covered:
+            # Until the screen matches the map all over again, what covers part of it
+            # isn't the ground: follow the scroll, lay nothing.
+            cam = self.camera - np.asarray(scroll, float)
+            if self._fits(cam, g) != "all":
+                self.camera, self._prev, self._soft = cam, g, None
+                return False
+            self._covered = False
         self.add(rgb, scroll, g)
         return False
 
@@ -138,6 +147,7 @@ class AreaMap:
             if fit is not None:
                 self.camera = cam
                 self._soft = None  # what changed over the gap isn't "moving"
+                self._covered = fit != "all"
                 if fit == "all":
                     self.add(rgb, (0.0, 0.0), g)
                 else:

@@ -43,8 +43,9 @@ developer has to build.
   French, Italian, Portuguese or Hindi (it can translate on-screen text into your language), and a
   team-up mode for games that already narrate their own menus.
 
-It works best in turn-based and menu-driven games: RPGs, JRPGs, visual novels, card games,
-strategy, point and click. It walks you around 2D games. Walking in 3D games, like a Persona
+It works best in turn-based and menu-driven games played with a controller or keyboard: RPGs,
+JRPGs, visual novels, card games, strategy. It can't use a mouse or touch screen yet. It walks
+you around 2D games. Walking in 3D games, like a Persona
 dungeon, isn't good enough for a blind player yet: it gets lost. It does not play fast action
 games for you; there it gives warnings.
 

@@ -266,9 +266,14 @@ def test_a_text_box_after_a_gap_keeps_the_map():
     rgb[180:260, 20:460] = (20, 20, 120)  # a text box over the bottom third
     assert not area.resume(rgb)
     assert area.bounds() == seen
-    # and the box isn't drawn into the map
+    # Nor while it stays up, walked on or not, until the screen matches again.
+    for t in range(8):
+        assert not area.track(rgb, now=t * 0.04)
     pic = area.picture()
     assert not ((pic[..., 2] == 120) & (pic[..., 0] == 20)).any()
+    frames = area.frames
+    area.track(small(world.step(None))[0], now=0.4)
+    assert area.frames == frames + 1
 
 
 def test_after_a_gap_it_finds_the_screen_on_the_map_or_starts_over():

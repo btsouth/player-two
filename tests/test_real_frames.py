@@ -8,6 +8,7 @@ The synthetic worlds in the other tests move the character a fixed amount a fram
 check the thresholds against a real game's timing, sprites and crowds.
 """
 
+import asyncio
 import functools
 import os
 import time
@@ -127,3 +128,55 @@ def test_a_text_box_over_the_fair_keeps_its_map():
     assert area.bounds() == seen
     # Somewhere else entirely starts over.
     assert area.resume(rec("rec_down")[0][10])
+
+
+@pytest.mark.parametrize("step", [4, 5, 6])
+def test_a_slow_capture_of_walking_is_never_a_new_place(step):
+    # Every 4th to 6th frame: about 4 to 7 a second, the view moving 25 to 45 px a frame.
+    frames, ts = rec("rec_fair")
+    scene, prev = Transition(), None
+    for i in range(0, len(frames), step):
+        g = small(Image.fromarray(frames[i]))[1]
+        scroll = (0.0, 0.0) if prev is None else phase_shift(prev, g)[:2]
+        assert scene.see(g, scroll, float(ts[i])) == "steady", i
+        prev = g
+
+
+async def test_keep_walking_counts_steps_on_a_slow_capture():
+    real = replay("rec_fair", 316)
+
+    async def grab():
+        await asyncio.sleep(0.1)  # about 6 frames a second
+        return await real()
+
+    went = await keep_walking(grab, lambda _a: None, "right", 3.5, me=crono(316))
+    assert went.outcome == "blocked" and went.steps[0] >= 10, went
+
+
+def bands(f, frac):
+    f = f.copy()
+    k = int(f.shape[0] * frac / 2)
+    f[:k] = 0
+    f[f.shape[0] - k:] = 0
+    return f
+
+
+@pytest.mark.parametrize("frac", [0.0, 0.4, 0.5])
+def test_a_cut_between_rooms_with_dark_margins_is_a_new_place(frac):
+    fair, down = rec("rec_fair")[0], rec("rec_down")[0]
+    a, b = bands(fair[300], frac), bands(down[10], frac)
+    scene, t, states = Transition(), 0.0, []
+    for f in [a] * 15 + [b] * 15:
+        states.append(scene.see(small(Image.fromarray(f))[1], (0.0, 0.0), t))
+        t += 0.04
+    assert [s for s in states if s not in ("steady", "changing")] == ["new"], states
+
+
+def test_a_cut_to_a_dark_place_starts_a_new_map():
+    fair, down = rec("rec_fair")[0], rec("rec_down")[0]
+    dim = (down[10] * 0.08).astype(np.uint8)  # a cave, nearly black
+    area, fresh = AreaMap(), []
+    for i, f in enumerate([*fair[316:346], *[dim] * 60]):
+        fresh.append(area.track(f, now=i / 26))
+    assert fresh.count(True) == 1
+    assert area.frames > 20  # and the dark place is mapped, not skipped as a fade

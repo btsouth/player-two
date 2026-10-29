@@ -149,7 +149,7 @@ def _edges(x: np.ndarray) -> np.ndarray:
 
 
 def phase_shift(a: np.ndarray, b: np.ndarray, mask: tuple[int, int, int, int] | None = None,
-                limit: int = 24) -> tuple[float, float, float]:
+                limit: int = 64) -> tuple[float, float, float]:
     """How far the picture moved from a to b, in pixels (x right, y down), and how sure.
 
     `mask` (x0, y0, x1, y1) is left out of both, so the walking character doesn't count
@@ -174,6 +174,10 @@ def phase_shift(a: np.ndarray, b: np.ndarray, mask: tuple[int, int, int, int] | 
     c = np.fft.fftshift(np.fft.ifft2(r).real) / float(weight.mean())
     h, w = c.shape
     cy, cx = h // 2, w // 2
+    # Far enough for a slow capture of a running character (Crono walks about 6 px a
+    # frame at 26 a second, 40 at 4); on recorded frames a wider search found no false
+    # matches at full speed either.
+    limit = max(1, min(limit, cy - 1, cx - 1))
     near = c[cy - limit:cy + limit + 1, cx - limit:cx + limit + 1]
     y, x = np.unravel_index(int(np.argmax(near)), near.shape)
 
@@ -314,6 +318,7 @@ class Transition:
     CHANGE = 20    # gray levels most of the thumbnail must change by
     CALM = 4       # and change less than, over CALM_S, to have settled
     CALM_S = 0.12
+    DARK_S = 1.0   # a dark screen calm this long is a dark place, not a fade
 
     def __init__(self) -> None:
         self._hist: list[tuple[float, np.ndarray, np.ndarray]] = []  # time, frame, scroll
@@ -341,7 +346,8 @@ class Transition:
                 old = [h for h in self._hist if now - h[0] >= self.AGE]
                 _, ref, s0 = old[-1] if old else self._hist[0]
                 last = self._hist[-1][1]
-                if blank(g) or new_place(last, g) or self._spread(ref, g, self._scroll - s0):
+                if (blank(g) and not blank(last)) or new_place(last, g) or \
+                        self._moved_on(ref, g, self._scroll - s0):
                     self._begin(now)
                     return self._settle(g, now)
             self._hist = [h for h in self._hist[-40:] if now - h[0] < self.AGE + 0.3]
@@ -349,6 +355,16 @@ class Transition:
             self.state = "steady"
             return self.state
         return self._settle(g, now)
+
+    def _moved_on(self, ref: np.ndarray, g: np.ndarray, shift) -> bool:
+        """Whether most of the screen changed since `ref`, beyond the scroll. The scroll
+        added up frame by frame goes wrong once the view moves further between frames
+        than phase_shift looks (a slow capture, a running character), so a change is
+        checked again with the two frames lined up directly, searching further."""
+        if not self._spread(ref, g, shift):
+            return False
+        sx, sy, _ = phase_shift(ref, g, limit=min(80, g.shape[0] // 2 - 2))
+        return self._spread(ref, g, (sx, sy))
 
     def _spread(self, a: np.ndarray, b: np.ndarray, shift) -> bool:
         if a.shape != b.shape:
@@ -366,7 +382,8 @@ class Transition:
         self._calm = [c for c in self._calm if now - c[0] < 1.0]
         old = [c for c in self._calm if now - c[0] >= self.CALM_S]
         self._calm.append((now, g))
-        if blank(g) or not old or old[-1][1].shape != g.shape or \
+        dark = blank(g) and self.since is not None and now - self.since < self.DARK_S
+        if dark or not old or old[-1][1].shape != g.shape or \
                 float(np.median(cells(old[-1][1], g, (0, 0), 4, 4))) >= self.CALM:
             self.state = "changing"
             return self.state
@@ -374,7 +391,9 @@ class Transition:
         if self.before is not None and self.before.shape == g.shape:
             h = g.shape[0]
             sx, sy, _ = phase_shift(self.before, g, limit=min(60, h // 2 - 2))
-            same = not self._spread(self.before, g, (sx, sy))
+            # A cut that changed the picture outright is somewhere else, even where both
+            # places share dark margins that match.
+            same = not self._spread(self.before, g, (sx, sy)) and not new_place(self.before, g)
         self.since, self.before, self._calm = None, None, []
         self._hist = [(now, g, self._scroll.copy())]
         self.state = "same" if same else "new"
@@ -675,6 +694,7 @@ class Walker:
                     best = (best[0], best[1] + gap)
                     last_rel += gap
                     began += gap
+                    hid = hid + gap if hid else 0.0
                     _, prev = await self._frame()
             off = points[0] - player
             dist = float(np.hypot(*off))
@@ -752,6 +772,7 @@ class Walker:
                 best = (best[0], best[1] + gap)
                 last_rel += gap
                 began += gap
+                hid = hid + gap if hid else 0.0
                 prev, popped, stick = g, [], None
                 continue
             scroll = np.array([sx, sy])
