@@ -117,7 +117,9 @@ player wants to go somewhere or it's needed for their request, use walk_to for \
 anything you can see, one place at a time ("the stairs", "the man by the counter"), \
 then press a to talk or open. Never during dialogue or a cutscene (a text box on \
 screen): press a to move it along instead. If it's off screen, walk_to the edge it's probably past \
-(a doorway, the end of a path) and look again. Tell the player what's around as you go.
+(a doorway, the end of a path) and look again. For a step or two by hand, hold the d-pad (hold up, down, left \
+or right), not the stick: many 2D games ignore the stick. Tell the player what's \
+around as you go.
 - Walking in 3D: hold the left stick for about a second at a time, then look. Up walks \
 the way the camera faces. Keep going the same way while the path is open; turn only at \
 a wall, a corner or a turning, and never walk straight back the way you came unless \

@@ -126,6 +126,7 @@ async def test_walks_across_a_scrolling_world_to_the_target():
     result, _ = await walk(game)
     assert result.outcome == "arrived", result.text()
     assert np.hypot(*(game.pos - game.goal)) < 80
+    assert min(abs(game.pos - game.goal)) < 14  # lined up with it, to talk or open
     assert game.stick is None  # let go of the stick
     assert len(game.asked) == 1  # one look by the model; the rest was local
 
@@ -227,3 +228,9 @@ async def test_the_agent_walks_there_and_lets_go_while_the_player_talks():
     assert result.outcome == "There."
     assert muse.results[0].startswith("arrived"), muse.results
     assert "steer:off" in pad.log
+
+
+async def test_a_character_that_wont_move_ends_the_walk_quickly():
+    game = Game(speed=0.0)  # a cutscene: the stick does nothing
+    result, _ = await walk(game)
+    assert result.outcome == "didnt_move" and result.seconds < 3

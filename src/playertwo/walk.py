@@ -269,7 +269,9 @@ async def locate(muse: Muse, img: Image.Image, target: str, context: str = "",
 
 @dataclass
 class Walked:
-    outcome: str  # "arrived", "new_area", "blocked", "lost", "not_found", "stopped", "timeout"
+    # "arrived", "new_area", "blocked", "lost", "not_found", "stopped", "timeout",
+    # "didnt_move"
+    outcome: str
     detail: str
     seconds: float
 
@@ -327,9 +329,15 @@ class Walker:
         bw, bh = max(4, round(px2 - px1)), max(4, round(py2 - py1))
         look: Look | None = None
         unsure = 0  # frames in a row without a clear sight of the character
+        began = time.monotonic()
+        seen_moving = False
         tx1, ty1, tx2, ty2 = loc.target
         goal = np.array([(tx1 + tx2) / 2, (ty1 + ty2) / 2])
         tsize = max(tx2 - tx1, ty2 - ty1)
+        # Lined up with it, side by side or one above the other: characters talk to and
+        # open things only straight ahead, in the four directions.
+        line_x = max(0.35 * size, 0.35 * (tx2 - tx1))
+        line_y = max(0.35 * size, 0.35 * (ty2 - ty1))
         # Close enough: touching distance for the two sprites.
         reach = 0.6 * (size + min(tsize, 3 * size))
         points = [np.array(p) for p in loc.via] + [goal]
@@ -362,15 +370,25 @@ class Walker:
                 self.log(f"relocated (no progress) {loc2}")
                 if loc2.player is not None and loc2.target is not None:
                     return await self._restart(target, loc2, t0, timeout, done, stuck_turns)
-            if dist <= (reach if len(points) == 1 else max(size, reach * 0.6)):
-                if len(points) == 1:
+            want = None
+            if len(points) == 1 and dist <= 1.6 * reach:
+                dx, dy = off
+                if abs(dx) >= abs(dy):
+                    lined, face, across = abs(dy) <= line_y, (90 if dx > 0 else 270), (0, dy)
+                else:
+                    lined, face, across = abs(dx) <= line_x, (180 if dy > 0 else 0), (dx, 0)
+                if lined and dist <= reach:
                     # Face it, so a press of a talks to it or opens it.
-                    self.steer((round(compass(*off) / 45) * 45) % 360)
+                    self.steer(face)
                     await asyncio.sleep(0.08)
-                    return done("arrived", f"next to {target}")
+                    return done("arrived", f"next to {target}, facing it")
+                if not lined and slide == 0:
+                    want = compass(*across)  # step sideways to line up
+            elif len(points) > 1 and dist <= max(size, reach * 0.6):
                 points.pop(0)
                 continue
-            want = (compass(*off) + (0, 45, -45, 90, -90)[slide]) % 360
+            if want is None:
+                want = (compass(*off) + (0, 45, -45, 90, -90)[slide]) % 360
             # Eight ways, like a d-pad: most 2D games walk no other way. Keep the last
             # one until the aim is well past the halfway line, so it doesn't flicker.
             if stick is None or abs(wrap(want - stick)) > 30:
@@ -402,16 +420,31 @@ class Walker:
                                  (bw, bh))
                 prev = g
                 if how > 6:
+                    seen_moving = True
                     velocity = np.array([x, y]) - player
                     player = np.array([x, y])
                     look = Look(rgb, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2))
                     unsure = 0
+                elif not seen_moving:
+                    if time.monotonic() - began > 1.2:
+                        if stuck_turns == 0:
+                            return done("didnt_move", "your character didn't move. A text "
+                                        "box or a cutscene is probably on: press a to move "
+                                        "it along")
+                        # Up against something after asking again: go by the model's box.
+                        look = Look(rgb, (player[0] - bw / 2, player[1] - bh / 2,
+                                          player[0] + bw / 2, player[1] + bh / 2))
+                        seen_moving = True
                 elif unsure > 20:
-                    loc2 = await locate(self.muse, await self.grab(), target,
-                                        "lost track of the character", self.me)
-                    self.log(f"relocated (lost) {loc2}")
-                    if loc2.player is None or loc2.target is None:
-                        return done("lost", "I lost track of your character. " + loc2.note)
+                    stuck_turns += 1
+                    loc2 = None
+                    if stuck_turns <= 2:
+                        loc2 = await locate(self.muse, await self.grab(), target,
+                                            "lost track of the character", self.me)
+                        self.log(f"relocated (lost) {loc2}")
+                    if loc2 is None or loc2.player is None or loc2.target is None:
+                        return done("lost", "I lost track of your character. "
+                                    + (loc2.note if loc2 else ""))
                     return await self._restart(target, loc2, t0, timeout, done, stuck_turns)
                 continue
             unsure = 0
