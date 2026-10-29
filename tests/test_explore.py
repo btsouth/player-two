@@ -116,7 +116,7 @@ async def test_walk_to_isnt_stopped_by_a_far_off_layer_either():
 
 async def test_a_short_walk_still_says_whether_it_moved():
     # Under a second, too short for the usual check over the last second.
-    for wall, seconds, outcome in (((1150, 0, 1180, 1400), 0.6, "didnt_move"),  # right there
+    for wall, seconds, outcome in (((1188, 0, 1199, 1400), 0.6, "didnt_move"),  # touching
                                    ((1100, 0, 1130, 1400), 1.5, "blocked"),     # a few steps
                                    (None, 0.6, "walked")):
         world = World(wall=wall)
