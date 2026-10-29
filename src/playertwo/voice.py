@@ -210,25 +210,38 @@ class Voice:
             if gen == self._gen:
                 self.mixer.push_speech(samples)
 
-        async for delta in deltas:
-            if gen != self._gen:
-                return " ".join(spoken)
-            buf += delta
-            parts = _SENTENCE.split(buf)
-            for done in parts[:-1]:
-                done = clean_for_speech(done)
-                if speakable(done):
-                    chunks = first_chunk_split(done) if not spoken else [done]
-                    spoken.append(done)
-                    for chunk in chunks:
-                        pending = asyncio.create_task(speak_chunk(chunk, pending))
-            buf = parts[-1]
-        tail = clean_for_speech(buf)
-        if speakable(tail) and gen == self._gen:
-            spoken.append(tail)
-            pending = asyncio.create_task(speak_chunk(tail, pending))
-        if pending is not None:
-            await pending
+        chunks_left: list[asyncio.Task] = []
+
+        def queue(chunk: str) -> None:
+            nonlocal pending
+            pending = asyncio.create_task(speak_chunk(chunk, pending))
+            chunks_left.append(pending)
+
+        try:
+            async for delta in deltas:
+                if gen != self._gen:
+                    return " ".join(spoken)
+                buf += delta
+                parts = _SENTENCE.split(buf)
+                for done in parts[:-1]:
+                    done = clean_for_speech(done)
+                    if speakable(done):
+                        chunks = first_chunk_split(done) if not spoken else [done]
+                        spoken.append(done)
+                        for chunk in chunks:
+                            queue(chunk)
+                buf = parts[-1]
+            tail = clean_for_speech(buf)
+            if speakable(tail) and gen == self._gen:
+                spoken.append(tail)
+                queue(tail)
+            if pending is not None:
+                await pending
+        except BaseException:
+            # Cancelled (or the model stream broke): nothing more of this is said.
+            for task in chunks_left:
+                task.cancel()
+            raise
         self.last_spoken = " ".join(spoken)
         return self.last_spoken
 
