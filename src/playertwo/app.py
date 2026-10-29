@@ -71,7 +71,7 @@ def local_action(text: str) -> str | None:
 
 HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
         "open the menu, or: use a potion on Yosuke. You can also say: describe, repeat, "
-        "stop, help, terse, more detail, slower, faster, pause narration, resume "
+        "stop, help, what's wrong, terse, more detail, slower, faster, pause narration, resume "
         "narration, watch my health, or goodbye.")
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
