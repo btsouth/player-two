@@ -13,6 +13,7 @@ from .controls import BUTTONS, DIRECTIONS, Controls
 from .muse import Muse, image_part
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame, thumb
+from .walk import Walker
 
 # Never the guide button: it opens the Steam overlay or the system menu, not the game.
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
@@ -35,6 +36,22 @@ TOOLS = [
             "direction": {"type": "string", "enum": list(DIRECTIONS)},
             "ms": {"type": "integer", "description": "How long, in milliseconds (max 5000)."},
         }, "required": ["input", "ms"]}}},
+    {"type": "function", "function": {
+        "name": "walk_to",
+        "description": "Walk the player's character to something you can see on screen: "
+                       "a door, stairs, a person, a chest, an exit. For games seen from "
+                       "above (2D, top-down or angled); it steers by itself, goes around "
+                       "what's in the way, and stops next to it, facing it. Then press a "
+                       "to talk to it or open it. Not for 3D games with the camera behind "
+                       "the character.",
+        "parameters": {"type": "object", "properties": {
+            "target": {"type": "string", "description": "What to walk to, described so "
+                       "it can be found on this screen: \"the woman in the green dress\", "
+                       "\"the stairs at the top left\"."},
+            "me": {"type": "string", "description": "Which character on screen is the "
+                   "player's, so it isn't mixed up with others: \"the boy with spiky red "
+                   "hair\"."},
+        }, "required": ["target"]}}},
     {"type": "function", "function": {
         "name": "wait",
         "description": "Wait without pressing anything: loading screens, fades, movies, "
@@ -90,6 +107,7 @@ class Step:
     tool: str
     args: dict
     t: float
+    result: str = ""
 
 
 @dataclass
@@ -146,6 +164,7 @@ class Agent:
         self.history: list[str] = []
         self.said: list[str] = []
         self.cancelled = False
+        self._walker: Walker | None = None
         # Cleared while the player holds the talk key: no presses or speech until it's
         # known whether they said stop, asked something else, or just wanted a repeat.
         self.go = asyncio.Event()
@@ -264,7 +283,35 @@ class Agent:
                 return f"held {inp} {d} for {ms} ms"
             await asyncio.to_thread(self.controls.press, inp, ms)
             return f"held {inp} for {ms} ms"
+        if name == "walk_to":
+            target = str(a.get("target") or "").strip()
+            if not target:
+                return "say what to walk to"
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            me = str(a.get("me") or "").strip()
+            return (await self.walker().walk(target, me)).text()
         return "ok"
+
+    def walker(self) -> Walker:
+        """One walker for the whole session, so what it learns about the camera stays."""
+        if self._walker is None:
+            async def image():
+                return (await self.grab()).image
+
+            async def keep_going() -> bool:
+                if not self.go.is_set():
+                    self.controls.steer(None)  # let go while the player is talking
+                    await self.go.wait()
+                return not self.cancelled
+
+            def note(text: str) -> None:
+                if self.on_action:
+                    self.on_action("walk_note", {"text": text})
+
+            self._walker = Walker(self.muse, image, self.controls.steer, keep_going, note)
+        return self._walker
 
     async def run(self, request: str, frame: Frame | None = None) -> Run:
         t0 = time.monotonic()
@@ -304,7 +351,7 @@ class Agent:
             acted = False
             finished = None
             noise = None
-            if any(c.function.name in ("press", "hold") for c in calls):
+            if any(c.function.name in ("press", "hold", "walk_to") for c in calls):
                 noise = await self._noise()
             t_act = time.monotonic()
             for c in calls:
@@ -316,7 +363,8 @@ class Agent:
                     args = {}
                 if not isinstance(args, dict):
                     args = {}
-                run.steps.append(Step(c.function.name, args, time.monotonic() - t0))
+                step = Step(c.function.name, args, time.monotonic() - t0)
+                run.steps.append(step)
                 if c.function.name == "say":
                     await self._speak(args.get("text", ""))
                     result = "said"
@@ -338,6 +386,7 @@ class Agent:
                     except (TypeError, ValueError, KeyError) as exc:
                         result = f"bad arguments ({exc}); fix them and try again"
                     acted = True
+                step.result = result
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
             if self.cancelled:
                 run.outcome = "cancelled"

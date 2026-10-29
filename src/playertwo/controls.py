@@ -7,6 +7,7 @@ a dry-run backend records presses for tests.
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,11 @@ class Controls:
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         raise NotImplementedError
 
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        """Hold the left stick at `angle` (0 up, 90 right) until the next call; None lets
+        go. For walking somewhere in a loop that keeps correcting the direction."""
+        raise NotImplementedError
+
     def sequence(self, buttons: list[str], gap_ms: int = 140, hold_ms: int = 100) -> None:
         for i, b in enumerate(buttons):
             self.press(b, hold_ms)
@@ -52,6 +58,18 @@ class DryRun(Controls):
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         self.log.append(f"{which}:{direction}:{ms}")
+
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        self.log.append("steer:off" if angle is None else f"steer:{round(angle)}")
+
+
+def steer_dirs(angle: float | None) -> list[str]:
+    """The d-pad directions closest to a stick angle (0 up, 90 right): one or two."""
+    if angle is None:
+        return []
+    sector = int(((angle % 360) + 22.5) // 45) % 8
+    return [["up"], ["up", "right"], ["right"], ["down", "right"], ["down"],
+            ["down", "left"], ["left"], ["up", "left"]][sector]
 
 
 class LinuxPad(Controls):
@@ -120,6 +138,24 @@ class LinuxPad(Controls):
         self.ui.write(e.EV_ABS, ay, 0)
         self._syn()
 
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        e = self.e
+        x = y = 0
+        if angle is not None:
+            v = 32767 * max(0.1, min(1.0, strength))
+            r = math.radians(angle)
+            x, y = int(math.sin(r) * v), int(-math.cos(r) * v)
+        self.ui.write(e.EV_ABS, e.ABS_X, x)
+        self.ui.write(e.EV_ABS, e.ABS_Y, y)
+        # The d-pad too: many 2D games walk only with it and ignore the stick.
+        hat = {e.ABS_HAT0X: 0, e.ABS_HAT0Y: 0}
+        for d in steer_dirs(angle):
+            axis, v = self.hats[d]
+            hat[axis] = v
+        for axis, v in hat.items():
+            self.ui.write(e.EV_ABS, axis, v)
+        self._syn()
+
     def close(self) -> None:
         self.ui.close()
 
@@ -165,6 +201,27 @@ class WindowsPad(Controls):
         move(0.0, 0.0)
         self.pad.update()
 
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        if angle is None:
+            self.pad.left_joystick_float(0.0, 0.0)
+        else:
+            s = max(0.1, min(1.0, strength))
+            r = math.radians(angle)
+            self.pad.left_joystick_float(math.sin(r) * s, math.cos(r) * s)
+        # The d-pad too: many 2D games walk only with it and ignore the stick.
+        held = steer_dirs(angle)
+        for d in ("up", "down", "left", "right"):
+            if d in held:
+                self.pad.press_button(button=self.keys[d])
+            else:
+                self.pad.release_button(button=self.keys[d])
+        self.pad.update()
+
+
+def steer_keys(angle: float | None) -> list[str]:
+    """The movement keys (WASD) closest to a stick angle: one or two of them."""
+    return [WaylandKeys.STICK[d] for d in steer_dirs(angle)]
+
 
 class WaylandKeys(Controls):
     """Keyboard through the compositor's virtual keyboard (wtype). Safe in a nested session."""
@@ -196,6 +253,25 @@ class WaylandKeys(Controls):
         args = [a for k in keys for a in ("-P", k)] + ["-s", str(ms)]
         args += [a for k in keys for a in ("-p", k)]
         self._run(*args)
+
+    _held: tuple[list[str], object] | None = None
+
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        import subprocess
+
+        keys = steer_keys(angle)
+        if self._held and self._held[0] == keys:
+            return
+        if self._held:
+            # wtype holds keys only while it runs: stopping it lets them go.
+            self._held[1].terminate()
+            self._held[1].wait(timeout=2)
+            self._held = None
+        if keys:
+            if self.focus:
+                self.focus()
+            args = [a for k in keys for a in ("-P", k)] + ["-s", "60000"]
+            self._held = (keys, subprocess.Popen(["wtype", *args]))
 
 
 class WindowsKeys(Controls):
@@ -253,6 +329,22 @@ class WindowsKeys(Controls):
         time.sleep(ms / 1000)
         for k in keys:
             self._key(k, True)
+
+    _held: ClassVar[list[str]] = []
+
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        keys = steer_keys(angle)
+        if keys == self._held:
+            return
+        if keys and self.focus:
+            self.focus()
+        for k in self._held:
+            if k not in keys:
+                self._key(k, True)
+        for k in keys:
+            if k not in self._held:
+                self._key(k, False)
+        self._held = keys
 
 
 def keyboard(focus=None) -> Controls:

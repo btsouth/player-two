@@ -400,6 +400,10 @@ class Session:
         elif name == "hold":
             self.events.emit("hold", input=args.get("input", ""),
                              direction=args.get("direction", ""), ms=args.get("ms", 0))
+        elif name == "walk_to":
+            self.events.emit("walk", target=args.get("target", ""))
+        elif name == "walk_note":
+            self.events.emit("walk_note", text=args.get("text", ""))
 
     def current_status(self) -> str:
         if self.utt is not None or self.hands_active:
@@ -918,7 +922,8 @@ class Session:
             ticks.cancel()
             self.pending = None
         self.events.emit("agent", request=text, outcome=run.outcome,
-                         steps=[{"tool": s.tool, "args": s.args, "t": round(s.t, 2)}
+                         steps=[{"tool": s.tool, "args": s.args, "t": round(s.t, 2),
+                                 "result": s.result[:200]}
                                 for s in run.steps],
                          turns=run.turns, seconds=round(run.seconds, 2))
         # The agent already said what happened: count the screen it left as seen, so the
