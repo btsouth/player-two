@@ -355,14 +355,12 @@ class Walker:
         self.memory: tuple[Look, np.ndarray, tuple[int, int]] | None = None
         self._now: tuple[Look, np.ndarray, tuple[int, int]] | None = None
         self.me = ""
+        self._where: Callable[[], tuple[float, float]] | None = None
 
     async def _frame(self) -> tuple[np.ndarray, np.ndarray]:
         return small(await self.grab())
 
-    async def walk(self, target: str, me: str = "", timeout: float = 25.0) -> Walked:
-        """Walk to `target`; `me` says which character is the player's, if it's unclear."""
-        t0 = time.monotonic()
-        self.me = me
+    def _start(self) -> None:
         # How far it went over the ground, so the model can keep a map in its head.
         self.travel = np.zeros(2)
         self.size = 0.0
@@ -370,12 +368,48 @@ class Walker:
         self.paused = 0.0  # seconds held while the player talked: not the walk's time
         self._said = False
 
+    def _done(self, t0: float):
         def done(outcome: str, detail: str) -> Walked:
             self.steer(None)
             self.memory = self._now if outcome != "new_area" else None
             if self.size and np.hypot(*self.travel) > self.size:
                 detail += f"; walked {self._words(self.travel, self.size)} in all"
             return Walked(outcome, detail, time.monotonic() - t0)
+        return done
+
+    async def walk_toward(self, where: Callable[[], tuple[float, float]], label: str,
+                          timeout: float = 25.0) -> Walked:
+        """Walk to a point that may be off screen, from the area map: `where` says where
+        it is on screen now (tracked pixels). Needs the character known (memory)."""
+        t0 = time.monotonic()
+        self._start()
+        self._where = where
+        done = self._done(t0)
+        try:
+            if self.memory is None:
+                return done("lost", "I don't know which character is yours yet")
+            img = await self.grab()
+            loc = self._here(where)
+            try:
+                return await self._walk(label, img, loc, t0, timeout, done)
+            finally:
+                self.steer(None)
+        finally:
+            self._where = None
+
+    def _here(self, where: Callable[[], tuple[float, float]]) -> Located:
+        _look, at, (bw, bh) = self._now or self.memory  # type: ignore[misc]
+        x, y = where()
+        return Located((at[0] - bw / 2, at[1] - bh / 2, at[0] + bw / 2, at[1] + bh / 2),
+                       (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2), [], "")
+
+    async def walk(self, target: str, me: str = "", timeout: float = 25.0) -> Walked:
+        """Walk to `target`; `me` says which character is the player's, if it's unclear."""
+        t0 = time.monotonic()
+        self._where = None
+        self.me = me
+        self._start()
+        done = self._done(t0)
 
         img = await self.grab()
         loc = await locate(self.muse, img, target, me=me)
@@ -633,6 +667,9 @@ class Walker:
         self.steer(None)
         await asyncio.sleep(0.15)
         img = await self.grab()
+        if self._where is not None and (self._now or self.memory) is not None:
+            # A point from the map: it's where the map says; the model can't see it.
+            return img, self._here(self._where)
         jobs = [locate(self.muse, img, target, why, self.me)]
         if self.say is not None and not self._said:
             self._said = True

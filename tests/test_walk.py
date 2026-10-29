@@ -441,3 +441,22 @@ async def test_stays_on_the_leader_with_a_follower_behind():
         assert result.outcome == "arrived", result.text()
         assert np.hypot(*(game.pos - game.goal)) < 80
         assert max(watch.off) < 6, max(watch.off)  # not on the follower, 14 behind
+
+
+async def test_walks_toward_a_point_off_screen_from_the_map():
+    from playertwo.explore import find_me
+
+    game = Game(start=(150, 700), goal=(1900, 760))
+    w = Walker(FakeMuse(game), game.grab, game.steer)
+    w.memory = await find_me(game.grab, game.steer)
+    assert w.memory is not None
+    asked = len(game.asked)
+
+    def where():
+        return tuple((game.goal - game.camera()) / 2)  # what the area map would say
+
+    assert where()[0] > 480  # off the right of the screen
+    result = await w.walk_toward(where, "the far stall", timeout=20)
+    assert result.outcome == "arrived", result.text()
+    assert np.hypot(*(game.pos - game.goal)) < 80
+    assert len(game.asked) == asked  # no model needed: the map knows where it is
