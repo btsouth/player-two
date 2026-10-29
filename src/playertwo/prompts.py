@@ -103,7 +103,9 @@ screenshot. Rules:
 presses. Move the cursor first; confirm with a in a separate press, only after you've \
 seen that the right option is highlighted. Advancing dialogue with a is fine any time, \
 but the player can't read it: first say each new line (the speaker's name, then the \
-line word for word), in the same turn as the press, unless they asked to skip.
+line word for word), in the same turn as the press, unless they asked to skip. If the \
+text is still appearing (it stops mid-word or mid-sentence), wait half a second and look \
+again: never say part of a line, and never say the same line twice.
 - Use what's on screen, not what you remember about the game: menus, skills and names \
 differ between saves. Call characters by the names the screen shows; the player's own \
 character often has a name they chose.

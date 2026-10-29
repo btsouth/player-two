@@ -82,7 +82,7 @@ async def test_keeps_walking_onto_new_ground_and_says_how_far():
     assert went.outcome == "walked", went
     assert world.stick is None  # let go
     assert went.steps[0] < -5 and abs(went.steps[1]) < 2
-    assert "still going left" in went.text("left")
+    assert "going left, still moving" in went.text("left")
 
 
 async def test_a_far_off_layer_scrolling_at_its_own_speed_is_not_a_popup():
@@ -178,12 +178,12 @@ async def test_the_agent_explores_and_remembers_where_it_went():
     walks = muse.results
     assert result.outcome == "A wall to the west."
     assert walks[0].startswith("blocked: something stops you going left"), walks
-    assert walks[1].startswith("walked: still going up"), walks
+    assert walks[1].startswith("walked: went") and "going up" in walks[1], walks
     assert world.stick is None and pad.log[-1] == "steer:off"
     # Once it has walked here, holding the d-pad is watched too.
     muse.replies = [("hold", {"input": "up", "ms": 1200}), ("finish", {"text": "ok"})]
     await agent.run("go up a bit")
-    assert muse.results[-1].startswith("walked: still going up"), muse.results
+    assert "steps up going up" in muse.results[-1], muse.results
     # The next request knows where this one went.
     muse.replies = [("finish", {"text": "ok"})]
     await agent.run("where have we been?")

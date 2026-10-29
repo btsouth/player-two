@@ -56,7 +56,8 @@ class Went:
         scrolled = (f"; the view moved on about {self.screens:.1f} screens"
                     if self.screens >= 0.3 else "")
         return {
-            "walked": f"walked: still going {direction}, {went}{scrolled}",
+            "walked": f"walked: {went} going {direction}, still moving when the time was "
+                      f"up{scrolled}",
             "blocked": f"blocked: something stops you going {direction}, after you {went}"
                        f"{scrolled}",
             "new_area": f"new_area: the screen changed to a new place after you {went}",
@@ -167,7 +168,12 @@ async def keep_walking(grab: Callable[[], Awaitable[Image.Image]],
     if log is not None:
         log(f"keep_walking {direction}: {outcome} after {len(history)} frames, ground "
             f"{(ground / size).round(1).tolist()}, last changes {[round(c, 3) for c in popup]}")
-    return Went(outcome, ground / size, float(np.hypot(*view)) / w,
+    steps = ground / size
+    # A step or so sideways or backwards is the tracker's wobble (a follower, the walking
+    # animation), not where it went.
+    wobble = (np.abs(steps) < 1.5) & ((np.abs(unit) < 0.1) | (np.sign(steps) != np.sign(unit)))
+    steps[wobble] = 0.0
+    return Went(outcome, steps, float(np.hypot(*view)) / w,
                 time.monotonic() - t0 - paused, at if outcome != "new_area" else None)
 
 
