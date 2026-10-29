@@ -1044,7 +1044,7 @@ class Session:
             self.trouble(exc, "where", answer=True)
 
     async def _where(self, phrase: str) -> None:
-        from .locate import describe, locate, point
+        from .locate import describe, describe_from, locate, pan_from, point
 
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
@@ -1053,16 +1053,44 @@ class Session:
         how = "sam-3.1"
         if not matches:
             matches, how = await point(self.muse, frame.image, phrase), "muse-spark"
-        text = describe(phrase, matches)
+        me = await self._character_on_screen(frame)
+        if me is None:
+            text = describe(phrase, matches)
+            pans = [(m, m.pan) for m in sorted(matches, key=lambda m: m.cx)]
+        else:
+            # Where you are is what counts when you're walking: "4 steps up and 2 to
+            # your left", the nearest first, each ping from its side of you.
+            at, step = me
+            text = describe_from(phrase, matches, at, step)
+            pans = sorted(((m, pan_from(m, at)) for m in matches), key=lambda p: p[1])
         self.events.emit("where", phrase=phrase, via=how, seconds=round(secs, 2),
                          points=[[round(m.cx, 3), round(m.cy, 3)] for m in matches[:12]])
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
         await self.voice.say(text)
         await self.voice.wait_idle(10)
-        for m in sorted(matches, key=lambda m: m.cx)[:8]:
-            self.voice.cue("ping", pan=m.pan)
+        for _m, pan in pans[:8]:
+            self.voice.cue("ping", pan=pan)
             await asyncio.sleep(0.28)
+
+    async def _character_on_screen(self, frame: Frame
+                                   ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Where the player's character is now, as fractions of the screen, and a step
+        (its width) the same way: known once it has walked in this area and still in
+        view. None otherwise."""
+        walker = getattr(self.agent, "_walker", None)
+        if walker is None or walker.memory is None:
+            return None
+        try:
+            if not await self.agent._still_me(walker):
+                return None
+        except Exception:  # noqa: BLE001  just say it from the screen instead
+            return None
+        from .walk import WIDTH
+
+        _look, at, (bw, _bh) = walker.memory
+        th = frame.image.height * WIDTH / frame.image.width
+        return (float(at[0]) / WIDTH, float(at[1]) / th), (bw / WIDTH, bw / th)
 
     async def start_hud(self) -> None:
         from .hud import HudWatch, calibrate

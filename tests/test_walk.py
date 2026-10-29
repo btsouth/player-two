@@ -4,6 +4,7 @@ import asyncio
 import math
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw, ImageFilter
 
 from playertwo.walk import Look, Walker, new_place, phase_shift, snap
@@ -298,7 +299,8 @@ async def test_the_agent_walks_there_and_lets_go_while_the_player_talks():
     assert "steer:off" in pad.log
 
 
-async def test_talk_to_walks_there_and_presses_a():
+@pytest.mark.parametrize("answers", [True, False])
+async def test_talk_to_walks_there_and_presses_a(answers):
     import json
     from types import SimpleNamespace
 
@@ -331,7 +333,10 @@ async def test_talk_to_walks_there_and_presses_a():
             return SimpleNamespace(content="", tool_calls=[call])
 
     async def grab():
-        return Frame(await game.grab(), 0)
+        img = await game.grab()
+        if answers and "a" in pad.log:  # the chest's text box
+            ImageDraw.Draw(img).rectangle((40, 360, 920, 520), fill=(20, 20, 120))
+        return Frame(img, 0)
 
     async def speak(_text):
         pass
@@ -341,6 +346,8 @@ async def test_talk_to_walks_there_and_presses_a():
     result = await agent.run("open the chest")
     assert result.outcome == "Opened."
     assert muse.results[0].startswith("arrived") and "pressed a" in muse.results[0]
+    # Whether anything answered, so it doesn't claim a conversation that didn't happen.
+    assert ("something came up" in muse.results[0]) == answers, muse.results[0]
     # Let go of the d-pad first, then a.
     assert pad.log[-1] == "a" and pad.log[-2] == "steer:off", pad.log[-3:]
 

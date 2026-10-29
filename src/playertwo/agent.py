@@ -425,10 +425,21 @@ class Agent:
             await self.go.wait()
             if self.cancelled:
                 return "stopped by the player"
+            before = await self.grab()
             await asyncio.to_thread(self.controls.press, "a")
-            await asyncio.sleep(0.3)
-            return (f"{walked}; pressed a. If they speak now, say the line word for word "
-                    "(who, then the line) before pressing again.")
+            # A text box takes a moment to open: did anything come up?
+            changed = 0.0
+            for _ in range(4):
+                await asyncio.sleep(0.25)
+                changed = max(changed, screen_change(before, await self.grab()))
+                if changed > 0.04:
+                    break
+            if changed <= 0.04:
+                return (f"{walked}; pressed a, but nothing came up on screen: they may "
+                        "have nothing to say, or it isn't facing them. Look before saying "
+                        "anything happened.")
+            return (f"{walked}; pressed a, and something came up. If they speak, say the "
+                    "line word for word (who, then the line) before pressing again.")
         if name == "walk_to":
             target = str(a.get("target") or "").strip()
             if not target:

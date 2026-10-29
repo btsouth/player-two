@@ -7,6 +7,7 @@ match is, so they can hear the layout.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -67,6 +68,43 @@ def describe(phrase: str, matches: list[Match]) -> str:
     parts = [f"{k} {where}" for k, where in zip(thirds, ("on the left", "in the middle",
                                                         "on the right"), strict=True) if k]
     return f"{n} {phrase}: " + ", ".join(parts) + "."
+
+
+def from_you(m: Match, me: tuple[float, float], step: tuple[float, float]) -> str:
+    """Where a match is from the player's character, in steps (a character's width):
+    "3 steps up and 2 to your left". `me` and `step` are fractions of the screen."""
+    dx, dy = (m.cx - me[0]) / step[0], (m.cy - me[1]) / step[1]
+    x, y = round(dx), round(dy)
+    if abs(dx) < 1.2 and abs(dy) < 1.2:
+        return "right next to you"
+    parts = []
+    if y:
+        parts.append(f"{abs(y)} {'step' if abs(y) == 1 else 'steps'} {'up' if y < 0 else 'down'}")
+    if x:
+        side = f"to your {'left' if x < 0 else 'right'}"
+        parts.append(f"{abs(x)} {side}" if parts else
+                     f"{abs(x)} {'step' if abs(x) == 1 else 'steps'} {side}")
+    return " and ".join(parts)
+
+
+def describe_from(phrase: str, matches: list[Match], me: tuple[float, float],
+                  step: tuple[float, float]) -> str:
+    """describe(), but from where the player's character stands, nearest first."""
+    if not matches:
+        return f"I can't find any {phrase} on screen."
+    ordered = sorted(matches, key=lambda m: math.hypot((m.cx - me[0]) / step[0],
+                                                       (m.cy - me[1]) / step[1]))
+    if len(ordered) == 1:
+        return f"Found it: {from_you(ordered[0], me, step)}."
+    near = [from_you(m, me, step) for m in ordered[:3]]
+    more = f", and {len(ordered) - 3} more" if len(ordered) > 3 else ""
+    return (f"{len(ordered)} {phrase}. The nearest is {near[0]}"
+            + "".join(f"; then {w}" for w in near[1:]) + more + ".")
+
+
+def pan_from(m: Match, me: tuple[float, float]) -> float:
+    """Left or right of the player's character, for a sound: -1 to 1."""
+    return round(max(-1.0, min(1.0, (m.cx - me[0]) * 2.5)), 2)
 
 
 POINT = """\

@@ -352,6 +352,17 @@ def test_where_questions_and_wording():
     assert [round(b.cx, 2) for b in boxes] == [0.05, 0.85]
     assert describe("doors", []) == "I can't find any doors on screen."
     assert describe("door", [Match(0.1, 0.5, 0.05)]) == "Found it: on the far left."
+    # From where the player's character stands, nearest first, in its own steps.
+    from playertwo.locate import describe_from, pan_from
+
+    me, step = (0.5, 0.5), (0.05, 0.1)
+    assert describe_from("door", [Match(0.35, 0.2, 0.01)], me, step) == \
+        "Found it: 3 steps up and 3 to your left."
+    assert describe_from("chest", [Match(0.52, 0.53, 0.01)], me, step) == \
+        "Found it: right next to you."
+    two = describe_from("guards", [Match(0.9, 0.5, 0.01), Match(0.5, 0.8, 0.01)], me, step)
+    assert two == "2 guards. The nearest is 3 steps down; then 8 steps to your right."
+    assert pan_from(Match(0.3, 0.5, 0.01), me) < 0 < pan_from(Match(0.6, 0.5, 0.01), me)
     two = [Match(0.7, 0.5, 0.01), Match(0.3, 0.5, 0.01)]
     assert describe("shadows", two) == "2 shadows: one on the left, one on the right."
     many = [Match(x, 0.5, 0.01) for x in (0.1, 0.2, 0.5, 0.9)]
