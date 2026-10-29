@@ -21,7 +21,8 @@ developer has to build.
 - **Plays when you ask.** "Skip to the battle and hit the left one with Zio." It looks, moves the
   cursor, checks the highlight, confirms, then looks again to make sure it worked.
 - **Walks you there in 2D games.** "Take me to the man at the stall." Muse Spark points out your
-  character and the stall once, then code on your PC steers there about a dozen times a second,
+  character and the stall once, SAM 3.1 pins the stall keeper down to the pixel, then code on your
+  PC steers there about a dozen times a second,
   goes around what's in the way, and stops next to it, facing it, so the next "talk to him" works.
   In Chrono Trigger most walks to something on screen took 2 to 8 seconds in our sessions. For
   places not on screen yet, it walks on in a direction while watching and stops at walls and
@@ -108,7 +109,7 @@ loud and says how to fix it, instead of printing it where you can't see it.
 |---|---|
 | Seeing the screen, deciding what to say, planning button presses, finding HUD bars | **Muse Spark 1.3** (vision, tool calling, structured output, streaming) |
 | Understanding the player's voice, live, with game names as keywords | **Muse Voice Transcribe** (realtime WebSocket) |
-| "Where is it?": exact positions of things on screen, spoken and played as directional sound | **SAM 3.1** |
+| "Where is it?": exact positions of things on screen, spoken and played as directional sound; the exact spot of whoever or whatever a walk is going to | **SAM 3.1** |
 | The same narrator and agent on open weights (optional) | **Muse Spark Open** (hosted endpoint) |
 
 **Open weights, if you want them.** By default the narrator and agent use Muse Spark on Meta Model
@@ -153,12 +154,18 @@ Meta's API has no text-to-speech model, so the narrator voice is
   movement, so it always looks at the highlight before pressing A.
 - **Walking** (`walk.py`): first, in each new area, it taps the d-pad one way and back and
   watches what starts and stops moving with it: that's your character, not someone else with the
-  same red hair, and not a party member catching up. Then one Muse Spark call finds the target
-  and a way around anything in the way. Then plain image math takes over: phase correlation follows the scenery as
+  same red hair, and not a party member catching up, and that went the way the d-pad was held.
+  Then one Muse Spark call finds the target and a way around anything in the way. At the same
+  time SAM 3.1 looks for the target by name (and as "person", for someone to talk to): Muse
+  Spark's boxes are often a sprite off, and the walk stops and faces by them, so when SAM finds
+  the same thing its exact box is used. SAM gets no longer than the model took plus a moment, so
+  it adds no wait, and without a match the model's box stands. Then plain image math takes over: phase correlation follows the scenery as
   it scrolls, your character is pinned down by what moves differently from the scenery and then
   followed by its colours (which hold when the sprite turns), and the stick and d-pad steer it in
-  eight directions. It asks Muse Spark again only when it's stuck or loses track, and stops when
-  the screen fades to a new place.
+  eight directions. It asks Muse Spark again only when it's stuck or loses track, and never
+  says it arrived while your character is hidden behind something. When the screen changes, at
+  once or over a fade through a door, it lets go, waits for the picture to settle, and says
+  whether it's a new place.
 - **Exploring** (`explore.py`): `keep_walking` holds a direction and watches every frame: how far
   the view scrolled, when the character stopped (a wall), and when the picture changed to a new
   place or a text box came up. It reports that in steps ("blocked after 8 steps up"). The agent

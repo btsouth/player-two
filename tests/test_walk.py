@@ -6,7 +6,7 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from playertwo.walk import Look, Walker, new_place, phase_shift
+from playertwo.walk import Look, Walker, new_place, phase_shift, snap
 
 
 def texture(w, h, seed=1):
@@ -511,3 +511,62 @@ async def test_walks_toward_a_point_off_screen_from_the_map():
     assert result.outcome == "arrived", result.text()
     assert np.hypot(*(game.pos - game.goal)) < 80
     assert len(game.asked) == asked  # no model needed: the map knows where it is
+
+
+def test_snaps_a_rough_box_to_the_nearest_exact_one():
+    rough = (100.0, 50.0, 116.0, 75.0)
+    near, far, huge = (110, 52, 126, 77), (200, 50, 216, 75), (60, 0, 300, 200)
+    assert snap(rough, [far, near]) == near
+    assert snap(rough, [far]) is None       # someone else, further off
+    assert snap(rough, [huge]) is None      # the whole stall, not the one at it
+    assert snap(rough, []) is None
+
+
+class OffBy(FakeMuse):
+    """The model's box for the target a sprite and a half off, as Muse Spark's often are."""
+
+    async def json(self, *a, **k):
+        r = await super().json(*a, **k)
+        x1, y1, x2, y2 = r["target"]
+        return {**r, "target": [x1 + 45, y1, x2 + 45, y2]}
+
+
+async def test_sam_makes_the_target_exact():
+    game = Game(goal=(700, 640))
+    asked = []
+
+    async def exact(img, phrase):
+        asked.append(phrase)
+        b = game.box(game.goal, 14, 20)
+        return [tuple(v / 1000 for v in b)]
+
+    w = Walker(OffBy(game), game.grab, game.steer, exact=exact)
+    loc = await w._locate(await game.grab(), "the green chest")
+    true = (game.goal - game.camera()) / 2  # tracked at half size
+    x1, y1, x2, y2 = loc.target
+    assert np.hypot((x1 + x2) / 2 - true[0], (y1 + y2) / 2 - true[1]) < 2, loc.target
+    assert asked == ["green chest"]
+    result = await w.walk("the green chest")
+    assert result.outcome == "arrived", result.text()
+    w2 = Walker(OffBy(game), game.grab, game.steer, exact=exact)
+    await w2._locate(await game.grab(), "the old man")
+    assert asked[-2:] == ["old man", "person"]  # someone: SAM finds people as "person"
+
+
+async def test_a_failing_or_slow_sam_doesnt_hold_up_the_walk():
+    import time
+
+    game = Game()
+
+    async def broken(img, phrase):
+        raise ConnectionError("no network")
+
+    async def slow(img, phrase):
+        await asyncio.sleep(10)
+        return []
+
+    for exact in (broken, slow):
+        w = Walker(FakeMuse(game), game.grab, game.steer, exact=exact)
+        t = time.monotonic()
+        loc = await w._locate(await game.grab(), "the green chest")
+        assert loc.target is not None and time.monotonic() - t < 1.5

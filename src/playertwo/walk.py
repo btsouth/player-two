@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -474,6 +475,34 @@ async def locate(muse: Muse, img: Image.Image, target: str, context: str = "",
                    via[:3], str(data.get("note") or ""))
 
 
+# Targets that are someone: SAM 3.1 finds people as "person" far more often than by a
+# description ("the man in the tent" finds nothing, "person" finds him).
+PEOPLE = re.compile(
+    r"\b(man|men|woman|women|girl|boy|kid|child|person|people|guy|lady|guard|soldier|"
+    r"merchant|shopkeeper|keeper|vendor|seller|king|queen|knight|mother|mom|father|dad|"
+    r"old|friend|him|her|them|someone|somebody|villager|chef|maid|priest|elder)\b",
+    re.IGNORECASE)
+
+Boxes = Callable[[Image.Image, str], Awaitable[list[tuple[float, float, float, float]]]]
+
+
+def snap(target: tuple[float, float, float, float],
+         boxes: list[tuple[float, float, float, float]]
+         ) -> tuple[float, float, float, float] | None:
+    """The exact box (SAM's) for a rough one (the model's): the nearest whose middle is
+    within a box and a half of it, or None. All in tracked pixels."""
+    x1, y1, x2, y2 = target
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    reach = max(1.5 * max(x2 - x1, y2 - y1), 0.06 * WIDTH)
+    best, far = None, reach
+    for b in boxes:
+        d = math.hypot((b[0] + b[2]) / 2 - cx, (b[1] + b[3]) / 2 - cy)
+        # Not a whole building or the ground: about the size of what was meant.
+        if d < far and (b[2] - b[0]) * (b[3] - b[1]) < 9 * max(1.0, (x2 - x1) * (y2 - y1)):
+            best, far = b, d
+    return best
+
+
 @dataclass
 class Walked:
     # "arrived", "new_area", "blocked", "lost", "not_found", "stopped", "timeout",
@@ -493,13 +522,17 @@ class Walker:
                  steer: Callable[[float | None], None],
                  keep_going: Callable[[], Awaitable[bool]] | None = None,
                  log: Callable[[str], None] | None = None,
-                 say: Callable[[str], Awaitable[None]] | None = None):
+                 say: Callable[[str], Awaitable[None]] | None = None,
+                 exact: Boxes | None = None):
         self.muse = muse
         self.grab = grab
         self.steer = steer          # stick angle (0 up, 90 right), or None to let go
         self.keep_going = keep_going
         self.log = log or (lambda _m: None)
         self.say = say  # a few words out loud when a walk takes longer than it should
+        # Exact boxes for a phrase (SAM 3.1), 0 to 1 of the screen: the model's boxes are
+        # often a sprite off, and the walk stops and faces by them.
+        self.exact = exact
         # The character as last seen (its colours, where, its box size), and as seen now:
         # the model sometimes picks someone else, and this one has been walked already.
         self.memory: tuple[Look, np.ndarray, tuple[int, int]] | None = None
@@ -565,7 +598,7 @@ class Walker:
         done = self._done(t0)
 
         img = await self.grab()
-        loc = await locate(self.muse, img, target, me=me)
+        loc = await self._locate(img, target)
         self.log(f"located {loc}")
         if self.memory is not None:
             look, at, (mw, mh) = self.memory
@@ -851,11 +884,51 @@ class Walker:
         if self._where is not None and (self._now or self.memory) is not None:
             # A point from the map: it's where the map says; the model can't see it.
             return img, self._here(self._where)
-        jobs = [locate(self.muse, img, target, why, self.me)]
+        jobs = [self._locate(img, target, why)]
         if self.say is not None and not self._said:
             self._said = True
             jobs.append(self.say(words))
         return img, (await asyncio.gather(*jobs))[0]
+
+    async def _locate(self, img: Image.Image, target: str, context: str = "") -> Located:
+        """The model's look at the screen, with the target's box made exact by SAM 3.1
+        when it finds the same thing. Both run at once, and SAM gets little longer than
+        the model took, so it adds no wait; without a match the model's box stands."""
+        exact = asyncio.create_task(self._exact(img, target)) if self.exact else None
+        try:
+            loc = await locate(self.muse, img, target, context, self.me)
+            if exact is None or loc.target is None:
+                return loc
+            try:
+                boxes = await asyncio.wait_for(asyncio.shield(exact), 0.6)
+            except TimeoutError:
+                self.log("SAM 3.1 took too long; going by the model's box")
+                return loc
+            sx = WIDTH
+            sy = img.height * WIDTH / img.width
+            better = snap(loc.target, [(b[0] * sx, b[1] * sy, b[2] * sx, b[3] * sy)
+                                       for b in boxes])
+            if better is not None:
+                self.log(f"SAM 3.1 placed {target} at {[round(v) for v in better]} "
+                         f"(the model said {[round(v) for v in loc.target]})")
+                loc.target = better
+            return loc
+        finally:
+            if exact is not None and not exact.done():
+                exact.cancel()
+
+    async def _exact(self, img: Image.Image, target: str
+                     ) -> list[tuple[float, float, float, float]]:
+        assert self.exact is not None
+        phrase = re.sub(r"^(the|a|an|my|that|this|some)\s+", "", target.strip(),
+                        flags=re.IGNORECASE)
+        phrases = [phrase] + (["person"] if PEOPLE.search(target) else [])
+        try:
+            found = await asyncio.gather(*(self.exact(img, p) for p in phrases))
+        except Exception as exc:  # noqa: BLE001 - an extra, never a reason a walk fails
+            self.log(f"SAM 3.1 failed ({type(exc).__name__}); going by the model's box")
+            return []
+        return [b for boxes in found for b in boxes]
 
     @staticmethod
     def _words(v: np.ndarray, size: float) -> str:

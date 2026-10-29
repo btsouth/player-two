@@ -24,6 +24,7 @@ class Match:
     cx: float  # 0..1 across the screen
     cy: float  # 0..1 down the screen
     area: float  # fraction of the screen covered
+    box: tuple[float, float, float, float] | None = None  # x1, y1, x2, y2, 0..1
 
     @property
     def pan(self) -> float:
@@ -37,7 +38,8 @@ def parse_boxes(text: str) -> list[Match]:
         if w <= 0 or h <= 0:
             continue
         out.append(Match(((x1 + x2) / 2) / w, ((y1 + y2) / 2) / h,
-                         max(0, (x2 - x1) * (y2 - y1)) / (w * h)))
+                         max(0, (x2 - x1) * (y2 - y1)) / (w * h),
+                         (x1 / w, y1 / h, x2 / w, y2 / h)))
     return out
 
 
@@ -90,6 +92,11 @@ async def point(muse: Muse, img: Image.Image, phrase: str) -> list[Match]:
 async def locate(muse: Muse, img: Image.Image, phrase: str) -> tuple[list[Match], float]:
     """Run SAM 3.1 on a frame. Returns the matches and how long it took."""
     t = time.monotonic()
+    return await segment(muse, img, phrase), time.monotonic() - t
+
+
+async def segment(muse: Muse, img: Image.Image, phrase: str) -> list[Match]:
+    """Every match SAM 3.1 finds for `phrase` on the frame, with its box."""
     part = image_part(img, 1280)
     text = ""
     async with muse.client.responses.stream(
@@ -102,7 +109,7 @@ async def locate(muse: Muse, img: Image.Image, phrase: str) -> tuple[list[Match]
         async for event in stream:
             if event.type == "response.output_text.delta":
                 text += event.delta
-    return parse_boxes(text), time.monotonic() - t
+    return parse_boxes(text)
 
 
 WHERE = re.compile(

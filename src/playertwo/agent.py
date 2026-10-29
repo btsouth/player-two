@@ -558,8 +558,13 @@ class Agent:
                 if self.on_action:
                     self.on_action("walk_note", {"text": text})
 
+            async def exact(img, phrase):
+                from .locate import segment
+
+                return [m.box for m in await segment(self.muse, img, phrase) if m.box]
+
             self._walker = Walker(self.muse, self.walker_image, self.controls.steer,
-                                  self.walker_keep_going, note, say=self._speak)
+                                  self.walker_keep_going, note, say=self._speak, exact=exact)
         return self._walker
 
     def _check_walk(self, name: str, result: str) -> str:
