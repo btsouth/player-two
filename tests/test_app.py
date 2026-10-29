@@ -351,3 +351,22 @@ def test_errors_are_said_for_what_they_are():
     assert trouble_words(InvalidStatus(SimpleNamespace(status_code=401)))[0] == "key"
     assert trouble_words(ConnectionRefusedError())[0] == "net"
     assert trouble_words(subprocess.CalledProcessError(1, "x"))[0] == "other"
+
+
+def test_whats_wrong_is_answered_out_loud():
+    from types import SimpleNamespace
+
+    from playertwo.app import MIC_PROBLEM, Session, local_action
+    from playertwo.config import Settings
+
+    assert local_action("Player Two, what's wrong?") == "check"
+    assert local_action("are you working") == "check"
+    s = Session.__new__(Session)
+    s.game, s.capture_failures, s.paused, s.hands = False, 0, False, None
+    s.narrator = SimpleNamespace(game="")
+    s.controls = SimpleNamespace(kind="dry-run")
+    s.problems, s.last_trouble = [MIC_PROBLEM], "The model is having trouble right now."
+    s.s = Settings()
+    words = s.self_check()
+    assert "don't see a game" in words and "can't press anything" in words
+    assert "microphone" in words and "last problem" in words

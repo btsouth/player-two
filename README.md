@@ -200,6 +200,7 @@ Meta's API has no text-to-speech model, so the narrator voice is
 | "repeat" | says the last line again |
 | "stop" / "quiet" / "cancel that" | stops talking (and cancels a running command) |
 | "help" | lists what you can say |
+| "what's wrong?" | says what it can and can't do right now: the game, controller, microphone, talk key, and the last problem |
 | "slower" / "faster" | changes its speaking speed |
 | "terse", "less detail", "more detail", "back to normal" | how much it says |
 | "the game reads the menus" / "team up" | leaves menus to the game's own narrator |

@@ -29,7 +29,7 @@ UI = resources.files("playertwo") / "ui"
 TOKEN = secrets.token_urlsafe(18)
 # What the window itself sends; nothing else is taken from it.
 WINDOW_COMMANDS = {"talk-start", "talk-stop", "do", "set", "pause", "resume", "quit", "stop",
-                   "repeat", "describe"}
+                   "repeat", "describe", "check"}
 
 
 def window_url(port: int = PORT) -> str:

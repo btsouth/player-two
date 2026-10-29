@@ -32,6 +32,8 @@ LOCAL = [
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
       r"|what do you see|what'?s (going on|happening)"), "describe"),
     (r"help|what can you do|what can i say|commands|list (the )?commands", "help"),
+    ((r"what'?s wrong|what is wrong|(are you|is everything) (ok|okay|working)|check yourself"
+      r"|self check|status( report)?|what'?s (broken|not working)"), "check"),
     (r"(be )?terse|terse mode|just the facts", "terse"),
     (r"talk less|less detail|quieter|be quieter|quiet mode", "quiet"),
     (r"(back to )?normal|normal mode|regular mode", "normal"),
@@ -259,6 +261,7 @@ class Session:
         self._tasks: set[asyncio.Task] = set()
         self.side_task: asyncio.Task | None = None  # a "where is" or health-bar search
         self.unnamed_answer = False  # the answer came hands-free, without "Player Two"
+        self.last_trouble = ""  # the last problem said, for "what's wrong?"
         self.fps_before_hud: float | None = None
         self.answer: asyncio.Future[str] | None = None
         self.hud = None
@@ -355,6 +358,7 @@ class Session:
         """
         kind, words = trouble_words(exc)
         self.events.emit("error", where=where, message=str(exc)[:300] or kind)
+        self.last_trouble = words
         now = time.monotonic()
         if now - self.troubled.get(kind, -1e9) < 60:
             if answer:
@@ -1041,6 +1045,40 @@ class Session:
                              "gets low.")
         self.events.emit("hud_on", meters=[m.name for m in meters])
 
+    def self_check(self) -> str:
+        """Everything that could be wrong, said plainly: a way to find out without
+        seeing the screen or a terminal."""
+        from .desktop import talk_key_bound
+
+        lines = []
+        if self.game is False:
+            lines.append("I don't see a game window.")
+        elif self.capture_failures:
+            lines.append("I'm having trouble seeing the screen.")
+        else:
+            lines.append(f"I can see {self.narrator.game or 'the game'}.")
+        lines.append({"gamepad": "My virtual controller is plugged in.",
+                      "keyboard": "I'm pressing keyboard keys, not a controller.",
+                      "dry-run": "I can't press anything in the game right now."
+                      }.get(self.controls.kind, ""))
+        if MIC_PROBLEM in self.problems:
+            lines.append("I can't find a microphone.")
+        elif self.hands is not None:
+            lines.append("I'm listening hands-free for my name.")
+        elif talk_key_bound(self.s):
+            lines.append("The talk key is set up.")
+        else:
+            lines.append("No talk key is set up; type in my window, or run player-two "
+                         "setup.")
+        if self.paused:
+            lines.append("Narration is paused; say resume narration.")
+        lines += [p for p in self.problems if p not in (MIC_PROBLEM,)]
+        if self.last_trouble:
+            lines.append(f"The last problem was: {self.last_trouble}")
+        if len(lines) <= 3 and not self.last_trouble and not self.problems:
+            lines.append("Everything looks fine.")
+        return " ".join(line for line in lines if line)
+
     def emit_settings(self) -> None:
         self.events.emit("settings", verbosity=self.narrator.verbosity,
                          team_up=self.narrator.team_up, paused=self.paused,
@@ -1123,6 +1161,8 @@ class Session:
                 self.trouble(exc, "describe", answer=True)
                 return
             self._start_narration(frame, describe=True)
+        elif action == "check":
+            await self.announce(self.self_check())
         elif action == "help":
             from .desktop import talk_key_bound
 
@@ -1232,6 +1272,7 @@ class Session:
             self.spawn(self.handle(arg))
         elif cmd in ("stop", "repeat", "describe", "terse", "quiet", "normal", "detailed",
                      "team_up", "solo", "pause", "resume", "hud", "hud_off", "quit", "help",
+                     "check",
                      "slower", "faster"):
             self.spawn(self.local(cmd))
         elif cmd == "press" and arg:
