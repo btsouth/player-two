@@ -180,3 +180,34 @@ def test_a_cut_to_a_dark_place_starts_a_new_map():
         fresh.append(area.track(f, now=i / 26))
     assert fresh.count(True) == 1
     assert area.frames > 20  # and the dark place is mapped, not skipped as a fade
+
+
+def test_only_the_character_is_followed_not_the_ground():
+    rgb = small(Image.fromarray(rec("rec_fair")[0][316]))[0]
+    x, y = CRONO
+    assert Look(rgb, (x - 8, y - 12.5, x + 8, y + 12.5)).usable
+    for gx, gy in ((260, 200), (300, 150), (230, 120)):  # cobblestones
+        assert not Look(rgb, (gx - 8, gy - 12.5, gx + 8, gy + 12.5)).usable, (gx, gy)
+
+
+@pytest.mark.parametrize("lag", [0.0, 0.03, 0.06])
+async def test_a_walk_on_a_slow_capture_never_arrives_short(lag):
+    # Toward a stall past the fence Crono stops at. At 16 frames a second or fewer it
+    # used to follow the cobblestones with the scroll and say it arrived 150 px short.
+    from playertwo.walk import Located, Walker
+
+    real = replay("rec_fair", 316)
+
+    async def grab():
+        await asyncio.sleep(lag)
+        return await real()
+
+    w = Walker(None, grab, lambda _a: None)
+    w._start()
+    img = await grab()
+    t0 = time.monotonic()
+    x, y = CRONO
+    loc = Located((x - 8, y - 12.5, x + 8, y + 12.5), (592, 144.5, 608, 169.5), [], "")
+    result = await w._walk("the stall", img, loc, t0, 80 / 26, w._done(t0))
+    assert result.outcome != "arrived", result.text()
+    assert np.hypot(*(w.memory[1] - (243, 161))) < 20, w.memory[1]  # at the fence

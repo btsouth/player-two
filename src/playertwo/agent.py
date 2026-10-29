@@ -398,13 +398,18 @@ class Agent:
                                                         "seconds": ms / 1000})
             if inp in ANGLES:
                 # Held as a steer, so "stop" lets go at once instead of after the hold.
-                end = time.monotonic() + ms / 1000
+                t_hold = time.monotonic()
+                end = t_hold + ms / 1000
                 try:
                     self.controls.steer(ANGLES[inp])
                     while time.monotonic() < end and not self.cancelled and self.go.is_set():
                         await asyncio.sleep(0.02)
                 finally:
                     self.controls.steer(None)
+                held = round((time.monotonic() - t_hold) * 1000)
+                if held < ms - 60:
+                    why = "the player stopped it" if self.cancelled else "the player spoke"
+                    return f"held {inp} for only {held} ms of {ms}: {why}"
                 return f"held {inp} for {ms} ms"
             if inp == "a" and ms > 400 and self.look_before_confirm:
                 return ("not held: holding a confirms and skips text the player can't read; "
@@ -469,10 +474,15 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             walker = self.walker()
+            gen = self._map_gen
+
+            def where():
+                # Gone once the map starts over (a door, the view lost): its points with it.
+                return tuple(self.area.to_screen(spot)) if self._map_gen == gen else None
+
             try:
                 await self._find_me(walker)
-                walked = await walker.walk_toward(
-                    lambda: tuple(self.area.to_screen(spot)), label)
+                walked = await walker.walk_toward(where, label)
             except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"

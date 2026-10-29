@@ -570,3 +570,14 @@ async def test_a_failing_or_slow_sam_doesnt_hold_up_the_walk():
         t = time.monotonic()
         loc = await w._locate(await game.grab(), "the green chest")
         assert loc.target is not None and time.monotonic() - t < 1.5
+
+
+async def test_a_walk_to_a_map_spot_stops_when_the_map_starts_over():
+    from playertwo.explore import find_me
+
+    game = Game(start=(150, 700), goal=(1900, 760))
+    w = Walker(FakeMuse(game), game.grab, game.steer)
+    w.memory = await find_me(game.grab, game.steer)
+    result = await w.walk_toward(lambda: None, "the far stall")  # the map is gone
+    assert result.outcome == "lost" and "area_map" in result.detail
+    assert game.stick is None

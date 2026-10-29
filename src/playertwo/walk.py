@@ -64,12 +64,13 @@ class Look:
     mostly don't. Unlike a picture of the sprite, that holds when it turns to walk the
     other way or swings its arms."""
 
-    def __init__(self, rgb: np.ndarray, box: tuple[float, float, float, float]):
+    def __init__(self, rgb: np.ndarray, box: tuple[float, float, float, float],
+                 bins: np.ndarray | None = None):
         x1, y1, x2, y2 = box
         self.w = max(4, round(x2 - x1))
         self.h = max(4, round(y2 - y1))
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        b = _bins(rgb)
+        b = _bins(rgb) if bins is None else bins
         # The middle of the box is the character; a ring around it is the ground.
         inner = self._cut(b, cx, cy, 0.7 * self.w, 0.8 * self.h)
         self.fg = np.bincount(inner.ravel(), minlength=512).astype(np.float64)
@@ -79,8 +80,26 @@ class Look:
         self.ground(rgb, (cx, cy), b)
         _, _, m = self._best(b, cx, cy, 0, 0)
         self.base = max(m, 1e-3)
-        # Too little of its own colour to follow (a box that's mostly background).
-        self.usable = m > 0.05
+        # Too little of its own colour to follow (a box that's mostly background), or
+        # colours the ground all around has too (a box on cobblestones, not on the
+        # character): followed, it would slide along the ground with the scroll. On
+        # recorded Chrono Trigger frames a sprite's surroundings score a tenth of it or
+        # less, half of them, and ground half or more; a look-alike beside it (a party
+        # member, a guard) is only one spot of the surroundings.
+        self.around = self._around(b, cx, cy) / self.base
+        self.usable = m > 0.05 and self.around < 0.35
+
+    def _around(self, b, cx, cy) -> float:
+        """The median score of boxes nearby that don't overlap this one."""
+        win = _window(b.shape, cx, cy, self.w, self.h, 2 * self.w, 2 * self.h)
+        if win is None:
+            return 0.0
+        x0, y0, x1, y1 = win
+        sums = _box_means(self.weights[b[y0:y1, x0:x1]], self.w, self.h)
+        ys, xs = np.mgrid[0:sums.shape[0], 0:sums.shape[1]]
+        apart = (np.abs(x0 + xs + self.w / 2 - cx) >= self.w) | \
+                (np.abs(y0 + ys + self.h / 2 - cy) >= self.h)
+        return float(np.median(sums[apart])) if apart.any() else 0.0
 
     @staticmethod
     def _cut(b, cx, cy, w, h):
@@ -134,6 +153,27 @@ class Look:
         `ahead` (the way it walks, a unit vector) what is in front."""
         x, y, m = self._best(_bins(rgb), center[0], center[1], radius, radius, moved, ahead)
         return x, y, m / self.base
+
+
+def pin(rgb: np.ndarray, at: tuple[float, float], size: tuple[int, int], reach: int = 6
+        ) -> tuple[Look, np.ndarray] | None:
+    """The character's colours, from a spot found roughly (by what moved): that box if
+    it stands out from its surroundings, else the one a few pixels either way that
+    stands out most (a box half on the ground learns the ground's colours too), or
+    None."""
+    bw, bh = size
+    b = _bins(rgb)
+    look = Look(rgb, (at[0] - bw / 2, at[1] - bh / 2, at[0] + bw / 2, at[1] + bh / 2), b)
+    if look.usable:
+        return look, np.array(at, float)
+    best: tuple[float, Look, np.ndarray] | None = None
+    for dy in range(-reach, reach + 1, 3):
+        for dx in range(-reach, reach + 1, 3):
+            x, y = at[0] + dx, at[1] + dy
+            look = Look(rgb, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2), b)
+            if look.usable and (best is None or look.around < best[0]):
+                best = (look.around, look, np.array([x, y], float))
+    return None if best is None else (best[1], best[2])
 
 
 def _edges(x: np.ndarray) -> np.ndarray:
@@ -582,7 +622,7 @@ class Walker:
             return Walked(outcome, detail, time.monotonic() - t0)
         return done
 
-    async def walk_toward(self, where: Callable[[], tuple[float, float]], label: str,
+    async def walk_toward(self, where: Callable[[], tuple[float, float] | None], label: str,
                           timeout: float = 25.0) -> Walked:
         """Walk to a point that may be off screen, from the area map: `where` says where
         it is on screen now (tracked pixels). Needs the character known (memory)."""
@@ -595,6 +635,8 @@ class Walker:
                 return done("lost", "I don't know which character is yours yet")
             img = await self.grab()
             loc = self._here(where)
+            if loc.target is None:
+                return done("lost", loc.note)
             try:
                 return await self._walk(label, img, loc, t0, timeout, done)
             finally:
@@ -602,11 +644,16 @@ class Walker:
         finally:
             self._where = None
 
-    def _here(self, where: Callable[[], tuple[float, float]]) -> Located:
+    def _here(self, where: Callable[[], tuple[float, float] | None]) -> Located:
         _look, at, (bw, bh) = self._now or self.memory  # type: ignore[misc]
-        x, y = where()
-        return Located((at[0] - bw / 2, at[1] - bh / 2, at[0] + bw / 2, at[1] + bh / 2),
-                       (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2), [], "")
+        me = (at[0] - bw / 2, at[1] - bh / 2, at[0] + bw / 2, at[1] + bh / 2)
+        p = where()
+        if p is None:
+            # The map it was on started over: through a door, or lost track of the view.
+            return Located(me, None, [], "the area map started over, so that spot is gone "
+                           "(a new area?): look at area_map again")
+        x, y = p
+        return Located(me, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2), [], "")
 
     async def walk(self, target: str, me: str = "", timeout: float = 25.0) -> Walked:
         """Walk to `target`; `me` says which character is the player's, if it's unclear."""
@@ -714,6 +761,11 @@ class Walker:
                 self.log(f"relocated (no progress) {loc2}")
                 if loc2.player is not None and loc2.target is not None:
                     return await self._walk(target, img2, loc2, t0, timeout, done, stuck_turns)
+                if self._where is not None:
+                    return done("lost", loc2.note)
+                # No better idea: go on from here, timed from now, not from before asking.
+                best, last_rel, prev, stick = (dist, time.monotonic()), time.monotonic(), \
+                    small(img2)[1], None
             want = None
             if len(points) == 1 and dist <= 1.6 * reach:
                 dx, dy = off
@@ -721,9 +773,10 @@ class Walker:
                     lined, face, across = abs(dy) <= line_y, (90 if dx > 0 else 270), (0, dy)
                 else:
                     lined, face, across = abs(dx) <= line_x, (180 if dy > 0 else 0), (dx, 0)
-                if lined and dist <= reach and not hid:
-                    # Face it, so a press of a talks to it or opens it. Not while out of
-                    # sight: where it is then is a guess, and it may be stuck short.
+                if lined and dist <= reach and not hid and look is not None and unsure == 0:
+                    # Face it, so a press of a talks to it or opens it. Only on a fresh
+                    # sighting: out of sight or lost, where it is is a guess, and it may
+                    # be stuck short.
                     self.steer(face)
                     await asyncio.sleep(0.08)
                     return done("arrived", f"next to {target}, facing it")
@@ -829,11 +882,13 @@ class Walker:
                 prev = g
                 if how > 6:
                     seen_moving = True
-                    velocity = np.array([x, y]) - player
-                    player = np.array([x, y])
+                    # A box that doesn't stand out from its surroundings is on the ground,
+                    # not the character: none, and look again next frame.
                     look = Look(rgb, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2))
                     if not look.usable:
                         look = None
+                    velocity = np.array([x, y]) - player
+                    player = np.array([x, y])
                     unsure = 0
                 elif not seen_moving:
                     if time.monotonic() - began > 1.6:
@@ -894,6 +949,10 @@ class Walker:
                     if loc2.player is not None and loc2.target is not None:
                         return await self._walk(target, img2, loc2, t0, timeout, done,
                                                 stuck_turns)
+                    if self._where is not None:
+                        return done("lost", loc2.note)
+                    best, last_rel, prev, stick = (best[0], time.monotonic()), \
+                        time.monotonic(), small(img2)[1], None
 
     async def _again(self, target: str, why: str, words: str
                      ) -> tuple[Image.Image, Located]:

@@ -341,6 +341,8 @@ def test_where_questions_and_wording():
     assert where_request("where are we") is None
     assert where_request("Where are we going?") is None
     assert where_request("how many enemies on screen") == "enemies"
+    assert where_request("how many enemies are there") == "enemies"
+    assert where_request("how many enemies are on screen") == "enemies"
     assert where_request("use Zio on the left one") is None
     assert where_request("find a healing item and use it") is None
     assert where_request("how many potions do I have") is None
@@ -631,6 +633,24 @@ class TestAgentHonesty:
         results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
         assert results[0].startswith("no tool called teleport")
         assert pad.log == []  # the last turn could only finish
+
+    def test_a_hold_cut_short_says_so(self):
+        agent, _, _, _, muse = self.make([
+            [("hold", {"input": "down", "ms": 2000})],
+            [("finish", {"text": "ok"})],
+        ])
+
+        async def go():
+            task = asyncio.create_task(agent.run("walk down"))
+            await asyncio.sleep(0.3)
+            agent.go.clear()  # the player starts talking
+            await asyncio.sleep(0.2)
+            agent.go.set()
+            await task
+
+        run(go())
+        result = next(m["content"] for m in muse.seen[-1] if m["role"] == "tool")
+        assert result.startswith("held down for only") and "the player spoke" in result
 
     def test_the_last_turn_can_only_finish(self):
         agent, _, _, _, muse = self.make([[("wait", {"seconds": 0.5})]] * 2

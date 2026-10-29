@@ -20,7 +20,18 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from .walk import Look, Transition, _box_means, changed, motion, phase_shift, settle, small, spot
+from .walk import (
+    Look,
+    Transition,
+    _box_means,
+    changed,
+    motion,
+    phase_shift,
+    pin,
+    settle,
+    small,
+    spot,
+)
 
 ANGLES = {"up": 0, "up_right": 45, "right": 90, "down_right": 135, "down": 180,
           "down_left": 225, "left": 270, "up_left": 315}
@@ -225,6 +236,8 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
     rest = np.zeros((h, w), np.float32)
     rests = 0
     best: tuple[float, float, float] | None = None
+    scene = Transition()
+    scene.see(prev)
 
     last = np.zeros((h, w), np.float32)
 
@@ -247,6 +260,11 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
                     raise _Stopped
             rgb, g = small(await grab())
             sx, sy, _ = phase_shift(prev, g)
+            if scene.see(g, (sx, sy)) != "steady":
+                # A tap walked it through a door, or a scene began: let go at once.
+                if log is not None:
+                    log("find_me: the screen changed while tapping; stopped")
+                raise _Stopped
             last = motion(prev, g, (sx, sy))
             total += last
             scrolled += (sx, sy)
@@ -254,35 +272,66 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
             prev = g
         return total / max(frames, 1), scrolled
 
+    async def taps(there: float, back: float) -> dict:
+        """Tap there, rest, tap back, rest: what moved each way, and how the view went."""
+        nonlocal rest, rests
+        went, view_there = await watch(there, 0.3)
+        gone = last  # where it moved last going there
+        rest += (await watch(None, 0.3))[0]
+        came, view_back = await watch(back, 0.3)
+        now = last  # where it moved last, so where it is
+        rest += (await watch(None, 0.3))[0]
+        rests += 2
+        return {"there": there, "moved": [went, came], "gone": gone, "now": now,
+                "views": (view_there, view_back)}
+
+    def scores(pair: dict) -> list[np.ndarray]:
+        still = _box_means(rest / rests, bw, bh)
+        # What moved, and not while the d-pad was let go.
+        return [_box_means(m, bw, bh) - 3 * still for m in pair["moved"]]
+
+    def follows(pair: dict, x: float, y: float) -> bool:
+        out = spot(pair["gone"], (x, y), 2 * max(bw, bh), (bw, bh))
+        back = spot(pair["now"], (x, y), 2 * max(bw, bh), (bw, bh))
+        return _with_the_pad(pair["there"], *pair["views"], np.array(out[:2]),
+                             np.array(back[:2]), bw)
+
+    def scrolled(pair: dict) -> bool:
+        return any(float(np.hypot(*v)) > 2 for v in pair["views"])
+
     try:
         rest += (await watch(None, 0.25))[0]
         rests += 1
-        for there, back in ((270, 90), (0, 180)):
-            went, view_there = await watch(there, 0.3)
-            gone = last  # where it moved last going there
-            rest += (await watch(None, 0.3))[0]
-            came, view_back = await watch(back, 0.3)
-            now = last  # where it moved last, so where it is
-            rest += (await watch(None, 0.3))[0]
-            rests += 2
-            moved = [went, came]
-            still = _box_means(rest / rests, bw, bh)
-            # What moved both ways (or the one way it could, up against a wall), and not
-            # while the d-pad was let go.
-            scores = [_box_means(m, bw, bh) - 3 * still for m in moved]
-            going = [s for s in scores if s.max() > 6]
+        pairs: list[dict] = []
+        for k, (there, back) in enumerate(((270, 90), (0, 180))):
+            if len(pairs) <= k:  # (the second may have been tapped already, to check)
+                pairs.append(await taps(there, back))
+            pair = pairs[k]
+            # What moved both ways (or the one way it could, up against a wall).
+            going = [sc for sc in scores(pair) if sc.max() > 6]
             if not going:
                 continue
             score = np.minimum.reduce(going)
             iy, ix = np.unravel_index(int(np.argmax(score)), score.shape)
             # Over the way it walked, there and back: where it is now is the end of it.
-            x, y, _ = spot(now, (ix + bw / 2, iy + bh / 2), max(bw, bh), (bw, bh))
-            out = spot(gone, (x, y), 2 * max(bw, bh), (bw, bh))
-            if not _with_the_pad(there, view_there, view_back, np.array(out[:2]),
-                                 np.array([x, y]), bw):
+            x, y, _ = spot(pair["now"], (ix + bw / 2, iy + bh / 2), max(bw, bh), (bw, bh))
+            if not follows(pair, x, y):
                 if log is not None:
                     log(f"find_me: what moved at {x:.0f},{y:.0f} didn't go the way held")
                 continue
+            if not scrolled(pair):
+                # On a still screen someone pacing can line up with one pair of taps by
+                # chance: it mustn't have gone the wrong way in the other pair either
+                # (not moving at all is fine: a wall that way).
+                if len(pairs) == 1:
+                    pairs.append(await taps(0, 180))
+                other = pairs[0] if pair is pairs[1] else pairs[1]
+                y0, x0 = max(0, int(y - bh)), max(0, int(x - bw))
+                if max(float(sc[y0:int(y), x0:int(x)].max(initial=0)) for sc in scores(other)) \
+                        > 6 and not follows(other, x, y):
+                    if log is not None:
+                        log(f"find_me: what moved at {x:.0f},{y:.0f} went its own way")
+                    continue
             best = (x, y, float(score[iy, ix]))
             break
     except _Stopped:
@@ -294,12 +343,15 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
             log("find_me: nothing moved with the d-pad")
         return None
     x, y, how = best
-    look = Look(rgb, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2))
-    if log is not None:
-        log(f"find_me: the character is at {x:.0f},{y:.0f} (moved {how:.0f})")
-    if not look.usable:
+    pinned = pin(rgb, (x, y), (bw, bh))
+    if pinned is None:
+        if log is not None:
+            log(f"find_me: what moved at {x:.0f},{y:.0f} doesn't stand out to follow")
         return None
-    return look, np.array([x, y]), (bw, bh)
+    look, at = pinned
+    if log is not None:
+        log(f"find_me: the character is at {at[0]:.0f},{at[1]:.0f} (moved {how:.0f})")
+    return look, at, (bw, bh)
 
 
 def _with_the_pad(there: float, view_there: np.ndarray, view_back: np.ndarray,

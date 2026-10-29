@@ -132,8 +132,9 @@ def where_request(text: str) -> str | None:
     if text.lower().startswith("how many") and not re.search(
             r"\b(on (the )?screen|are there|here|do you see|can you see)\b", text, re.IGNORECASE):
         return None
-    what = re.sub(r"\b(on (the )?screen|here|now|right now|at)\b", "", m.group("what"), flags=re.IGNORECASE)
-    what = what.strip(" ,")
+    what = re.sub(r"\b(on (the )?screen|here|now|right now|at|are there|is there|do you see"
+                  r"|can you see|there)\b", "", m.group("what"), flags=re.IGNORECASE)
+    what = re.sub(r"\s+(are|is)$", "", what.strip(" ,"), flags=re.IGNORECASE)
     words = re.findall(r"[a-z']+", what.lower())
     if set(words) & ACTION_WORDS:
         return None
