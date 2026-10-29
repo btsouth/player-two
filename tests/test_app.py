@@ -587,3 +587,37 @@ def test_gdbus_takes_a_dash_line_after_the_separator():
                             "/x", "--method", "x.y.Z", *args], capture_output=True,
                            text=True, timeout=10, env={"PATH": "/usr/bin:/bin"}, check=False)
         assert r.stderr.startswith("Usage:") != ok, r.stderr
+
+
+async def test_a_command_that_fails_is_said_not_silent(monkeypatch):
+    import asyncio
+
+    from playertwo import app
+    from playertwo.narrator import Narrator
+
+    s = bare_session()
+    s.s = config.Settings()
+    s.narrator = Narrator.__new__(Narrator)
+    troubles = []
+    s.trouble = lambda exc, where, answer=False: troubles.append((type(exc), answer))
+
+    def locked(_values, _path=None):
+        raise PermissionError("config.toml is read-only")
+
+    monkeypatch.setattr(app, "save_settings", locked)
+    await s.handle("terse")  # spoken or typed
+    assert troubles == [(PermissionError, True)]
+    await s.local("terse")  # from the window or a hotkey
+    assert troubles[-1] == (PermissionError, True)
+
+    # Anything else a background task raises is logged, not lost.
+    emitted = []
+    s.events.emit = lambda kind, **k: emitted.append((kind, k))
+
+    async def boom():
+        raise RuntimeError("lost")
+
+    task = s.spawn(boom())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert task.done() and ("error", {"where": "task", "message": "lost"}) in emitted

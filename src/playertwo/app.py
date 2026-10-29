@@ -399,7 +399,17 @@ class Session:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._task_failed)
         return task
+
+    def _task_failed(self, task: asyncio.Task) -> None:
+        """A background task that raised: log it (what the player asked for says it)."""
+        if task.cancelled() or task.exception() is None:
+            return
+        exc = task.exception()
+        name = getattr(task.get_coro(), "__qualname__", "a task")
+        print(f"Player Two: {name} failed: {exc!r}", file=sys.stderr)
+        self.events.emit("error", where="task", message=str(exc)[:300] or type(exc).__name__)
 
     async def grab_now(self, show: bool = False) -> Frame:
         frame = await asyncio.to_thread(self.capture.grab)
@@ -931,6 +941,13 @@ class Session:
         self.hands_dropped()
 
     async def handle(self, text: str) -> None:
+        """Act on what the player said or typed; if that fails, they hear why."""
+        try:
+            await self._handle(text)
+        except Exception as exc:  # noqa: BLE001  never fail silently
+            self.trouble(exc, "command", answer=True)
+
+    async def _handle(self, text: str) -> None:
         action = local_action(text)
         if action is None and self.paused and local_action(f"{text} narration") == "resume":
             action = "resume"  # "resume" right after pausing narration means narration
@@ -1163,6 +1180,12 @@ class Session:
         return "ok"
 
     async def local(self, action: str) -> None:
+        try:
+            await self._local(action)
+        except Exception as exc:  # noqa: BLE001  never fail silently
+            self.trouble(exc, "command", answer=True)
+
+    async def _local(self, action: str) -> None:
         self.events.emit("local", action=action)
         self.spawn(self._after_local())
         if action == "stop":
