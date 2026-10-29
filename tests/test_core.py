@@ -324,6 +324,8 @@ def test_where_questions_and_wording():
     from playertwo.locate import Match, describe, parse_boxes, where_request
 
     assert where_request("Where's the door?") == "door"
+    assert where_request("where are we") is None
+    assert where_request("Where are we going?") is None
     assert where_request("how many enemies on screen") == "enemies"
     assert where_request("use Zio on the left one") is None
     assert where_request("find a healing item and use it") is None

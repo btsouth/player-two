@@ -234,3 +234,22 @@ async def test_a_character_that_wont_move_ends_the_walk_quickly():
     game = Game(speed=0.0)  # a cutscene: the stick does nothing
     result, _ = await walk(game)
     assert result.outcome == "didnt_move" and result.seconds < 3
+
+
+async def test_remembers_the_character_when_the_model_points_at_someone_else():
+    game = Game(goal=(500, 640))
+    muse = FakeMuse(game)
+    w = Walker(muse, game.grab, game.steer)
+    assert (await w.walk("the green chest")).outcome == "arrived"
+    game.goal = np.array([900.0, 760.0])
+
+    class Mixup(FakeMuse):
+        async def json(self, *a, **k):
+            r = await super().json(*a, **k)
+            x1, y1, x2, y2 = r["player"]
+            return {**r, "player": [x1 + 150, y1 - 120, x2 + 150, y2 - 120]}
+
+    w.muse = Mixup(game)
+    result = await w.walk("the green chest")
+    assert result.outcome == "arrived", result.text()
+    assert np.hypot(*(game.pos - game.goal)) < 80

@@ -127,6 +127,10 @@ def where_request(text: str) -> str | None:
         return None
     what = re.sub(r"\b(on (the )?screen|here|now|right now|at)\b", "", m.group("what"), flags=re.IGNORECASE)
     what = what.strip(" ,")
-    if set(re.findall(r"[a-z']+", what.lower())) & ACTION_WORDS:
+    words = re.findall(r"[a-z']+", what.lower())
+    if set(words) & ACTION_WORDS:
+        return None
+    # "Where are we?", "where is it going?": about the game, not something to point at.
+    if words and words[0] in {"we", "i", "us", "you", "it", "they", "this", "that"}:
         return None
     return what or None

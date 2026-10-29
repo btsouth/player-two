@@ -310,6 +310,10 @@ class Walker:
         self.steer = steer          # stick angle (0 up, 90 right), or None to let go
         self.keep_going = keep_going
         self.log = log or (lambda _m: None)
+        # The character as last seen (its colours, where, its box size), and as seen now:
+        # the model sometimes picks someone else, and this one has been walked already.
+        self.memory: tuple[Look, np.ndarray, tuple[int, int]] | None = None
+        self._now: tuple[Look, np.ndarray, tuple[int, int]] | None = None
         self.me = ""
 
     async def _frame(self) -> tuple[np.ndarray, np.ndarray]:
@@ -322,9 +326,11 @@ class Walker:
         # How far it went over the ground, so the model can keep a map in its head.
         self.travel = np.zeros(2)
         self.size = 0.0
+        self._now = None
 
         def done(outcome: str, detail: str) -> Walked:
             self.steer(None)
+            self.memory = self._now if outcome != "new_area" else None
             if self.size and np.hypot(*self.travel) > self.size:
                 detail += f"; walked {self._words(self.travel, self.size)} in all"
             return Walked(outcome, detail, time.monotonic() - t0)
@@ -332,6 +338,14 @@ class Walker:
         img = await self.grab()
         loc = await locate(self.muse, img, target, me=me)
         self.log(f"located {loc}")
+        if self.memory is not None:
+            look, at, (mw, mh) = self.memory
+            x, y, score = look.find(small(img)[0], (at[0], at[1]), 3 * max(mw, mh))
+            p = loc.player
+            if score > 0.85 and (p is None or np.hypot((p[0] + p[2]) / 2 - x,
+                                                       (p[1] + p[3]) / 2 - y) > max(mw, mh)):
+                self.log(f"the character as last seen is at {x:.0f},{y:.0f}, not {p}")
+                loc.player = (x - mw / 2, y - mh / 2, x + mw / 2, y + mh / 2)
         if loc.player is None:
             return done("lost", "I can't tell which character is yours on this screen. "
                         + loc.note)
@@ -474,6 +488,7 @@ class Walker:
                 continue
             unsure = 0
             player = player + velocity
+            self._now = (look, player.copy(), (bw, bh))
             if steps % 10 == 0:
                 look.ground(rgb, player)  # the ground changes as it walks
             prev = g
