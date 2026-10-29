@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import mimetypes
 import secrets
 from http import HTTPStatus
 from importlib import resources
@@ -30,6 +29,11 @@ TOKEN = secrets.token_urlsafe(18)
 # What the window itself sends; nothing else is taken from it.
 WINDOW_COMMANDS = {"talk-start", "talk-stop", "do", "set", "pause", "resume", "quit", "stop",
                    "repeat", "describe", "check"}
+TALK = {"talk-start", "talk-stop"}
+# The window's own files; nothing else is served.
+FILES = {"index.html", "app.js", "app.css", "icon.svg"}
+TYPES = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
+         "css": "text/css; charset=utf-8", "svg": "image/svg+xml"}
 
 
 def window_url(port: int = PORT) -> str:
@@ -46,10 +50,10 @@ def _static(path: str) -> Response | None:
     name = path.split("?", 1)[0].lstrip("/") or "index.html"
     if name == "events":
         return None  # WebSocket upgrade
-    if "/" in name or name.startswith(".") or not (UI / name).is_file():
+    if name not in FILES:
         return Response(HTTPStatus.NOT_FOUND, "Not Found", Headers(), b"not found")
     body = (UI / name).read_bytes()
-    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    ctype = TYPES[name.rpartition(".")[2]]
     headers = Headers({"Content-Type": ctype, "Cache-Control": "no-cache",
                        "Content-Length": str(len(body))})
     return Response(HTTPStatus.OK, "OK", headers, body)
@@ -61,8 +65,15 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
             return Response(HTTPStatus.FORBIDDEN, "Forbidden", Headers(), b"forbidden")
         return _static(request.path)
 
+    async def run(line: str) -> None:
+        try:
+            await session.command(line)
+        except Exception as exc:  # noqa: BLE001  keep the window's commands working
+            session.events.emit("error", where="window", message=str(exc)[:300])
+
     async def handler(ws):
         q: asyncio.Queue = asyncio.Queue()
+        lines: asyncio.Queue[str] = asyncio.Queue()
 
         async def commands():
             async for msg in ws:
@@ -71,15 +82,22 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
                 except ValueError:
                     continue
                 if isinstance(data, dict) and isinstance(data.get("command"), str):
-                    if data["command"].partition(" ")[0] not in WINDOW_COMMANDS:
+                    cmd = data["command"].partition(" ")[0]
+                    if cmd not in WINDOW_COMMANDS:
                         continue
-                    try:
-                        await session.command(data["command"])
-                    except Exception as exc:  # noqa: BLE001  keep the window's commands working
-                        session.events.emit("error", where="window", message=str(exc)[:300])
+                    # The talk button never waits behind a slow settings change.
+                    if cmd in TALK:
+                        await run(data["command"])
+                    else:
+                        lines.put_nowait(data["command"])
+
+        async def in_order():
+            while True:
+                await run(await lines.get())
 
         session.events.subs.add(q)
         rx = asyncio.create_task(commands())
+        worker = asyncio.create_task(in_order())
         try:
             for ev in session.events.snapshot():
                 await ws.send(json.dumps(ev))
@@ -89,6 +107,7 @@ async def serve_ui(session: Session, port: int = PORT) -> None:
             return
         finally:
             rx.cancel()
+            worker.cancel()
             session.events.subs.discard(q)
 
     # Only this page may connect: any other site open in the player's browser could

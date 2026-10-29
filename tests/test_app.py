@@ -470,3 +470,50 @@ def test_a_hidden_health_bar_is_not_empty():
     assert watch.update(black, 1) == [] and watch.update(black, 6) == []  # a fade
     assert watch.update(bar(0.0), 7) == []  # once: likely covered, not a one-hit loss
     assert [a.level for a in watch.update(bar(0.0), 8)] == ["critical"]  # still so
+
+
+def test_window_server_serves_only_its_own_files():
+    from playertwo.web import FILES, UI, _static
+
+    assert {p.name for p in UI.iterdir() if p.is_file()} == FILES
+    assert _static("/?k=x").status_code == 200
+    assert _static("/app.js").headers["Content-Type"].startswith("text/javascript")
+    for path in ("/C:\\Users\\p\\.config\\player-two\\api-key", "/..\\..\\x", "/../app.js",
+                 "/%2e%2e/app.js", "/ui/app.js", "/.env", "/C:/Windows/win.ini"):
+        assert _static(path).status_code == 404, path
+
+
+async def test_the_talk_button_never_waits_behind_a_slow_setting():
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from websockets.asyncio.client import connect
+
+    from playertwo.app import Events
+    from playertwo.web import TOKEN, serve_ui
+
+    got: list[str] = []
+    slow = asyncio.Event()
+
+    async def command(line):
+        got.append(line)
+        if line.startswith("set"):
+            await slow.wait()
+
+    session = SimpleNamespace(events=Events(), command=command)
+    port = 47897
+    server = asyncio.create_task(serve_ui(session, port))
+    await asyncio.sleep(0.2)
+    try:
+        async with connect(f"ws://127.0.0.1:{port}/events?k={TOKEN}",
+                           origin=f"http://127.0.0.1:{port}") as ws:
+            for line in ("set verbosity terse", "pause", "talk-start", "talk-stop"):
+                await ws.send(json.dumps({"command": line}))
+            await asyncio.sleep(0.2)
+            assert sorted(got) == ["set verbosity terse", "talk-start", "talk-stop"]
+            slow.set()
+            await asyncio.sleep(0.1)
+            assert got[-1] == "pause"  # the rest still run, in order
+    finally:
+        server.cancel()
