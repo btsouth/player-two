@@ -239,3 +239,49 @@ async def test_finds_nobody_when_the_d_pad_moves_nothing():
     world = Crowd()
     world.text_box = True
     assert await find_me(world.grab, world.steer) is None
+
+
+async def test_the_agent_remembers_what_it_learned_about_a_game(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    from playertwo.agent import Agent
+    from playertwo.controls import DryRun
+    from playertwo.notes import GameNotes
+    from playertwo.screen import Frame
+
+    class Muse:
+        s = SimpleNamespace(image_max_side=640)
+
+        def __init__(self, replies):
+            self.replies = replies
+            self.systems: list[str] = []
+
+        async def tools(self, messages, tools, effort=None, max_tokens=0):
+            self.systems.append(messages[0]["content"])
+            name, args = self.replies.pop(0)
+            call = SimpleNamespace(id="c", function=SimpleNamespace(
+                name=name, arguments=json.dumps(args)),
+                model_dump=lambda: {"id": "c", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(args)}})
+            return SimpleNamespace(content="", tool_calls=[call])
+
+    async def grab():
+        return Frame(Image.new("RGB", (320, 180)), 0)
+
+    async def speak(_text):
+        pass
+
+    notes = GameNotes(tmp_path)
+    muse = Muse([("remember", {"note": "X opens the main menu."}),
+                 ("remember", {"note": "Battles don't pause: set Battle Mode to Wait."}),
+                 ("finish", {"text": "ok"})])
+    await Agent(muse, DryRun(), grab, speak, game="Chrono Trigger", notes=notes).run("hi")
+    # A later session, a fresh agent: it knows them from the start.
+    muse = Muse([("remember", {"note": "Y opens the main menu."}), ("finish", {"text": "ok"})])
+    await Agent(muse, DryRun(), grab, speak, game="Chrono Trigger", notes=notes).run("hi")
+    assert "X opens the main menu." in muse.systems[0]
+    # A correction replaces the old note rather than keeping both.
+    assert notes.read("Chrono Trigger") == ["Battles don't pause: set Battle Mode to Wait.",
+                                            "Y opens the main menu."]
+    assert notes.read("Another Game") == []

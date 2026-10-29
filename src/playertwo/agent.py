@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .explore import ANGLES, Trail, find_me, keep_walking
 from .muse import Muse, image_part
+from .notes import GameNotes
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
 from .screen import Frame, thumb
 from .walk import Walker
@@ -96,6 +97,16 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"question": {"type": "string"}},
                        "required": ["question"]}}},
     {"type": "function", "function": {
+        "name": "remember",
+        "description": "Keep a short fact about this game for later sessions, once you've "
+                       "seen it hold: which button opens the menu or skips text, how "
+                       "battles work, where a place or person is and how to get there, "
+                       "what the player's character looks like. Not things that change "
+                       "(health, what's on screen now). A new note replaces a similar "
+                       "older one.",
+        "parameters": {"type": "object", "properties": {"note": {"type": "string"}},
+                       "required": ["note"]}}},
+    {"type": "function", "function": {
         "name": "finish",
         "description": "The request is done (or can't be done). Tell the player in one "
                        "short sentence.",
@@ -173,7 +184,7 @@ class Agent:
                  ask: Callable[[str], Awaitable[str]] | None = None,
                  confirm: str = "important", language: str = "English",
                  on_action: Callable[[str, dict], None] | None = None,
-                 look_before_confirm: bool = True):
+                 look_before_confirm: bool = True, notes: GameNotes | None = None):
         self.muse = muse
         self.controls = controls
         self.grab = grab
@@ -191,6 +202,7 @@ class Agent:
         self.cancelled = False
         self._walker: Walker | None = None
         self.trail = Trail()  # a rough map of the area from where walks went
+        self.notes = notes or GameNotes()
         # Cleared while the player holds the talk key: no presses or speech until it's
         # known whether they said stop, asked something else, or just wanted a repeat.
         self.go = asyncio.Event()
@@ -239,6 +251,9 @@ class Agent:
         parts.append(LANGUAGE.format(language=self.language))
         if self.game:
             parts.append(GAME_CONTEXT.format(game=self.game))
+            learned = self.notes.prompt(self.game)
+            if learned:
+                parts.append(learned)
         return "\n".join(parts)
 
     async def _noise(self) -> float:
@@ -468,6 +483,8 @@ class Agent:
                         answer = await self.ask(question)
                         result = f'The player said: "{answer}"' if answer else (
                             "No answer. Don't do it; finish and say you'll wait.")
+                elif c.function.name == "remember":
+                    result = self.notes.add(self.game, str(args.get("note") or ""))
                 elif c.function.name == "finish":
                     finished = (args.get("text") or "").strip()
                     result = "finished"
