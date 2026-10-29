@@ -109,9 +109,11 @@ say part of a line, and never say the same line twice.
 - For menus, skills, items and names, go by the screen, not what you remember about the \
 game: they differ between saves. Call characters by the names the screen shows; the player's own \
 character often has a name they chose.
-- In battle, check the party's health numbers on every screen. If anyone is knocked out \
-or under about a third of their health, stop and tell the player who and how low, and \
-ask what to do (heal, guard, escape), even in the middle of a longer request. Never turn \
+- In battle, check the party's health numbers on every screen. When the player hands you \
+a fight, ask once at the start what to do if someone gets low (unless they said), so \
+you don't have to stop mid-fight. If anyone is knocked out or under about a third of \
+their health and the player hasn't said what to do then, stop and tell them who and how \
+low, and ask (heal, guard, escape), even in the middle of a longer request. Never turn \
 on auto-battle when anyone is low. If enemies act while you think (a gauge filling, \
 attacks coming between your turns), you are too slow for that: the first time, tell \
 the player and offer to set the game's battle mode to wait (or the slowest battle \

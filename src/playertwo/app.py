@@ -258,6 +258,7 @@ class Session:
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
         self.side_task: asyncio.Task | None = None  # a "where is" or health-bar search
+        self.unnamed_answer = False  # the answer came hands-free, without "Player Two"
         self.fps_before_hud: float | None = None
         self.answer: asyncio.Future[str] | None = None
         self.hud = None
@@ -481,6 +482,7 @@ class Session:
         """Ask out loud and wait for the next thing the player says."""
         self.events.emit("ask", text=question)
         self.answer = asyncio.get_running_loop().create_future()
+        self.unnamed_answer = False
         self.asked = question
         await self.voice.say(question, interrupt=False)
         await self.voice.wait_idle(15)
@@ -490,8 +492,13 @@ class Session:
             end = asked + timeout
             while True:
                 try:
-                    return await asyncio.wait_for(asyncio.shield(self.answer),
-                                                  max(0.1, end - time.monotonic()))
+                    got = await asyncio.wait_for(asyncio.shield(self.answer),
+                                                 max(0.1, end - time.monotonic()))
+                    if got and self.unnamed_answer:
+                        got += (' (heard hands-free without "Player Two": if it doesn\'t '
+                                "sound like an answer, it may be the game talking; for "
+                                "anything hard to undo, ask again)")
+                    return got
                 except TimeoutError:
                     # Still talking or being transcribed: give them time to finish
                     # (hands-free, up to a point: the game's own voices count as talking).
@@ -858,6 +865,8 @@ class Session:
                     not self.voice.idle())
                 if self.open_ear(started) or (busy and local_action(text) == "stop"):
                     said = text  # an answer, a follow-up, or "stop" while it's busy
+                    # Heard without its name: over speakers that could be the game.
+                    self.unnamed_answer = self.answer is not None and not self.answer.done()
             if said is None:
                 if text:
                     self.events.emit("overheard", text=text)
