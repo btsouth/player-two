@@ -346,6 +346,9 @@ class WindowsKeys(Controls):
                 self._key(k, False)
         self._held = keys
 
+    def close(self) -> None:
+        self.steer(None)
+
 
 def keyboard(focus=None) -> Controls:
     return WindowsKeys(focus=focus) if sys.platform == "win32" else WaylandKeys(focus=focus)
