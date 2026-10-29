@@ -210,4 +210,7 @@ async def test_a_walk_on_a_slow_capture_never_arrives_short(lag):
     loc = Located((x - 8, y - 12.5, x + 8, y + 12.5), (592, 144.5, 608, 169.5), [], "")
     result = await w._walk("the stall", img, loc, t0, 80 / 26, w._done(t0))
     assert result.outcome != "arrived", result.text()
-    assert np.hypot(*(w.memory[1] - (243, 161))) < 20, w.memory[1]  # at the fence
+    # Where it last really saw Crono: at the fence, or (on a starved machine, frames too
+    # far apart to pick him out) still where he started; never out on the ground.
+    at = w.memory[1]
+    assert min(np.hypot(*(at - (243, 161))), np.hypot(*(at - CRONO))) < 20, at
