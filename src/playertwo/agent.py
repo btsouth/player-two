@@ -330,7 +330,7 @@ class Agent:
                         result = f'The player said: "{answer}"' if answer else (
                             "No answer. Don't do it; finish and say you'll wait.")
                 elif c.function.name == "finish":
-                    finished = args.get("text", "Done.")
+                    finished = (args.get("text") or "").strip()
                     result = "finished"
                 else:
                     try:
@@ -343,7 +343,7 @@ class Agent:
                 run.outcome = "cancelled"
                 break
             if finished is not None:
-                if not self._already_said(finished):
+                if finished and not self._already_said(finished):
                     await self._speak(finished)
                 run.outcome = finished
                 break
@@ -351,9 +351,13 @@ class Agent:
             t_look = time.monotonic()
             frame = await self._settled(noise) if acted else await self.grab()
             turn["look_s"] = round(time.monotonic() - t_look, 2)
+            last = _turn == self.max_turns - 2
             msgs.append({"role": "user", "content": [
                 image_part(frame.image, self.muse.s.image_max_side),
-                {"type": "text", "text": "The screen now."},
+                {"type": "text", "text": "The screen now." + (
+                    " You're out of steps: call finish now, telling the player plainly how "
+                    "far you got, where things stand on screen, and what they could ask "
+                    "next." if last else "")},
             ]})
         else:
             await self._speak("I couldn't finish that one. Want me to try another way?")

@@ -140,6 +140,24 @@ class TestAgent:
         assert said == ["Done."]
         assert result.outcome == "Done."
 
+    def test_an_answer_isnt_followed_by_done(self):
+        agent, _, said, _, _ = self.make([
+            [("say", {"text": "You're on a stage, with Yosuke next to you."})],
+            [("finish", {})],
+        ])
+        run(agent.run("where am I?"))
+        assert said == ["You're on a stage, with Yosuke next to you."]
+
+    def test_running_out_of_steps_asks_for_where_things_stand(self):
+        agent, _, said, _, muse = self.make(
+            [[("press", {"buttons": ["up"]})]] * 2 + [[("finish", {"text": "Got halfway."})]])
+        agent.max_turns = 3
+        result = run(agent.run("walk to the stairs"))
+        assert said == ["Got halfway."] and result.outcome == "Got halfway."
+        last = muse.seen[-1][-1]["content"][-1]["text"]
+        first = muse.seen[1][-1]["content"][-1]["text"]
+        assert "out of steps" in last and "out of steps" not in first
+
     def test_finish_doesnt_repeat_what_say_just_said(self):
         agent, _, said, _, _ = self.make([
             [("say", {"text": "Your HP is 42 out of 50."}),
