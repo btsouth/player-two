@@ -38,3 +38,27 @@ def test_held_wayland_keys_are_let_go_on_close():
     assert ran == [("-p", "Up")]
     keys.close()  # nothing held: nothing to do
     assert ran == [("-p", "Up")]
+
+
+def test_windows_keys_blocked_by_windows_are_said_plainly():
+    import ctypes
+
+    import pytest
+
+    from playertwo.app import trouble_words
+    from playertwo.controls import ControlsError
+
+    keys = WindowsKeys.__new__(WindowsKeys)
+    keys.ctypes = ctypes
+
+    class Inp(ctypes.Structure):
+        _fields_ = (("type", ctypes.c_ulong), ("ki", ctypes.c_byte * 24))
+
+    keys.INPUT = lambda type, ki: Inp(type=type)
+    keys.KEYBDINPUT = lambda *a: (ctypes.c_byte * 24)()
+    keys.send = lambda n, ref, size: 0  # a game running as administrator
+    with pytest.raises(ControlsError) as err:
+        keys._key("Up", False)
+    assert "administrator" in trouble_words(err.value)[1]
+    keys.send = lambda n, ref, size: 1
+    keys._key("Up", False)

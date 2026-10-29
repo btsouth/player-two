@@ -346,7 +346,10 @@ class WindowsKeys(Controls):
         code = self.SCAN[name]
         flags = 0x0008 | (0x0002 if up else 0) | (0x0001 if code & 0x100 else 0)
         inp = self.INPUT(type=1, ki=self.KEYBDINPUT(0, code & 0xFF, flags, 0, 0))
-        self.send(1, self.ctypes.byref(inp), self.ctypes.sizeof(inp))
+        # 0 sent: Windows blocked it, as it does for keys aimed at a game running as
+        # administrator when Player Two isn't.
+        if not self.send(1, self.ctypes.byref(inp), self.ctypes.sizeof(inp)):
+            raise ControlsError("SendInput sent no keys", say=BLOCKED)
 
     def press(self, button: str, hold_ms: int = 100) -> None:
         key = self.map[button]
@@ -387,7 +390,15 @@ class WindowsKeys(Controls):
 
 
 class ControlsError(RuntimeError):
-    """Buttons or keys couldn't be pressed."""
+    """Buttons or keys couldn't be pressed. `say` is how to tell the player, if known."""
+
+    def __init__(self, *args, say: str = ""):
+        super().__init__(*args)
+        self.say = say
+
+
+BLOCKED = ("Windows is blocking my key presses. That happens when the game runs as "
+           "administrator: start the game normally, or start me as administrator too.")
 
 
 def keyboard(focus=None) -> Controls:

@@ -159,8 +159,8 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
         return "key", ("Speech recognition turned down my API key. Run player-two setup in "
                        "a terminal to check it.")
     if isinstance(exc, ControlsError):
-        return "controls", ("I can't press buttons in the game right now. Run player-two setup "
-                            "to check the controller.")
+        return "controls", exc.say or ("I can't press buttons in the game right now. Run "
+                                       "player-two setup to check the controller.")
     if isinstance(exc, PermissionError | FileNotFoundError):
         return "other", f"Something is missing or locked on this computer: {exc}."
     if isinstance(exc, openai.APIConnectionError | openai.APITimeoutError | OSError):
