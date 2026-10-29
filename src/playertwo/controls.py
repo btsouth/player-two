@@ -218,11 +218,6 @@ class WindowsPad(Controls):
         self.pad.update()
 
 
-def steer_keys(angle: float | None) -> list[str]:
-    """The movement keys (WASD) closest to a stick angle: one or two of them."""
-    return [WaylandKeys.STICK[d] for d in steer_dirs(angle)]
-
-
 class WaylandKeys(Controls):
     """Keyboard through the compositor's virtual keyboard (wtype). Safe in a nested session."""
 
@@ -259,14 +254,19 @@ class WaylandKeys(Controls):
     def steer(self, angle: float | None, strength: float = 1.0) -> None:
         import subprocess
 
-        keys = steer_keys(angle)
-        if self._held and self._held[0] == keys:
+        # The d-pad keys (arrows): 2D games walk with those, and some use WASD for
+        # other things.
+        keys = [self.map[d] for d in steer_dirs(angle)]
+        if self._held and self._held[0] == keys and self._held[1].poll() is None:
             return
         if self._held:
-            # wtype holds keys only while it runs: stopping it lets them go.
-            self._held[1].terminate()
-            self._held[1].wait(timeout=2)
+            old, proc = self._held
             self._held = None
+            proc.terminate()
+            proc.wait(timeout=2)
+            # Let go explicitly too, in case the compositor keeps keys of a closed
+            # virtual keyboard down.
+            self._run(*[a for k in old for a in ("-p", k)])
         if keys:
             if self.focus:
                 self.focus()
@@ -333,7 +333,7 @@ class WindowsKeys(Controls):
     _held: ClassVar[list[str]] = []
 
     def steer(self, angle: float | None, strength: float = 1.0) -> None:
-        keys = steer_keys(angle)
+        keys = [self.map.get(d, WaylandKeys.MAP[d]) for d in steer_dirs(angle)]
         if keys == self._held:
             return
         if keys and self.focus:

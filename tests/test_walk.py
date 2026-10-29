@@ -32,6 +32,7 @@ class Game:
         self.stick = None
         self.frames = 0
         self.asked = []
+        self.held_when_asked = []
 
     def steer(self, angle):
         self.stick = angle
@@ -89,6 +90,7 @@ class FakeMuse:
     async def json(self, messages, effort=None, max_tokens=0):
         g = self.game
         g.asked.append(messages[0]["content"][-1]["text"])
+        g.held_when_asked.append(g.stick)
         cam, (w, h) = g.camera(), g.VIEW
         via = [[(x - cam[0]) / w * 1000, (y - cam[1]) / h * 1000] for x, y in self.via]
         self.via = []
@@ -253,3 +255,62 @@ async def test_remembers_the_character_when_the_model_points_at_someone_else():
     result = await w.walk("the green chest")
     assert result.outcome == "arrived", result.text()
     assert np.hypot(*(game.pos - game.goal)) < 80
+
+
+async def test_starting_up_against_a_wall_is_not_a_cutscene():
+    # Pressed against the near side of a wall, straight at the target behind it.
+    game = Game(start=(436, 600), goal=(800, 600), wall=(450, 520, 510, 680))
+    result, _ = await walk(game, FakeMuse(game, via=[(480, 480)]))
+    assert result.outcome == "arrived", result.text()
+
+
+async def test_lets_go_while_asking_again_and_a_waypoint_isnt_being_stuck():
+    game = Game(start=(150, 600), goal=(800, 600), wall=(450, 450, 510, 760), speed=3.0)
+    result, _ = await walk(game, FakeMuse(game, via=[(480, 380)]), timeout=40)
+    assert result.outcome == "arrived", result.text()
+    assert len(game.asked) == 1, game.asked  # reaching the waypoint isn't "no progress"
+    game2 = Game(start=(150, 600), goal=(800, 600), wall=(450, 0, 510, 1400))
+    await walk(game2, timeout=12)
+    assert len(game2.asked) > 1 and all(s is None for s in game2.held_when_asked)
+
+
+def test_a_box_at_the_screen_edge_is_followed_sensibly():
+    rng = np.random.default_rng(3)
+    scene = (rng.random((270, 480, 3)) * 80).astype(np.uint8)
+    scene[100:130, 0:12] = (200, 30, 30)
+    look = Look(scene, (-5, 100, 15, 130))
+    assert look.usable and look.base > 0.05
+    x, _, score = look.find(scene, (5, 115), radius=20)
+    assert x < 20 and 0.8 < score < 1.5
+    blank = Look(scene, (300, 200, 320, 230))  # just background: nothing to follow
+    assert not blank.usable or blank.find(scene, (310, 215), 10)[2] < 2
+
+
+def test_keyboards_walk_with_the_arrow_keys(monkeypatch):
+    import subprocess
+
+    from playertwo.controls import WaylandKeys
+
+    started, ran = [], []
+
+    class Proc:
+        def __init__(self, args):
+            started.append(args)
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", Proc)
+    keys = WaylandKeys()
+    monkeypatch.setattr(keys, "_run", lambda *a: ran.append(a))
+    keys.steer(135)
+    keys.steer(135)  # the same way: nothing new
+    keys.steer(None)
+    assert len(started) == 1 and "Down" in started[0] and "Right" in started[0]
+    assert ran == [("-p", "Down", "-p", "Right")]

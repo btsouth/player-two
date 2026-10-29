@@ -291,7 +291,12 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             me = str(a.get("me") or "").strip()
-            return (await self.walker().walk(target, me)).text()
+            try:
+                return (await self.walker().walk(target, me)).text()
+            except (ValueError, TypeError, IndexError, OSError, RuntimeError) as exc:
+                # Not the model's arguments: something broke while walking.
+                self.controls.steer(None)
+                return f"walking failed ({exc}); walk with the d-pad instead"
         return "ok"
 
     def walker(self) -> Walker:
@@ -310,7 +315,8 @@ class Agent:
                 if self.on_action:
                     self.on_action("walk_note", {"text": text})
 
-            self._walker = Walker(self.muse, image, self.controls.steer, keep_going, note)
+            self._walker = Walker(self.muse, image, self.controls.steer, keep_going, note,
+                                  say=self._speak)
         return self._walker
 
     async def run(self, request: str, frame: Frame | None = None) -> Run:

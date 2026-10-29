@@ -65,6 +65,8 @@ class Look:
         self.ground(rgb, (cx, cy), b)
         _, _, m = self._best(b, cx, cy, 0, 0)
         self.base = max(m, 1e-3)
+        # Too little of its own colour to follow (a box that's mostly background).
+        self.usable = m > 0.05
 
     @staticmethod
     def _cut(b, cx, cy, w, h):
@@ -86,13 +88,10 @@ class Look:
         self.weights = np.where(self.fg >= 3, pf / (pf + pb + 1e-9), 0.0)
 
     def _best(self, b, cx, cy, rx, ry, moved=None):
-        H, W = b.shape
-        x0 = max(0, round(cx - self.w / 2 - rx))
-        y0 = max(0, round(cy - self.h / 2 - ry))
-        x1 = min(W, round(cx + self.w / 2 + rx))
-        y1 = min(H, round(cy + self.h / 2 + ry))
-        if x1 - x0 < self.w or y1 - y0 < self.h:
+        win = _window(b.shape, cx, cy, self.w, self.h, rx, ry)
+        if win is None:
             return cx, cy, 0.0
+        x0, y0, x1, y1 = win
         h, w = self.h, self.w
         sums = _box_means(self.weights[b[y0:y1, x0:x1]], w, h)
         rank = sums
@@ -179,6 +178,19 @@ def motion(a: np.ndarray, b: np.ndarray, scroll: tuple[float, float]) -> np.ndar
     return moved
 
 
+def _window(shape, cx: float, cy: float, w: int, h: int, rx: int, ry: int):
+    """The part of a frame to search for a w x h box around (cx, cy), within rx, ry,
+    moved inside the frame at its edges. None if the frame is smaller than the box."""
+    H, W = shape
+    if w > W or h > H:
+        return None
+    x0 = max(0, min(round(cx - w / 2 - rx), W - w))
+    y0 = max(0, min(round(cy - h / 2 - ry), H - h))
+    x1 = min(W, max(round(cx + w / 2 + rx), x0 + w))
+    y1 = min(H, max(round(cy + h / 2 + ry), y0 + h))
+    return x0, y0, x1, y1
+
+
 def _box_means(x: np.ndarray, w: int, h: int) -> np.ndarray:
     c = np.pad(x.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
     return (c[h:, w:] - c[:-h, w:] - c[h:, :-w] + c[:-h, :-w]) / (w * h)
@@ -189,13 +201,10 @@ def spot(moved: np.ndarray, center: tuple[float, float], radius: int, size: tupl
     """The middle of the most changed `size` box near `center` (see motion), and how
     much it changed (gray levels, on average)."""
     w, h = size
-    H, W = moved.shape
-    x0 = max(0, round(center[0] - w / 2 - radius))
-    y0 = max(0, round(center[1] - h / 2 - radius))
-    x1 = min(W, round(center[0] + w / 2 + radius))
-    y1 = min(H, round(center[1] + h / 2 + radius))
-    if x1 - x0 < w or y1 - y0 < h:
+    win = _window(moved.shape, center[0], center[1], w, h, radius, radius)
+    if win is None:
         return center[0], center[1], 0.0
+    x0, y0, x1, y1 = win
     sums = _box_means(moved[y0:y1, x0:x1], w, h)
     ys, xs = np.mgrid[0:sums.shape[0], 0:sums.shape[1]]
     px, py = x0 + xs + w / 2, y0 + ys + h / 2
@@ -252,7 +261,9 @@ def _box(v, sx: float, sy: float):
         x1, y1, x2, y2 = (float(n) for n in v[:4])
     except (TypeError, ValueError):
         return None
-    if x2 <= x1 or y2 <= y1:
+    x1, x2 = max(0.0, min(x1, 1000.0)), max(0.0, min(x2, 1000.0))
+    y1, y2 = max(0.0, min(y1, 1000.0)), max(0.0, min(y2, 1000.0))
+    if x2 - x1 < 2 or y2 - y1 < 2:
         return None
     return (x1 * sx, y1 * sy, x2 * sx, y2 * sy)
 
@@ -304,12 +315,14 @@ class Walker:
     def __init__(self, muse: Muse, grab: Callable[[], Awaitable[Image.Image]],
                  steer: Callable[[float | None], None],
                  keep_going: Callable[[], Awaitable[bool]] | None = None,
-                 log: Callable[[str], None] | None = None):
+                 log: Callable[[str], None] | None = None,
+                 say: Callable[[str], Awaitable[None]] | None = None):
         self.muse = muse
         self.grab = grab
         self.steer = steer          # stick angle (0 up, 90 right), or None to let go
         self.keep_going = keep_going
         self.log = log or (lambda _m: None)
+        self.say = say  # a few words out loud when a walk takes longer than it should
         # The character as last seen (its colours, where, its box size), and as seen now:
         # the model sometimes picks someone else, and this one has been walked already.
         self.memory: tuple[Look, np.ndarray, tuple[int, int]] | None = None
@@ -327,6 +340,8 @@ class Walker:
         self.travel = np.zeros(2)
         self.size = 0.0
         self._now = None
+        self.paused = 0.0  # seconds held while the player talked: not the walk's time
+        self._said = False
 
         def done(outcome: str, detail: str) -> Walked:
             self.steer(None)
@@ -340,10 +355,15 @@ class Walker:
         self.log(f"located {loc}")
         if self.memory is not None:
             look, at, (mw, mh) = self.memory
-            x, y, score = look.find(small(img)[0], (at[0], at[1]), 3 * max(mw, mh))
+            rgb = small(img)[0]
+            x, y, score = look.find(rgb, (at[0], at[1]), 3 * max(mw, mh))
             p = loc.player
-            if score > 0.85 and (p is None or np.hypot((p[0] + p[2]) / 2 - x,
-                                                       (p[1] + p[3]) / 2 - y) > max(mw, mh)):
+            theirs = 0.0
+            if p is not None:
+                theirs = look.find(rgb, ((p[0] + p[2]) / 2, (p[1] + p[3]) / 2),
+                                   max(mw, mh) // 2)[2]
+            # Only when the model's pick doesn't look like the character walked before.
+            if score > 0.85 and theirs < 0.5:
                 self.log(f"the character as last seen is at {x:.0f},{y:.0f}, not {p}")
                 loc.player = (x - mw / 2, y - mh / 2, x + mw / 2, y + mh / 2)
         if loc.player is None:
@@ -388,11 +408,21 @@ class Walker:
         best = (float("inf"), time.monotonic())  # closest to the aim so far, and when
         stick: float | None = None
         while True:
-            if time.monotonic() - t0 > timeout:
+            if time.monotonic() - t0 - self.paused > timeout:
                 return done("timeout", f"still {self._words(points[-1] - player, size)} "
                                        f"from {target} after {timeout:.0f} s")
-            if self.keep_going is not None and not await self.keep_going():
-                return done("stopped", "stopped by the player")
+            if self.keep_going is not None:
+                t_wait = time.monotonic()
+                if not await self.keep_going():
+                    return done("stopped", "stopped by the player")
+                gap = time.monotonic() - t_wait
+                if gap > 0.25:
+                    # Held while the player talked: that's not time spent walking.
+                    self.paused += gap
+                    best = (best[0], best[1] + gap)
+                    last_rel += gap
+                    began += gap
+                    _, prev = await self._frame()
             off = points[0] - player
             dist = float(np.hypot(*off))
             if dist < best[0] - 0.3 * size:
@@ -404,11 +434,12 @@ class Walker:
                 if stuck_turns > 2:
                     return done("blocked", f"something is in the way, "
                                 f"{self._words(points[-1] - player, size)} from {target}")
-                loc2 = await locate(self.muse, await self.grab(), target,
-                                    "the straight way is blocked; give a way around", self.me)
+                img2, loc2 = await self._again(target, "the straight way is blocked; give a "
+                                               "way around", "Something's in the way. Finding "
+                                               "a way around.")
                 self.log(f"relocated (no progress) {loc2}")
                 if loc2.player is not None and loc2.target is not None:
-                    return await self._restart(target, loc2, t0, timeout, done, stuck_turns)
+                    return await self._walk(target, img2, loc2, t0, timeout, done, stuck_turns)
             want = None
             if len(points) == 1 and dist <= 1.6 * reach:
                 dx, dy = off
@@ -425,9 +456,14 @@ class Walker:
                     want = compass(*across)  # step sideways to line up
             elif len(points) > 1 and dist <= max(size, reach * 0.6):
                 points.pop(0)
+                best = (float("inf"), time.monotonic())  # progress counts from here
                 continue
             if want is None:
                 want = (compass(*off) + (0, 45, -45, 90, -90)[slide]) % 360
+            if not seen_moving:
+                # Not moving yet: maybe up against a wall that way, so try the others.
+                want = (want + (0, 90, -90, 180)[min(3, int((time.monotonic() - began) / 0.4))]
+                        ) % 360
             # Eight ways, like a d-pad: most 2D games walk no other way. Keep the last
             # one until the aim is well past the halfway line, so it doesn't flicker.
             if stick is None or abs(wrap(want - stick)) > 30:
@@ -463,28 +499,32 @@ class Walker:
                     velocity = np.array([x, y]) - player
                     player = np.array([x, y])
                     look = Look(rgb, (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2))
+                    if not look.usable:
+                        look = None
                     unsure = 0
                 elif not seen_moving:
-                    if time.monotonic() - began > 1.2:
+                    if time.monotonic() - began > 1.6:
                         if stuck_turns == 0:
-                            return done("didnt_move", "your character didn't move. A text "
-                                        "box or a cutscene is probably on: press a to move "
-                                        "it along")
+                            return done("didnt_move", "your character didn't move any way. "
+                                        "A text box or a cutscene is probably on: press a to "
+                                        "move it along")
                         # Up against something after asking again: go by the model's box.
                         look = Look(rgb, (player[0] - bw / 2, player[1] - bh / 2,
                                           player[0] + bw / 2, player[1] + bh / 2))
+                        if not look.usable:
+                            look = None
                         seen_moving = True
                 elif unsure > 20:
                     stuck_turns += 1
                     loc2 = None
                     if stuck_turns <= 2:
-                        loc2 = await locate(self.muse, await self.grab(), target,
-                                            "lost track of the character", self.me)
+                        img2, loc2 = await self._again(target, "lost track of the character",
+                                                       "I lost sight of you. Looking again.")
                         self.log(f"relocated (lost) {loc2}")
                     if loc2 is None or loc2.player is None or loc2.target is None:
                         return done("lost", "I lost track of your character. "
                                     + (loc2.note if loc2 else ""))
-                    return await self._restart(target, loc2, t0, timeout, done, stuck_turns)
+                    return await self._walk(target, img2, loc2, t0, timeout, done, stuck_turns)
                 continue
             unsure = 0
             player = player + velocity
@@ -510,16 +550,26 @@ class Walker:
                     if stuck_turns > 2:
                         return done("blocked", f"something is in the way, "
                                     f"{self._words(points[-1] - player, size)} from {target}")
-                    loc2 = await locate(self.muse, await self.grab(), target,
-                                        "the straight way is blocked; give a way around", self.me)
+                    img2, loc2 = await self._again(target, "the straight way is blocked; give "
+                                                   "a way around", "Something's in the way. "
+                                                   "Finding a way around.")
                     self.log(f"relocated (blocked) {loc2}")
                     if loc2.player is not None and loc2.target is not None:
-                        return await self._restart(target, loc2, t0, timeout, done,
-                                                   stuck_turns)
+                        return await self._walk(target, img2, loc2, t0, timeout, done,
+                                                stuck_turns)
 
-    async def _restart(self, target, loc, t0, timeout, done, stuck_turns=0):
+    async def _again(self, target: str, why: str, words: str
+                     ) -> tuple[Image.Image, Located]:
+        """Let go and ask the model again, about the screen as it is once stopped. The
+        first time in a walk, also tell the player why it's taking longer."""
+        self.steer(None)
+        await asyncio.sleep(0.15)
         img = await self.grab()
-        return await self._walk(target, img, loc, t0, timeout, done, stuck_turns)
+        jobs = [locate(self.muse, img, target, why, self.me)]
+        if self.say is not None and not self._said:
+            self._said = True
+            jobs.append(self.say(words))
+        return img, (await asyncio.gather(*jobs))[0]
 
     @staticmethod
     def _words(v: np.ndarray, size: float) -> str:
