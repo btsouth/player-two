@@ -640,3 +640,46 @@ async def test_sigterm_ends_the_session_the_normal_way():
     finally:
         for sig in (signal.SIGTERM, signal.SIGHUP):
             loop.remove_signal_handler(sig)
+
+
+async def test_where_answers_from_the_character_even_when_sam_cant_see_it(monkeypatch):
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo import locate, walk
+    from playertwo.screen import Frame
+
+    s = bare_session()
+    frame = Frame(Image.new("RGB", (960, 540)), 0)
+    said = []
+
+    async def grab_now(show=False):
+        return frame
+
+    async def say(text):
+        said.append(text)
+
+    async def idle(_t):
+        return None
+
+    async def nothing(muse, img, phrase):
+        return [], 0.4  # SAM doesn't know pixel-art cats
+
+    async def look(muse, img, phrase, context="", me=""):
+        # The cat up and to the left of Crono, as Muse Spark sees it, in tracked pixels.
+        return walk.Located((260, 180, 276, 205), (70, 100, 90, 115) if phrase == "cat"
+                            else None, [], "")
+
+    monkeypatch.setattr(locate, "locate", nothing)
+    monkeypatch.setattr(walk, "locate", look)
+    s.narrating = None
+    s.grab_now = grab_now
+    s.muse = None
+    s.agent = SimpleNamespace(_walker=None)
+    s.narrator = SimpleNamespace(recent=[])
+    s.voice = SimpleNamespace(say=say, wait_idle=idle, cue=lambda *a, **k: None)
+    await s._where("cat")
+    assert "left" in said[-1] and "up" in said[-1], said
+    await s._where("dog")
+    assert "can't find" in said[-1], said

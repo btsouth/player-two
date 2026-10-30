@@ -1049,11 +1049,26 @@ class Session:
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         frame = await self.grab_now(show=True)
+        # SAM finds things exactly but doesn't know many game things (a pixel-art cat);
+        # Muse Spark's look finds those, and where the player's character is, so the
+        # answer can be from them. Both at once; Muse's is skipped when not needed.
+        looking = asyncio.create_task(self._where_spark(frame, phrase))
         matches, secs = await locate(self.muse, frame.image, phrase)
         how = "sam-3.1"
-        if not matches:
-            matches, how = await point(self.muse, frame.image, phrase), "muse-spark"
         me = await self._character_on_screen(frame)
+        if matches and me is not None:
+            looking.cancel()
+        else:
+            try:
+                found, player = await looking
+            except Exception:  # noqa: BLE001  Muse's pointing instead
+                found, player = None, None
+                if not matches:
+                    matches, how = await point(self.muse, frame.image, phrase), "muse-spark"
+            if not matches and found is not None:
+                matches, how = [found], "muse-spark"
+            if me is None:
+                me = player
         if me is None:
             text = describe(phrase, matches)
             pans = [(m, m.pan) for m in sorted(matches, key=lambda m: m.cx)]
@@ -1072,6 +1087,31 @@ class Session:
         for _m, pan in pans[:8]:
             self.voice.cue("ping", pan=pan)
             await asyncio.sleep(0.28)
+
+    async def _where_spark(self, frame: Frame, phrase: str):
+        """Muse Spark's look for `phrase` and for the player's character, as fractions of
+        the screen: (match or None, (where the character is, a step) or None)."""
+        from .locate import Match
+        from .walk import WIDTH
+        from .walk import locate as look_for
+
+        loc = await look_for(self.muse, frame.image, phrase)
+        th = frame.image.height * WIDTH / frame.image.width
+
+        def frac(b):
+            return (b[0] + b[2]) / 2 / WIDTH, (b[1] + b[3]) / 2 / th
+
+        found = None
+        if loc.target is not None:
+            x, y = frac(loc.target)
+            b = loc.target
+            found = Match(x, y, (b[2] - b[0]) * (b[3] - b[1]) / (WIDTH * th),
+                          (b[0] / WIDTH, b[1] / th, b[2] / WIDTH, b[3] / th))
+        player = None
+        if loc.player is not None:
+            w = loc.player[2] - loc.player[0]
+            player = frac(loc.player), (w / WIDTH, w / th)
+        return found, player
 
     async def _character_on_screen(self, frame: Frame
                                    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
