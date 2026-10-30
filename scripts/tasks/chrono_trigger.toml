@@ -1,0 +1,122 @@
+# Tasks for scripts/play_tasks.py in Chrono Trigger (Steam). Save sets are copies of the
+# game's save folder (autosave in slot 3, loaded with Resume on the title menu), kept
+# outside the repo since they hold a player's progress:
+#   leene-square     just arrived at the Millennial Fair
+#   leene-bell       at the top of the stairs to Leene's Bell, before Marle
+#   mountain-of-woe  a late-game party on the Mountain of Woe (slots 1 and 2)
+# Setups are presses from launch: skip the intro movie, wait out the title, any key, then
+# Resume (the autosave) or New Game. Timings are rough: the ready check catches a miss.
+# A task's request can be a list, done in order; questions get the next of `answers`
+# ("yes" once they run out).
+
+[game]
+name = "Chrono Trigger"
+app_id = 613830
+save_dir = "{prefix}/drive_c/users/steamuser/Documents/My Games/Chrono Trigger"
+process = "Chrono Trigger.exe"
+start_delay_s = 8
+
+[[task]]
+id = "new-game"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3"
+ready = "the Chrono Trigger title menu"
+request = "start a new game and keep the default name"
+check = "a new game has started: Crono's bedroom, or his mother's lines there"
+limit_s = 300
+
+[[task]]
+id = "downstairs"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3"
+ready = "the Chrono Trigger title menu"
+request = ["start a new game and keep the default name", "read me what Mom says",
+           "go down the stairs"]
+check = "Crono is downstairs in his house (kitchen and living room), not in his bedroom"
+limit_s = 300
+
+[[task]]
+id = "leave-house"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3"
+ready = "the Chrono Trigger title menu"
+request = ["start a new game and keep the default name", "read me what Mom says",
+           "take me outside"]
+check = "Crono is outside his house, in the town or on the world map, not inside"
+limit_s = 400
+
+[[task]]
+id = "resume"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3"
+ready = "the Chrono Trigger title menu"
+request = "load my latest save"
+answers = ["the newest one, the autosave"]
+check = "the game is playing at the Millennial Fair, not on the title or a load screen"
+limit_s = 240
+
+[[task]]
+id = "fair-to-bell"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the Millennial Fair, with Crono on screen"
+request = "go north to Leene's Bell"
+check = "Leene's Bell (a bell under a stone arch) is on screen near Crono, or a girl has just bumped into him"
+limit_s = 300
+
+[[task]]
+id = "marle"
+save = "leene-bell"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the Millennial Fair, with Crono on screen"
+request = ["walk up to Leene's Bell", "she dropped something, pick it up and give it back to her"]
+answers = ["yes", "sure"]
+check = "the blonde girl (Marle) is thanking Crono, asking to walk around together, or has joined him"
+limit_s = 300
+
+[[task]]
+id = "gato-hint"
+save = "leene-bell"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the Millennial Fair, with Crono on screen"
+request = "Gato the singing robot should be west of the bell area. Find him and talk to him"
+answers = ["no, don't fight yet"]
+check = "Gato (a big red robot) is on screen next to Crono, with his lines or his question showing"
+limit_s = 420
+
+[[task]]
+id = "gato-search"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the Millennial Fair, with Crono on screen"
+request = "find Gato, the singing robot, and talk to him"
+answers = ["I don't know, keep looking", "no, don't fight yet"]
+check = "Gato (a big red robot) is on screen next to Crono, with his lines or his question showing"
+limit_s = 600
+
+[[task]]
+id = "fair-stall"
+save = "leene-square"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the Millennial Fair, with Crono on screen"
+request = "find a stall at the fair and talk to the seller"
+check = "a shop menu or a seller's lines are showing"
+limit_s = 300
+
+[[task]]
+id = "battle-wait"
+save = "mountain-of-woe"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the game playing (not a title or menu), with Crono on screen"
+request = "set the battle mode to wait, and leave the settings open so I can check"
+check = "the settings screen is open and shows Battle Mode set to Wait"
+limit_s = 240
+
+[[task]]
+id = "mountain-climb"
+save = "mountain-of-woe"
+setup = "wait4 a wait24 a wait3 a wait10"
+ready = "the Mountain of Woe, rocky ledges and chains over a drop"
+request = "find the way further up the mountain and take me there"
+check = "the party has reached a higher part of the mountain than where it started (a different screen of ledges), and nobody is knocked out"
+limit_s = 600
