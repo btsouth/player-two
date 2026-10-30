@@ -5,7 +5,8 @@
 #   leene-bell       at the top of the stairs to Leene's Bell, before Marle
 #   mountain-of-woe  a late-game party on the Mountain of Woe (slots 1 and 2)
 # Setups are presses from launch: skip the intro movie, wait out the title, any key, then
-# Resume (the autosave) or New Game. Timings are rough: the ready check catches a miss.
+# Resume (the autosave) or New Game. Timings drift, so when the start isn't ready the
+# runner asks which of [game.screens] is up and presses its way on.
 # A task's request can be a list, done in order; questions get the next of `answers`
 # ("yes" once they run out).
 
@@ -16,13 +17,18 @@ save_dir = "{prefix}/drive_c/users/steamuser/Documents/My Games/Chrono Trigger"
 process = "Chrono Trigger.exe"
 start_delay_s = 8
 
+[game.screens]
+movie = { looks = "the intro movie, or a black screen", press = "a wait4" }
+logo = { looks = "the title logo or a pendulum, with no menu", press = "a wait4" }
+menu = { looks = "the title menu: New Game, Resume, Load", press = "a wait10" }
+
 [[task]]
 id = "new-game"
 save = "leene-square"
 setup = "wait4 a wait24 a wait3"
 ready = "the Chrono Trigger title menu"
 request = "start a new game and keep the default name"
-check = "a new game has started: Crono's bedroom, or his mother's lines there"
+check = "a new game has started: Crono's bedroom is showing (a bed, a desk, a window), with or without his mother there; any of her lines counts"
 limit_s = 300
 
 [[task]]
@@ -32,7 +38,7 @@ setup = "wait4 a wait24 a wait3"
 ready = "the Chrono Trigger title menu"
 request = ["start a new game and keep the default name", "read me what Mom says",
            "go down the stairs"]
-check = "Crono is downstairs in his house (kitchen and living room), not in his bedroom"
+check = "Crono is downstairs in his house: a kitchen (stove, sink, fridge), a dining table and a red sofa are on screen. His bedroom has a bed and a desk instead"
 limit_s = 300
 
 [[task]]

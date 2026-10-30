@@ -40,8 +40,13 @@ JUDGE = """You are checking whether an AI helper finished a task in a video game
 blind player. The task was: "{request}".
 It counts as done if: {check}
 The helper's last words to the player: "{said}"
-Look at this last screenshot. Did it get done? Be strict: close isn't done. Answer JSON: \
-{{"done": true or false, "why": "one short sentence"}}"""
+Look at this last screenshot. First say what it shows: where the player's character is \
+and what place or screen this is. Then decide whether the task got done. Judge by the \
+picture, not by the helper's words; close isn't done. Answer JSON: {{"seen": "one \
+sentence", "done": true or false, "why": "one short sentence"}}"""
+
+SCREEN = """Which of these screens is this? {names}. Answer JSON: {{"screen": "its \
+name, or none"}}"""
 
 READY = """Does this screenshot show: {ready}? Answer JSON: {{"yes": true or false, \
 "why": "a few words"}}"""
@@ -107,6 +112,7 @@ class Game:
         self.process = cfg.get("process", "")
         self.settle = float(cfg.get("start_delay_s", 3))  # after the window opens
         self.host = host
+        self.screens = cfg.get("screens", {})  # name: {looks, press}, for setup
 
     def running(self) -> bool:
         ps = subprocess.run(["ps", "-eo", "cmd"], check=False, capture_output=True,
@@ -196,7 +202,7 @@ async def judge(muse: Muse, img: Image.Image, prompt: str) -> dict:
     msgs = [{"role": "user", "content": [image_part(img, 1280),
                                          {"type": "text", "text": prompt}]}]
     try:
-        return await muse.json(msgs, effort="low", max_tokens=2000)
+        return await muse.json(msgs, effort="high", max_tokens=4000)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -211,7 +217,11 @@ def main() -> None:
     p.add_argument("--host", default="", help='prefix for desktop commands, e.g. '
                    '"omabox host --"')
     p.add_argument("--out", type=Path)
+    p.add_argument("--rejudge", type=Path, metavar="RESULTS",
+                   help="judge an earlier run's last screens again, without playing")
     args = p.parse_args()
+    if args.rejudge:
+        return rejudge(tomllib.loads(args.tasks.read_text()), args.rejudge)
 
     spec = tomllib.loads(args.tasks.read_text())
     host = shlex.split(args.host)
@@ -254,6 +264,27 @@ def main() -> None:
     print(f"\n{passed} of {len(results)} done; results in {out}")
 
 
+def rejudge(spec: dict, results: Path) -> None:
+    """Score a finished run again from its saved last screens (into RESULTS.rejudged)."""
+    checks = {t["id"]: t["check"] for t in spec["task"]}
+    muse, shots = Muse(Settings.load()), results.with_suffix("")
+    out, passed, rows = results.with_suffix(".rejudged.jsonl"), 0, []
+    for line in results.read_text().splitlines():
+        r = json.loads(line)
+        shot = shots / f"{r['run']}.end.png"
+        if shot.exists():
+            req = r["request"] if isinstance(r["request"], list) else [r["request"]]
+            v = RUN.run(judge(muse, Image.open(shot), JUDGE.format(
+                request=" Then: ".join(req), check=checks[r["id"]], said=r.get("outcome", ""))))
+            r.update(done=bool(v.get("done")), why=v.get("why", v), seen=v.get("seen", ""))
+        passed += bool(r.get("done"))
+        rows.append(json.dumps(r))
+        print(f"{'PASS' if r.get('done') else 'FAIL'} {r['run']}: "
+              f"{r.get('why', r.get('error', ''))}")
+    out.write_text("\n".join(rows) + "\n")
+    print(f"\n{passed} of {len(rows)} done; results in {out}")
+
+
 def run_task(task: dict, tid: str, game: Game, muse: Muse, shots: Path,
              saves: Path) -> dict:
     r: dict = {"id": task["id"], "run": tid, "request": task["request"]}
@@ -269,6 +300,21 @@ def run_task(task: dict, tid: str, game: Game, muse: Muse, shots: Path,
         ctl("shot", str(shot))
         if task.get("ready"):
             ok = RUN.run(judge(muse, Image.open(shot),
+                                   READY.format(ready=task["ready"])))
+            # Timings drift (a slow title, a missed skip): find out which screen is
+            # up and press what gets past it, a few times.
+            screens = game.screens
+            for _ in range(8 if screens else 0):
+                if ok.get("yes"):
+                    break
+                names = ", ".join(f'"{n}" ({sc["looks"]})' for n, sc in screens.items())
+                which = RUN.run(judge(muse, Image.open(shot), SCREEN.format(names=names)))
+                sc = screens.get(str(which.get("screen")))
+                if not sc:
+                    break
+                ctl("press", sc["press"], timeout=120)
+                ctl("shot", str(shot))
+                ok = RUN.run(judge(muse, Image.open(shot),
                                    READY.format(ready=task["ready"])))
             if not ok.get("yes"):
                 r.update(done=False, error=f"setup didn't reach the start: {ok}")
@@ -287,7 +333,8 @@ def run_task(task: dict, tid: str, game: Game, muse: Muse, shots: Path,
                  status=ctl("status"))
         verdict = RUN.run(judge(muse, Image.open(shot), JUDGE.format(
             request=" Then: ".join(requests), check=task["check"], said=said)))
-        r.update(done=bool(verdict.get("done")), why=verdict.get("why", verdict))
+        r.update(done=bool(verdict.get("done")), why=verdict.get("why", verdict),
+                 seen=verdict.get("seen", ""))
     except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
         r.update(done=False, error=str(exc))
     finally:
