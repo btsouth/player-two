@@ -189,6 +189,9 @@ class PlayerTwo:
         return done
 
 
+RUN = asyncio.Runner()  # one loop for every judge call: the client is tied to it
+
+
 async def judge(muse: Muse, img: Image.Image, prompt: str) -> dict:
     msgs = [{"role": "user", "content": [image_part(img, 1280),
                                          {"type": "text", "text": prompt}]}]
@@ -215,7 +218,9 @@ def main() -> None:
     game = Game(spec["game"], host)
     tasks = [t for t in spec["task"] if not args.only or t["id"] in args.only]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out = args.out or Path.home() / ".cache/player-two/tasks/runs" / f"{stamp}.jsonl"
+    out = args.out or Path.home() / ".cache/player-two/tasks/runs"
+    if out.suffix != ".jsonl":  # a folder: a file in it per run
+        out = out / f"{stamp}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     shots = out.with_suffix("")
     shots.mkdir(exist_ok=True)
@@ -263,7 +268,7 @@ def run_task(task: dict, tid: str, game: Game, muse: Muse, shots: Path,
         shot = shots / f"{tid}.start.png"
         ctl("shot", str(shot))
         if task.get("ready"):
-            ok = asyncio.run(judge(muse, Image.open(shot),
+            ok = RUN.run(judge(muse, Image.open(shot),
                                    READY.format(ready=task["ready"])))
             if not ok.get("yes"):
                 r.update(done=False, error=f"setup didn't reach the start: {ok}")
@@ -280,7 +285,7 @@ def run_task(task: dict, tid: str, game: Game, muse: Muse, shots: Path,
         said = (run or {}).get("outcome", "")
         r.update(outcome=said, steps=len((run or {}).get("steps", [])),
                  status=ctl("status"))
-        verdict = asyncio.run(judge(muse, Image.open(shot), JUDGE.format(
+        verdict = RUN.run(judge(muse, Image.open(shot), JUDGE.format(
             request=" Then: ".join(requests), check=task["check"], said=said)))
         r.update(done=bool(verdict.get("done")), why=verdict.get("why", verdict))
     except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
