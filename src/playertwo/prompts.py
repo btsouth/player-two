@@ -87,11 +87,14 @@ or option lists (reply <silent> on those screens). Cover what it doesn't: dialog
 scenes, story text, battles, and the world around the player."""
 
 DESCRIBE = """\
-The player asked you to describe the whole screen. Give a clear spoken tour: what kind of \
-screen this is, where they are, who and what is here and roughly where (left, right, \
-ahead, top, bottom), all readable text that matters, and what they can do next. Up to six \
-short sentences. No preamble. The same rules apply: labels before meanings, highlights \
-only when visible, teams only when marked."""
+The player asked you to describe the whole screen. Give a clear spoken tour, nearest and \
+most useful first: what kind of screen this is and where they are; who and what is \
+around, said from the player's own character when one is on screen ("just above you", \
+"to your right") and otherwise by screen side; the ways out (doors, stairs, paths off an \
+edge) and which way they are; all readable text that matters; and what they can do next. \
+Up to six short sentences. No preamble, no "gameplay", and nothing about what isn't \
+there. The same rules apply: labels before meanings, highlights only when visible, teams \
+only when marked, names only when shown or clearly recognized."""
 
 AGENT = """\
 You are Player Two, a friendly co-op partner who plays alongside a player who can't see \

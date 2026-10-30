@@ -175,7 +175,7 @@ class Narrator:
         """A full spoken tour of the screen, on request."""
         msgs = self.messages(frame, DESCRIBE)
         text = ""
-        async for delta in self.muse.stream(msgs, effort="low"):
+        async for delta in self.muse.stream(msgs):
             text += delta
             yield delta
         self.recent.append(text.strip())

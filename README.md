@@ -173,7 +173,7 @@ How each part works, including walking and the area map: [docs/how-it-works.md](
 | anything about the game | Player Two looks and answers, or does it |
 | "Player Two" first (hands-free) | the same, with no key; "Player Two" alone, then the request, works too |
 | "take me to the stairs" / "go talk to her" | walks your character there (2D games) |
-| "describe" / "what's on screen" | a full spoken tour of the screen |
+| "describe" / "look around" | a full spoken tour: who and what is around you, and the ways out |
 | "next" | presses A and reads the next line of dialogue, without waiting for the model |
 | "repeat" | says the last line again |
 | "stop" / "quiet" / "cancel that" | stops talking (and cancels a running command) |
