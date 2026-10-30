@@ -25,6 +25,14 @@ def home(tmp_path, monkeypatch):
     games.steam_install_dirs.cache_clear()
 
 
+def free_port():
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 def client(cls, title, focus, **kw):
     return {"class": cls, "title": title, "focusHistoryID": focus, "mapped": True, **kw}
 
@@ -175,7 +183,7 @@ async def test_window_socket_refuses_other_websites():
     from playertwo.web import TOKEN, serve_ui
 
     session = SimpleNamespace(events=Events())
-    port = 47899
+    port = free_port()
     server = asyncio.create_task(serve_ui(session, port))
     await asyncio.sleep(0.2)
     try:
@@ -214,9 +222,18 @@ async def test_the_window_can_only_send_its_own_commands():
         got.append(line)
 
     session = SimpleNamespace(events=Events(), command=command)
-    port = 47898
+    port = free_port()
     server = asyncio.create_task(serve_ui(session, port))
-    await asyncio.sleep(0.2)
+    for _ in range(50):  # the server takes a moment to start on a busy machine
+        await asyncio.sleep(0.1)
+        if server.done():
+            server.result()  # its error, if it failed to start
+        try:
+            _, w = await asyncio.open_connection("127.0.0.1", port)
+            w.close()
+            break
+        except OSError:
+            continue
     try:
         async with connect(f"ws://127.0.0.1:{port}/events?k={TOKEN}",
                            origin=f"http://127.0.0.1:{port}") as ws:
@@ -502,9 +519,18 @@ async def test_the_talk_button_never_waits_behind_a_slow_setting():
             await slow.wait()
 
     session = SimpleNamespace(events=Events(), command=command)
-    port = 47897
+    port = free_port()
     server = asyncio.create_task(serve_ui(session, port))
-    await asyncio.sleep(0.2)
+    for _ in range(50):  # the server takes a moment to start on a busy machine
+        await asyncio.sleep(0.1)
+        if server.done():
+            server.result()  # its error, if it failed to start
+        try:
+            _, w = await asyncio.open_connection("127.0.0.1", port)
+            w.close()
+            break
+        except OSError:
+            continue
     try:
         async with connect(f"ws://127.0.0.1:{port}/events?k={TOKEN}",
                            origin=f"http://127.0.0.1:{port}") as ws:
