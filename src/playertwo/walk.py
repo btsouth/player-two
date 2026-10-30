@@ -5,9 +5,10 @@ thinking, and it loses track). Instead Muse Spark looks once: where the player's
 character is, where the target is, and a waypoint or two around anything in the way.
 Then plain image math does the walking, about ten times a second: it follows the
 character's sprite, follows the screen as it scrolls (so the target is followed too),
-and turns the stick toward the target until the character is next to it. It asks Muse
-Spark again when it gets stuck or loses the character, and stops when the screen changes
-to a new place (a door, stairs).
+and turns the stick toward the target until the character is next to it. Up against
+something, it finds its own way around by bumping (see nav). It asks Muse Spark again
+when that runs out or it loses the character, and stops when the screen changes to a
+new place (a door, stairs).
 
 It is for 2D games, where up on the stick or d-pad is up on the screen.
 """
@@ -26,8 +27,11 @@ import numpy as np
 from PIL import Image
 
 from .muse import Muse, image_part
+from .nav import Detour
 
 WIDTH = 480  # frames are tracked at this width
+BUMPS = 20  # bumps a walk plans its own way around before asking the model
+WAY_AROUND = "Something's in the way. Finding a way around."
 
 
 def gray(img: Image.Image, width: int = WIDTH) -> np.ndarray:
@@ -598,6 +602,10 @@ class Walker:
         self._now: tuple[Look, np.ndarray, tuple[int, int]] | None = None
         self.me = ""
         self._where: Callable[[], tuple[float, float]] | None = None
+        # When "finding a way around" was last said: once is enough for a player
+        # whose next few walks bump about the same room.
+        self._said_at = -math.inf
+        self._talk: asyncio.Task | None = None
 
     async def _frame(self) -> tuple[np.ndarray, np.ndarray]:
         return small(await self.grab())
@@ -608,7 +616,8 @@ class Walker:
         self.size = 0.0
         self._now = None
         self.paused = 0.0  # seconds held while the player talked: not the walk's time
-        self._said = False
+        self._bumps = 0
+        self._planning: tuple[float, float] | None = None  # began (time, paused then)
 
     def _done(self, t0: float):
         def done(outcome: str, detail: str) -> Walked:
@@ -726,6 +735,10 @@ class Walker:
         best = (float("inf"), time.monotonic())  # closest to the aim so far, and when
         stick: float | None = None
         popped: list[float] = []  # how much of the screen changed, last few frames
+        # The way around what it bumped into, once it has (see nav), and how long to
+        # keep finding it before asking the model.
+        detour: Detour | None = None
+        budget = max(4.0, min(12.0, timeout / 3))
         while True:
             if time.monotonic() - t0 - self.paused > timeout:
                 return done("timeout", f"still {self._words(points[-1] - player, size)} "
@@ -743,21 +756,32 @@ class Walker:
                     began += gap
                     hid = hid + gap if hid else 0.0
                     _, prev = await self._frame()
-            off = points[0] - player
+            # Going around something: the next corner is the aim for now.
+            turn = None
+            if detour is not None:
+                left = len(detour.corners)
+                turn = detour.corner(player)
+                if len(detour.corners) != left:
+                    best = (float("inf"), time.monotonic())  # progress counts from here
+            aim = detour.grid.middle(detour.corners[0][0]) if turn is not None else points[0]
+            off = aim - player
             dist = float(np.hypot(*off))
             if dist < best[0] - 0.3 * size:
                 best = (dist, time.monotonic())
             elif time.monotonic() - best[1] > 2.0:
                 # Moving, but not getting closer (sliding along a long wall).
                 best = (dist, time.monotonic())
+                way = self._reroute(detour, player, points[0], stick, size, budget, False)
+                if way is not None:
+                    detour, last_rel = way, time.monotonic()
+                    continue
                 stuck_turns += 1
                 if stuck_turns > 1:
                     return done("blocked", "something is in the way, maybe out of reach "
                                 f"from here, {self._words(points[-1] - player, size)} from "
                                 f"{target}")
                 img2, loc2 = await self._again(target, "the straight way is blocked; give a "
-                                               "way around", "Something's in the way. Finding "
-                                               "a way around.")
+                                               "way around", WAY_AROUND)
                 self.log(f"relocated (no progress) {loc2}")
                 if loc2.player is not None and loc2.target is not None:
                     return await self._walk(target, img2, loc2, t0, timeout, done, stuck_turns)
@@ -766,8 +790,9 @@ class Walker:
                 # No better idea: go on from here, timed from now, not from before asking.
                 best, last_rel, prev, stick = (dist, time.monotonic()), time.monotonic(), \
                     small(img2)[1], None
-            want = None
-            if len(points) == 1 and dist <= 1.6 * reach:
+                detour = None
+            want = turn
+            if turn is None and len(points) == 1 and dist <= 1.6 * reach:
                 dx, dy = off
                 if abs(dx) >= abs(dy):
                     lined, face, across = abs(dy) <= line_y, (90 if dx > 0 else 270), (0, dy)
@@ -782,12 +807,13 @@ class Walker:
                     return done("arrived", f"next to {target}, facing it")
                 if not lined and slide == 0:
                     want = compass(*across)  # step sideways to line up
-            elif len(points) > 1 and dist <= max(size, reach * 0.6):
+            elif turn is None and len(points) > 1 and dist <= max(size, reach * 0.6):
                 points.pop(0)
                 best = (float("inf"), time.monotonic())  # progress counts from here
                 continue
             if want is None:
-                want = (compass(*off) + (0, 45, -45, 90, -90)[slide]) % 360
+                want = detour.toward(player, points[0]) if detour is not None else (
+                    (compass(*off) + (0, 45, -45, 90, -90)[slide]) % 360)
             if not seen_moving:
                 # Not moving yet: maybe up against a wall that way, so try the others.
                 want = (want + (0, 90, -90, 180)[min(3, int((time.monotonic() - began) / 0.4))]
@@ -832,6 +858,8 @@ class Walker:
             for p in points:
                 p += scroll
             seen = seen + scroll
+            if detour is not None:
+                detour.shift(scroll)
             moved = motion(prev, g, (sx, sy))
             # Walking changes a few percent of the screen; a text box, a menu or a battle
             # coming up changes far more, and stops the character, so the view stops too.
@@ -932,9 +960,14 @@ class Walker:
                 last_rel = time.monotonic()
                 if slide:
                     slide = 0  # moving again: aim straight
-            elif time.monotonic() - last_rel > 0.5:
-                slide += 1
+            elif time.monotonic() - last_rel > (0.35 if detour is not None else 0.5):
                 last_rel = time.monotonic()
+                # Up against something: mark it, and plan a way around from here.
+                way = self._reroute(detour, player, points[0], stick, size, budget)
+                if way is not None:
+                    detour, slide, best = way, 0, (float("inf"), time.monotonic())
+                    continue
+                slide += 1 if detour is None else 5  # no way around found: ask
                 if slide > 4:
                     slide = 0
                     stuck_turns += 1
@@ -943,8 +976,7 @@ class Walker:
                                     "reach from here, "
                                     f"{self._words(points[-1] - player, size)} from {target}")
                     img2, loc2 = await self._again(target, "the straight way is blocked; give "
-                                                   "a way around", "Something's in the way. "
-                                                   "Finding a way around.")
+                                                   "a way around", WAY_AROUND)
                     self.log(f"relocated (blocked) {loc2}")
                     if loc2.player is not None and loc2.target is not None:
                         return await self._walk(target, img2, loc2, t0, timeout, done,
@@ -953,6 +985,41 @@ class Walker:
                         return done("lost", loc2.note)
                     best, last_rel, prev, stick = (best[0], time.monotonic()), \
                         time.monotonic(), small(img2)[1], None
+                    detour = None
+
+    def _reroute(self, detour: Detour | None, player, aim, stick: float | None,
+                 size: float, budget: float, bumped: bool = True) -> Detour | None:
+        """Stuck (bumped, or not getting closer): plan the way around from here, or
+        None when there is none, or after enough bumps or seconds that the model
+        should look instead."""
+        now = time.monotonic()
+        if self._planning is None:
+            self._planning = (now, self.paused)
+        began, held = self._planning
+        if self._bumps >= BUMPS or now - began - (self.paused - held) > budget:
+            return None
+        detour = detour or Detour(size, player)
+        self._bumps += 1
+        ahead = detour.bump(player, stick) if bumped else None
+        found = detour.plan(player, aim)
+        self.log(f"bump {self._bumps} going {stick}: blocked {ahead}, "
+                 f"{len(detour.grid.blocked)} known; "
+                 + (f"around by {[c for c, _ in detour.corners]}" if found else "no way"))
+        if not found:
+            return None
+        if self._bumps == 3:  # not for a step aside, but a walk that takes a while
+            self._tell(WAY_AROUND)
+        return detour
+
+    def _tell(self, words: str) -> Awaitable[None] | None:
+        """Say why it's taking longer, unless that was just said."""
+        if self.say is None or time.monotonic() - self._said_at < 60:
+            return None
+        self._said_at = time.monotonic()
+        self._talk = asyncio.ensure_future(self.say(words))
+        # Spoken while walking on: a voice that fails mustn't end the walk.
+        self._talk.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return self._talk
 
     async def _again(self, target: str, why: str, words: str
                      ) -> tuple[Image.Image, Located]:
@@ -965,9 +1032,9 @@ class Walker:
             # A point from the map: it's where the map says; the model can't see it.
             return img, self._here(self._where)
         jobs = [self._locate(img, target, why)]
-        if self.say is not None and not self._said:
-            self._said = True
-            jobs.append(self.say(words))
+        talk = self._tell(words)
+        if talk is not None:
+            jobs.append(talk)
         return img, (await asyncio.gather(*jobs))[0]
 
     async def _locate(self, img: Image.Image, target: str, context: str = "") -> Located:

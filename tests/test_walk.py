@@ -23,11 +23,13 @@ class Game:
     VIEW = (960, 540)
 
     def __init__(self, start=(150, 700), goal=(880, 560), wall=None, speed=7.0,
-                 camera_turn=0.0, cover=None, cover_colour=(30, 90, 40), follower=False):
+                 camera_turn=0.0, cover=None, cover_colour=(30, 90, 40), follower=False,
+                 walls=()):
         self.world = texture(2400, 1400)
         self.pos = np.array(start, float)
         self.goal = np.array(goal, float)
-        self.wall = wall  # (x0, y0, x1, y1) in world pixels, can't be walked through
+        # (x0, y0, x1, y1) in world pixels, can't be walked through
+        self.walls = [*([wall] if wall else []), *walls]
         self.speed = speed
         self.turn = camera_turn  # stick angle minus the direction it walks on screen
         self.stick = None
@@ -43,10 +45,8 @@ class Game:
         self.stick = angle
 
     def _blocked(self, p):
-        if self.wall is None:
-            return False
-        x0, y0, x1, y1 = self.wall
-        return x0 - 12 <= p[0] <= x1 + 12 and y0 - 18 <= p[1] <= y1 + 18
+        return any(x0 - 12 <= p[0] <= x1 + 12 and y0 - 18 <= p[1] <= y1 + 18
+                   for x0, y0, x1, y1 in self.walls)
 
     def camera(self):
         w, h = self.VIEW
@@ -68,8 +68,7 @@ class Game:
         w, h = self.VIEW
         view = self.world.crop((int(cam[0]), int(cam[1]), int(cam[0]) + w, int(cam[1]) + h))
         d = ImageDraw.Draw(view)
-        if self.wall:
-            x0, y0, x1, y1 = self.wall
+        for x0, y0, x1, y1 in self.walls:
             d.rectangle((x0 - cam[0], y0 - cam[1], x1 - cam[0], y1 - cam[1]), fill=(40, 40, 40))
         gx, gy = self.goal - cam
         d.rectangle((gx - 14, gy - 20, gx + 14, gy + 20), fill=(30, 160, 30))
@@ -588,3 +587,63 @@ async def test_a_walk_to_a_map_spot_stops_when_the_map_starts_over():
     result = await w.walk_toward(lambda: None, "the far stall")  # the map is gone
     assert result.outcome == "lost" and "area_map" in result.detail
     assert game.stick is None
+
+
+# Crono's bedroom, from a screenshot, a character width to 24 pixels: the room's
+# walls, a railing along the top of the stairwell, and the dark drop to its right.
+# The stairs are reached down the left side of the railing, then right.
+BEDROOM = [(330, 280, 342, 520), (330, 500, 650, 520), (635, 280, 650, 520),
+           (408, 402, 502, 440), (502, 386, 635, 500)]
+# A bigger one: a railing along the top, the right and the bottom, open on the left.
+STAIRWELL = [(400, 500, 700, 520), (680, 500, 700, 800), (400, 780, 700, 800)]
+
+
+@pytest.mark.parametrize("start, goal, walls", [
+    ((385, 375), (461, 471), BEDROOM),  # against the railing's corner
+    ((370, 330), (461, 471), BEDROOM),  # a step further off
+    ((380, 400), (600, 660), STAIRWELL),
+])
+async def test_finds_its_own_way_around_a_railing_without_asking_again(start, goal, walls):
+    game = Game(start=start, goal=goal, walls=walls)
+    notes, said = [], []
+
+    async def say(text):
+        said.append(text)
+
+    w = Walker(FakeMuse(game), game.grab, game.steer, log=notes.append, say=say)
+    result = await w.walk("the stairs", timeout=25)
+    assert result.outcome == "arrived", (result.text(), game.pos, notes)
+    assert np.hypot(*(game.pos - game.goal)) < 80
+    assert len(game.asked) == 1, game.asked  # the first look only: no "way around" asked
+    assert len(said) <= 1
+
+
+@pytest.mark.parametrize("wall", [(450, 0, 510, 700), (450, 500, 510, 1400)])
+async def test_goes_around_the_end_of_a_wall_through_the_gap(wall):
+    game = Game(start=(150, 600), goal=(800, 600), walls=[wall])
+    notes = []
+    w = Walker(FakeMuse(game), game.grab, game.steer, log=notes.append)
+    result = await w.walk("the green chest", timeout=30)
+    assert result.outcome == "arrived", (result.text(), game.pos, notes)
+    assert len(game.asked) == 1, game.asked
+
+
+async def test_cut_off_ends_blocked_and_says_so_once():
+    # A pen it can't get out of: the planner runs out, asks the model, and gives up.
+    game = Game(start=(600, 600), goal=(1000, 600),
+                walls=[(450, 450, 470, 750), (730, 450, 750, 750), (450, 430, 750, 450),
+                       (450, 750, 750, 770)])
+    said = []
+
+    async def say(text):
+        said.append(text)
+
+    w = Walker(FakeMuse(game), game.grab, game.steer, say=say)
+    result = await w.walk("the green chest", timeout=25)
+    assert result.outcome == "blocked", result.text()
+    assert result.seconds < 22
+    assert "blocked" in game.asked[1]  # out of plans, asked the model for a way around
+    assert said == ["Something's in the way. Finding a way around."]
+    # The next walk soon after, into the same pen, doesn't say it again.
+    await w.walk("the green chest", timeout=8)
+    assert len(said) == 1
