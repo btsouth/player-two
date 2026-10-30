@@ -1205,6 +1205,11 @@ class Session:
                          "setup.")
         if self.paused:
             lines.append("Narration is paused; say resume narration.")
+        from .voice import gpu_hint
+
+        slow = gpu_hint(getattr(self.voice, "device", ""), spoken=True)
+        if slow:
+            lines.append(slow)
         lines += [p for p in self.problems if p not in (MIC_PROBLEM,)]
         if self.last_trouble:
             lines.append(f"The last problem was: {self.last_trouble}")

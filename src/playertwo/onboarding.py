@@ -200,6 +200,8 @@ def test_voice(s: Settings, changes: dict) -> None:
         say(f"I couldn't play sound: {exc}. Check that a speaker or headset is connected "
             "and set as the default output.")
         return
+    from .voice import gpu_hint
+
     if not ask_yes("Did you hear me?"):
         say("Check that your speakers or headset are the default sound output, then run "
             "player-two say hello to try again.")
@@ -208,6 +210,9 @@ def test_voice(s: Settings, changes: dict) -> None:
         if rate != "same":
             s.speech_rate = round(s.speech_rate + (0.15 if rate == "faster" else -0.15), 2)
             changes["speech_rate"] = s.speech_rate
+    hint = gpu_hint(getattr(voice, "device", ""))
+    if hint:
+        say(hint)
 
 
 def step_mic() -> None:

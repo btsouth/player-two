@@ -46,9 +46,11 @@ uv tool install . --excludes uv-excludes.txt
 player-two setup
 ```
 
-The install keeps the graphics card build of the voice model. Setup asks one question at a time:
-your key, screen reader, language, how much it says, microphone, controller, hands-free, talk
-key and app launcher.
+With an NVIDIA card, install `".[cuda]"` in place of `.` to run the voice on it (about 2 GB
+more): each line starts about half a second sooner than on the processor.
+
+Setup asks one question at a time: your key, screen reader, language, how much it says,
+microphone, controller, hands-free, talk key and app launcher.
 
 Then start your game and run `player-two`, or pick **Player Two** in your app launcher. It finds
 the game window by itself (a Steam game is named from its Steam library), says hello, and starts
@@ -229,7 +231,7 @@ hands_free = false        # listen all the time for "Player Two, ..."; no talk k
 
 ```bash
 uv sync --group dev --extra cuda
-uv run pytest                     # unit tests
+uv run --extra cuda pytest        # unit tests (plain uv run drops the CUDA extra)
 uv run player-two narrate shot1.png shot2.png --wav out.wav
 uv run player-two ask --dry-run --images shot.png -- "who is talking?"
 scripts/arena_trials.sh < tests/arena/trials.txt   # scored runs against tests/arena

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -92,6 +94,27 @@ def load_kokoro():
         except Exception as exc:  # noqa: BLE001  any CUDA setup problem means CPU
             print(f"Voice: GPU unavailable ({exc}), using the CPU.", file=sys.stderr)
     return Kokoro(onnx, voices), "cpu"
+
+
+GPU_ADDON = 'uv tool install --reinstall ".[cuda]" --excludes uv-excludes.txt'
+
+
+def nvidia_card() -> bool:
+    return Path("/proc/driver/nvidia/version").exists() or shutil.which("nvidia-smi") is not None
+
+
+def gpu_hint(device: str, spoken: bool = False) -> str:
+    """How to make the voice quicker when an NVIDIA card sits unused (Linux only: the
+    graphics card build of the voice model is a Linux x86_64 download)."""
+    if device != "cpu" or sys.platform != "linux" or platform.machine() != "x86_64" \
+            or not nvidia_card():
+        return ""
+    if spoken:
+        return ("My voice runs on the processor, not your NVIDIA card; player-two setup "
+                "says how to make it start each line about half a second sooner.")
+    return ("You have an NVIDIA graphics card, but my voice runs on the processor. To start "
+            "each line about half a second sooner, add the graphics card download (about "
+            f"2 GB). In the player-two folder, run: {GPU_ADDON}")
 
 
 def first_chunk_split(sentence: str, limit: int = 60) -> list[str]:

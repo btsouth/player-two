@@ -382,6 +382,7 @@ def test_whats_wrong_is_answered_out_loud():
     s.game, s.capture_failures, s.paused, s.hands = False, 0, False, None
     s.narrator = SimpleNamespace(game="")
     s.controls = SimpleNamespace(kind="dry-run")
+    s.voice = SimpleNamespace(device="gpu")
     s.problems, s.last_trouble = [MIC_PROBLEM], "The model is having trouble right now."
     s.s = Settings()
     words = s.self_check()
@@ -721,3 +722,16 @@ async def test_where_answers_from_the_character_even_when_sam_cant_see_it(monkey
     assert "left" in said[-1] and "up" in said[-1], said
     await s._where("dog")
     assert "can't find" in said[-1], said
+
+
+def test_an_idle_nvidia_card_is_pointed_out(monkeypatch):
+    from playertwo import voice
+
+    monkeypatch.setattr(voice.sys, "platform", "linux")
+    monkeypatch.setattr(voice.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(voice, "nvidia_card", lambda: True)
+    assert "uv tool install" in voice.gpu_hint("cpu")
+    assert "setup" in voice.gpu_hint("cpu", spoken=True)
+    assert voice.gpu_hint("gpu") == "" and voice.gpu_hint("screen reader") == ""
+    monkeypatch.setattr(voice, "nvidia_card", lambda: False)
+    assert voice.gpu_hint("cpu") == ""
