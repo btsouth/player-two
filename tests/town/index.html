@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Town</title>
+<!-- A small top-down 2D RPG for testing Player Two's walking and searching offline.
+     Arrows (or WASD) walk, Enter (or Space) talks and advances text, Escape closes it.
+     ?start=bedroom|downstairs|square|bell|yard picks the starting area, ?scale=N the pixel
+     size (3 by default). The window title carries the state the trials score:
+     Town area=<name> x=<tile x> y=<tile y> talked=<ids> items=<ids> -->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<script>
+"use strict";
+const T = 16, VW = 16, VH = 14, PW = VW * T, PH = VH * T;
+const Q = new URLSearchParams(location.search);
+const S = Math.max(1, Math.min(8, parseInt(Q.get("scale") || "3", 10) || 3));
+const screen = document.getElementById("screen");
+screen.width = PW * S; screen.height = PH * S;
+const sx = screen.getContext("2d");
+sx.imageSmoothingEnabled = false;
+const low = document.createElement("canvas");
+low.width = PW; low.height = PH;
+const g = low.getContext("2d");
+g.imageSmoothingEnabled = false;
+
+// Seeded randomness: only the wanderers use it.
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rnd = mulberry32(20261030);
+// Fixed per-tile noise for grass tufts and the like.
+function hash(x, y) {
+  let h = (x * 374761393 + y * 668265263) ^ 0x5bd1e995;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// ---------------------------------------------------------------- maps
+function fromRows(rows) {
+  const w = rows[0].length;
+  rows.forEach((r, i) => { if (r.length !== w) console.error("row", i, "is", r.length, "not", w); });
+  return rows.map(r => r.split(""));
+}
+function blank(w, h, ch) { return Array.from({ length: h }, () => Array(w).fill(ch)); }
+function rect(m, x, y, w, h, ch) { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) m[j][i] = ch; }
+function put(m, list, ch) { for (const [x, y] of list) m[y][x] = ch; }
+
+// Walls, furniture, trees, fences and the like; everything else is walked on.
+const SOLID = new Set("#wWPQDpRrKtTFOHnoALakcX".split(""));
+
+function squareMap() {
+  const m = blank(36, 28, ",");
+  rect(m, 0, 0, 36, 1, "T"); rect(m, 0, 27, 36, 1, "T");
+  rect(m, 0, 0, 1, 28, "T"); rect(m, 35, 0, 1, 28, "T");
+  rect(m, 17, 0, 2, 2, "^"); put(m, [[16, 1], [19, 1]], "T");
+  rect(m, 17, 2, 2, 12, "=");           // north path to the stairs
+  rect(m, 1, 14, 34, 2, "=");           // the main street
+  rect(m, 17, 16, 2, 10, "=");          // south path
+  rect(m, 5, 24, 13, 2, "=");           // to the house door
+  rect(m, 2, 10, 14, 1, "F"); rect(m, 8, 10, 2, 1, ",");
+  rect(m, 20, 10, 14, 1, "F"); rect(m, 26, 10, 2, 1, ",");
+  rect(m, 22, 4, 3, 3, "o");            // fountain
+  put(m, [[3, 3], [13, 5], [2, 13], [21, 22], [32, 22], [33, 25], [29, 12], [6, 7]], "T");
+  put(m, [[5, 5], [6, 5], [10, 3], [28, 8], [14, 20], [20, 20], [31, 16], [9, 26]], '"');
+  rect(m, 3, 19, 8, 2, "O"); rect(m, 3, 21, 8, 3, "H");
+  put(m, [[4, 22], [9, 22]], "n"); put(m, [[6, 23], [7, 23]], "d");
+  for (const x of [23, 28]) {          // two market stalls
+    rect(m, x, 17, 3, 1, "a");
+    put(m, [[x, 18], [x + 2, 18]], "k"); put(m, [[x + 1, 18]], "_");
+    rect(m, x, 19, 3, 1, "c");
+  }
+  return m;
+}
+function plazaMap() {
+  const m = blank(22, 15, ",");
+  rect(m, 0, 0, 22, 1, "T"); rect(m, 0, 14, 22, 1, "T");
+  rect(m, 0, 0, 1, 15, "T"); rect(m, 21, 0, 1, 15, "T");
+  rect(m, 2, 4, 18, 9, "_");
+  rect(m, 9, 1, 4, 1, "A"); put(m, [[9, 2], [12, 2], [9, 3], [12, 3]], "A");
+  put(m, [[10, 2], [11, 2]], "L"); put(m, [[10, 3], [11, 3]], "_");
+  rect(m, 10, 13, 2, 1, "_"); put(m, [[10, 14], [11, 14]], "^");
+  rect(m, 0, 7, 2, 2, "="); put(m, [[0, 7], [0, 8]], "e");
+  put(m, [[4, 2], [17, 2], [3, 12], [18, 12]], "T");
+  put(m, [[6, 2], [7, 2], [14, 2], [15, 2], [5, 13], [16, 13]], '"');
+  return m;
+}
+function yardMap() {
+  const m = blank(24, 14, "x");
+  rect(m, 0, 0, 24, 1, "T"); rect(m, 0, 13, 24, 1, "T");
+  rect(m, 0, 0, 1, 14, "T"); rect(m, 23, 0, 1, 14, "T");
+  rect(m, 20, 6, 3, 2, "="); put(m, [[23, 6], [23, 7]], "e");
+  put(m, [[8, 3], [9, 3], [12, 10], [15, 4], [6, 11], [18, 10], [19, 10], [13, 2]], "X");
+  put(m, [[2, 1], [21, 1], [10, 12]], "T");
+  put(m, [[16, 8], [17, 8], [5, 2]], ",");
+  return m;
+}
+
+const AREAS = {
+  bedroom: {
+    indoor: true,
+    map: fromRows([
+      "##############",
+      "#wwWwwwwwWwww#",
+      "#PP....DD..pp#",
+      "#QQ..........#",
+      "#............#",
+      "#....RRRRRRRR#",
+      "#....r.....SS#",
+      "#..........SS#",
+      "#..........SS#",
+      "##############",
+    ]),
+    spawn: [6, 3, "down"],
+    exits: { S: ["downstairs", 12, 3, "down"] },
+    objects: [
+      { id: "bed", name: "", tiles: [[1, 2], [2, 2], [1, 3], [2, 3]], lines: ["Your bed. The blanket is still warm."] },
+      { id: "desk", name: "", tiles: [[7, 2], [8, 2]], lines: ["A note on the desk: \"Millennial Fair, today in the square!\""] },
+    ],
+    npcs: [],
+  },
+  downstairs: {
+    indoor: true,
+    map: fromRows([
+      "################",
+      "#wKKKKwwWwww#SS#",
+      "#...........#SS#",
+      "#..............#",
+      "#....tttt......#",
+      "#....tttt......#",
+      "#..............#",
+      "#p............p#",
+      "#..............#",
+      "#######dd#######",
+    ]),
+    spawn: [8, 6, "down"],
+    exits: { S: ["bedroom", 10, 7, "left"], d: ["square", 6, 24, "down"] },
+    objects: [
+      { id: "table", name: "", tiles: [[5, 4], [6, 4], [7, 4], [8, 4], [5, 5], [6, 5], [7, 5], [8, 5]], lines: ["Breakfast is on the table. It smells great."] },
+    ],
+    npcs: [
+      { id: "mom", name: "Mom", look: "mom", at: [3, 3], face: "down", lines: [
+        "Good morning, sleepyhead!",
+        "The Millennial Fair started today. The whole town is in the square.",
+        "Have fun, and don't stay out too late!"] },
+    ],
+  },
+  square: {
+    map: squareMap(),
+    spawn: [17, 15, "up"],
+    exits: { "^": ["bell", 10, 12, "up"], d: ["downstairs", 7, 8, "up"] },
+    objects: [
+      { id: "stall", name: "", tiles: [[28, 19], [29, 19], [30, 19]], lines: ["Nobody is at this stall. A sign says: Back after the fair."] },
+      { id: "fountain", name: "", tiles: [[22, 4], [23, 4], [24, 4], [22, 5], [23, 5], [24, 5], [22, 6], [23, 6], [24, 6]], lines: ["The fountain water sparkles in the sun."] },
+    ],
+    item: { id: "pendant", at: [31, 4], text: "You picked up a Pendant! It glows faintly." },
+    npcs: [
+      { id: "seller", name: "Seller", look: "seller", at: [24, 18], face: "down", lines: [
+        "Welcome! Fresh apples from the orchard, two for a coin.",
+        "The fair is busy today. Have you seen the bell up north?"] },
+      { id: "oldman", name: "Old Man", look: "oldman", at: [13, 19], face: "down", wander: [11, 16, 15, 22], lines: [
+        "Back in my day the fair lasted a whole month!"] },
+      { id: "girl", name: "Girl", look: "girl", at: [8, 6], face: "down", wander: [2, 3, 14, 8], lines: [
+        "I heard there's a strange robot west of the bell plaza."] },
+      { id: "cat", name: "Cat", look: "cat", at: [12, 12], face: "left", wander: [10, 11, 14, 13], lines: ["Meow."] },
+    ],
+  },
+  bell: {
+    map: plazaMap(),
+    spawn: [10, 11, "up"],
+    exits: { "^": ["square", 17, 3, "down"], e: ["yard", 21, 6, "left"] },
+    objects: [
+      { id: "bell", name: "", tiles: [[10, 2], [11, 2]], lines: ["The great bell of the Millennial Fair. It rings out over the town."] },
+    ],
+    npcs: [],
+  },
+  yard: {
+    map: yardMap(),
+    spawn: [21, 6, "left"],
+    exits: { e: ["bell", 2, 7, "right"] },
+    objects: [],
+    npcs: [
+      { id: "gato", name: "Gato", look: "robot", at: [3.5, 6.5], face: "down", box: [14, 10], lines: [
+        "They call me Gato...",
+        "I have metal joints. Beat me up and earn fifteen silver points!",
+        "...Just kidding. Gato is happy to meet you."] },
+    ],
+  },
+};
+for (const [name, a] of Object.entries(AREAS)) {
+  a.name = name; a.h = a.map.length; a.w = a.map[0].length;
+  a.npcs = a.npcs.map(n => ({
+    ...n, x: n.at[0] * T + T / 2, y: n.at[1] * T + T / 2,
+    hw: (n.box || [6, 5])[0], hh: (n.box || [6, 5])[1], dist: 0, timer: 0.5 + rnd() * 2, mv: null,
+    speed: n.look === "cat" ? 12 : 16,
+  }));
+  if (a.item) a.item = { ...a.item, x: a.item.at[0], y: a.item.at[1], taken: false };
+}
+
+// ---------------------------------------------------------------- state
+const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const KEYDIR = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+  w: "up", s: "down", a: "left", d: "right", W: "up", S: "down", A: "left", D: "right" };
+const player = { x: 0, y: 0, hw: 5, hh: 5, face: "down", dist: 0, look: "hero" };
+let cur = null;
+const talked = [], items = [];
+let held = [];                // directions held, most recent last
+let dialog = null;            // {name, lines, i, shown}
+let fade = null;              // {t, exit}
+let clock = 0;
+
+function enter(area, tx, ty, face) {
+  cur = AREAS[area];
+  player.x = tx * T + T / 2; player.y = ty * T + T / 2; player.face = face;
+}
+const startName = AREAS[Q.get("start")] ? Q.get("start") : "bedroom";
+enter(startName, ...AREAS[startName].spawn);
+
+function solidAt(a, i, j) {
+  if (i < 0 || j < 0 || i >= a.w || j >= a.h) return true;
+  if (SOLID.has(a.map[j][i])) return true;
+  return !!(a.item && !a.item.taken && a.item.x === i && a.item.y === j);
+}
+function boxHitsTiles(x, y, hw, hh) {
+  const x0 = Math.floor((x - hw) / T), x1 = Math.floor((x + hw - 0.01) / T);
+  const y0 = Math.floor((y - hh) / T), y1 = Math.floor((y + hh - 0.01) / T);
+  for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++) if (solidAt(cur, i, j)) return true;
+  return false;
+}
+function overlap(a, x, y, hw, hh) { return Math.abs(a.x - x) < a.hw + hw && Math.abs(a.y - y) < a.hh + hh; }
+function blocked(self, x, y) {
+  if (boxHitsTiles(x, y, self.hw, self.hh)) return true;
+  for (const n of cur.npcs) if (n !== self && overlap(n, x, y, self.hw, self.hh)) return true;
+  if (self !== player && overlap(player, x, y, self.hw, self.hh)) return true;
+  if (self.wander) {
+    const [x0, y0, x1, y1] = self.wander;
+    if (x < x0 * T + self.hw || x > (x1 + 1) * T - self.hw || y < y0 * T + self.hh || y > (y1 + 1) * T - self.hh) return true;
+  }
+  return false;
+}
+// Move one pixel at a time so walls stop you flush; round small corners like SNES games do.
+function move(e, dx, dy, dist) {
+  let moved = 0;
+  while (dist > 0) {
+    const step = Math.min(1, dist); dist -= step;
+    let any = false;
+    for (const [mx, my] of [[dx, 0], [0, dy]]) {
+      if (!mx && !my) continue;
+      const nx = e.x + mx * step, ny = e.y + my * step;
+      if (!blocked(e, nx, ny)) { e.x = nx; e.y = ny; any = true; continue; }
+      if (e === player && (!dx || !dy)) {
+        for (let k = 1; k <= 5; k++) {
+          let done = false;
+          for (const s of [-1, 1]) {
+            const ox = my ? s * k : 0, oy = mx ? s * k : 0;
+            if (!blocked(e, nx + ox, ny + oy)) {
+              const ux = Math.sign(ox), uy = Math.sign(oy);
+              if (!blocked(e, e.x + ux * step, e.y + uy * step)) { e.x += ux * step; e.y += uy * step; any = true; }
+              done = true; break;
+            }
+          }
+          if (done) break;
+        }
+      }
+    }
+    if (!any) break;
+    moved += step;
+  }
+  e.dist += moved;
+  return moved;
+}
+
+function tileAt(e) { return [Math.floor(e.x / T), Math.floor(e.y / T)]; }
+
+function update(dt) {
+  clock += dt;
+  if (fade) {
+    fade.t += dt;
+    if (fade.t >= 0.4 && !fade.switched) {
+      fade.switched = true;
+      enter(...fade.exit);   // keys held keep walking, as on the SNES; spawns face away from exits
+    }
+    if (fade.t >= 0.8) fade = null;
+    return;
+  }
+  if (dialog) {
+    const line = dialog.lines[dialog.i];
+    dialog.shown = Math.min(line.length, dialog.shown + dt * 150);
+    return;
+  }
+  let dx = 0, dy = 0;
+  for (const d of held) { dx += DIRV[d][0]; dy += DIRV[d][1]; }
+  dx = Math.sign(dx); dy = Math.sign(dy);
+  if (held.length) {
+    for (let i = held.length - 1; i >= 0; i--) {
+      const v = DIRV[held[i]];
+      if ((v[0] && v[0] === dx) || (v[1] && v[1] === dy)) { player.face = held[i]; break; }
+    }
+  }
+  if (dx || dy) {
+    const n = dx && dy ? Math.SQRT1_2 : 1;
+    if (!move(player, dx * n, dy * n, 64 * dt)) player.dist = 0;
+  } else player.dist = 0;
+  const [tx, ty] = tileAt(player);
+  const ex = cur.exits[cur.map[ty][tx]];
+  if (ex) fade = { t: 0, exit: ex, switched: false };
+  for (const n of cur.npcs) if (n.wander) wander(n, dt);
+}
+
+function wander(n, dt) {
+  n.timer -= dt;
+  if (n.timer <= 0) {
+    if (rnd() < 0.45) { n.mv = null; n.timer = 1 + rnd() * 2; }
+    else {
+      n.mv = ["up", "down", "left", "right"][Math.floor(rnd() * 4)];
+      n.face = n.mv; n.timer = 0.5 + rnd();
+    }
+  }
+  if (n.mv) {
+    const [vx, vy] = DIRV[n.mv];
+    if (!move(n, vx, vy, n.speed * dt)) { n.mv = null; n.dist = 0; }
+  } else n.dist = 0;
+}
+
+// ---------------------------------------------------------------- talking
+function say(id, name, lines, who) {
+  dialog = { name, lines, i: 0, shown: 0 };
+  if (id && !talked.includes(id)) talked.push(id);
+  if (who && who.look !== "robot" && who.look !== "cat") {
+    who.face = { up: "down", down: "up", left: "right", right: "left" }[player.face];
+  }
+  if (who) { who.mv = null; who.dist = 0; }
+}
+function interact() {
+  const [fx, fy] = DIRV[player.face];
+  const reach = 11;
+  // The strip in front of the player, out to about one tile.
+  const px = player.x + fx * (player.hw + reach / 2), py = player.y + fy * (player.hh + reach / 2);
+  const pw = fx ? reach / 2 : player.hw, ph = fy ? reach / 2 : player.hh;
+  for (const n of cur.npcs) if (overlap(n, px, py, pw, ph)) return say(n.id, n.name, n.lines, n);
+  const tx = Math.floor((player.x + fx * (player.hw + reach)) / T);
+  const ty = Math.floor((player.y + fy * (player.hh + reach)) / T);
+  const it = cur.item;
+  if (it && !it.taken && it.x === tx && it.y === ty) {
+    it.taken = true; items.push(it.id);
+    return say("", "", [it.text]);
+  }
+  if (cur.map[ty] && cur.map[ty][tx] === "c") {   // talk across a shop counter
+    const bx = tx + fx, by = ty + fy;
+    for (const n of cur.npcs) {
+      const [nx, ny] = tileAt(n);
+      if (nx === bx && ny === by) return say(n.id, n.name, n.lines, n);
+    }
+  }
+  for (const o of cur.objects) {
+    if (o.tiles.some(([x, y]) => x === tx && y === ty)) return say(o.id, o.name, o.lines);
+  }
+}
+function confirm() {
+  if (fade) return;
+  if (!dialog) return interact();
+  const line = dialog.lines[dialog.i];
+  if (dialog.shown < line.length) { dialog.shown = line.length; return; }
+  dialog.i++; dialog.shown = 0;
+  if (dialog.i >= dialog.lines.length) dialog = null;
+}
+
+addEventListener("keydown", (e) => {
+  const d = KEYDIR[e.key];
+  if (d) {
+    e.preventDefault();
+    if (!held.includes(d) && !e.repeat) held.push(d);
+    return;
+  }
+  if (e.repeat) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); confirm(); }
+  else if (e.key === "Escape") { e.preventDefault(); dialog = null; }
+});
+addEventListener("keyup", (e) => {
+  const d = KEYDIR[e.key];
+  if (d) held = held.filter(h => h !== d);
+});
+addEventListener("blur", () => { held = []; });
+
+// ---------------------------------------------------------------- drawing
+function R(x, y, w, h, c) { g.fillStyle = c; g.fillRect(x, y, w, h); }
+
+function grass(x, y, i, j) {
+  R(x, y, 16, 16, "#4caf50");
+  const h = hash(i, j);
+  R(x + Math.floor(h * 12), y + Math.floor(hash(j, i) * 12), 2, 2, "#3e9443");
+  R(x + Math.floor(hash(i + 7, j) * 13), y + Math.floor(hash(i, j + 7) * 13), 1, 2, "#66bb6a");
+  if (h > 0.6) R(x + 3 + Math.floor(h * 8), y + 9, 3, 1, "#388e3c");
+}
+function floor(x, y, i, j) {
+  R(x, y, 16, 16, "#b8834d");
+  for (let k = 0; k < 4; k++) R(x, y + k * 4 + 3, 16, 1, "#94643a");
+  const off = (j % 2) * 8;
+  for (let k = 0; k < 4; k++) R(x + ((k * 5 + off + i * 3) % 16), y + k * 4, 1, 3, "#94643a");
+}
+function stone(x, y, i, j) {
+  R(x, y, 16, 16, "#cdbf9f");
+  R(x, y + 7, 16, 1, "#a99a7b"); R(x, y + 15, 16, 1, "#a99a7b");
+  const o = (i + j) % 2 ? 4 : 10;
+  R(x + o, y, 1, 7, "#a99a7b"); R(x + ((o + 6) % 16), y + 8, 1, 7, "#a99a7b");
+  R(x + 2, y + 2, 2, 1, "#ddd2b8");
+}
+function plaza(x, y) {
+  R(x, y, 16, 16, "#b7b0a6");
+  R(x, y, 16, 1, "#d2ccc3"); R(x, y, 1, 16, "#d2ccc3");
+  R(x, y + 15, 16, 1, "#8f887e"); R(x + 15, y, 1, 16, "#8f887e");
+}
+function dirt(x, y, i, j) {
+  R(x, y, 16, 16, "#a8845a");
+  R(x + Math.floor(hash(i, j) * 13), y + Math.floor(hash(j, i) * 13), 2, 1, "#8c6b45");
+  R(x + Math.floor(hash(i + 3, j) * 13), y + Math.floor(hash(i, j + 3) * 13), 1, 1, "#c09a6b");
+}
+function half(a, i, j, ch) { return a.map[j] && a.map[j][i - 1] === ch ? 1 : 0; }
+
+function drawTile(a, c, x, y, i, j) {
+  switch (c) {
+    case "#": R(x, y, 16, 16, "#2b1d14"); R(x, y + 14, 16, 2, "#4a3324"); break;
+    case "w": case "W":
+      R(x, y, 16, 16, "#d8b67c");
+      for (let k = 1; k < 16; k += 4) R(x + k, y, 1, 13, "#c49d61");
+      R(x, y + 13, 16, 3, "#6b4423");
+      if (c === "W") { R(x + 3, y + 2, 10, 9, "#6b4423"); R(x + 4, y + 3, 8, 7, "#8fd0ff"); R(x + 8, y + 3, 1, 7, "#6b4423"); R(x + 4, y + 6, 8, 1, "#6b4423"); R(x + 5, y + 4, 2, 1, "#e3f4ff"); }
+      break;
+    case ".": floor(x, y, i, j); break;
+    case "P": case "Q": {
+      floor(x, y, i, j);
+      const hf = half(a, i, j, c);
+      R(x + (hf ? 0 : 1), y + (c === "P" ? 1 : 0), 15, c === "P" ? 15 : 14, "#7a4a2a");
+      if (c === "P") { R(x + (hf ? 0 : 3), y + 3, hf ? 13 : 13, 6, "#f5f5f5"); R(x + (hf ? 0 : 2), y + 10, 14, 6, "#c62828"); R(x + (hf ? 0 : 2), y + 10, 14, 1, "#ef9a9a"); }
+      else { R(x + (hf ? 0 : 2), y, 14, 12, "#c62828"); R(x + (hf ? 0 : 2), y + 5, 14, 1, "#8e1b1b"); }
+      break;
+    }
+    case "D": {
+      floor(x, y, i, j); const hf = half(a, i, j, c);
+      R(x + (hf ? 0 : 1), y + 4, 15, 8, "#8b5a2b"); R(x + (hf ? 0 : 1), y + 4, 15, 2, "#a8743f");
+      R(x + (hf ? 13 : 1), y + 12, 2, 4, "#5e3b1d");
+      if (!hf) { R(x + 5, y + 2, 7, 5, "#fafafa"); R(x + 6, y + 3, 5, 1, "#90a4ae"); R(x + 6, y + 5, 4, 1, "#90a4ae"); }
+      else { R(x + 4, y + 1, 3, 5, "#ffca28"); R(x + 4, y, 3, 1, "#fff59d"); }
+      break;
+    }
+    case "p": floor(x, y, i, j); R(x + 4, y + 10, 8, 6, "#b5562c"); R(x + 4, y + 10, 8, 1, "#d27a4b"); R(x + 3, y + 2, 10, 8, "#2e7d32"); R(x + 5, y + 1, 6, 3, "#43a047"); R(x + 2, y + 5, 3, 3, "#43a047"); break;
+    case "R": floor(x, y, i, j); R(x, y + 3, 16, 3, "#6d3f1f"); R(x, y + 3, 16, 1, "#9c6136"); for (let k = 1; k < 16; k += 5) R(x + k, y + 6, 2, 8, "#6d3f1f"); R(x, y + 13, 16, 2, "#6d3f1f"); break;
+    case "r": floor(x, y, i, j); R(x + 6, y, 4, 16, "#6d3f1f"); R(x + 6, y, 1, 16, "#9c6136"); break;
+    case "S": for (let k = 0; k < 4; k++) { R(x, y + k * 4, 16, 4, k % 2 ? "#7a5030" : "#9b6b3d"); R(x, y + k * 4 + 3, 16, 1, "#3b2414"); } R(x, y, 1, 16, "#3b2414"); break;
+    case "K": R(x, y, 16, 16, "#7a5230"); R(x, y, 16, 6, "#e0d8c8"); R(x, y + 6, 16, 1, "#9e9584"); R(x + 2, y + 9, 12, 5, "#694425"); R(x + 7, y + 10, 2, 1, "#d4af37");
+      if (i === 3) { R(x + 3, y + 1, 10, 4, "#90a4ae"); R(x + 5, y + 2, 6, 2, "#cfd8dc"); }
+      if (i === 5) { R(x + 4, y, 7, 5, "#37474f"); R(x + 6, y - 2, 3, 2, "#cfd8dc"); }
+      break;
+    case "t": {
+      floor(x, y, i, j);
+      const top = a.map[j - 1][i] !== "t", bot = a.map[j + 1][i] !== "t", lf = a.map[j][i - 1] !== "t", rt = a.map[j][i + 1] !== "t";
+      R(x + (lf ? 1 : 0), y + (top ? 2 : 0), 16 - (lf ? 1 : 0) - (rt ? 1 : 0), 16 - (top ? 2 : 0) - (bot ? 3 : 0), "#a0522d");
+      if (top) R(x + (lf ? 1 : 0), y + 2, 16 - (lf ? 1 : 0) - (rt ? 1 : 0), 1, "#c2703f");
+      if ((i + j) % 2 === 0) { R(x + 4, y + 5, 8, 6, "#fafafa"); R(x + 6, y + 7, 4, 2, "#ff7043"); }
+      break;
+    }
+    case "d":
+      if (a.indoor) { floor(x, y, i, j); R(x, y + 4, 16, 12, "#1a120c"); R(x + 2, y + 8, 12, 8, "#2b6e3f"); R(x + 2, y + 8, 12, 1, "#3f8f57"); }
+      else { R(x, y, 16, 16, "#e8dcc0"); const hf = half(a, i, j, c); R(x + (hf ? 0 : 2), y + 1, 14, 15, "#6b3e1f"); R(x + (hf ? 0 : 2), y + 1, 14, 1, "#8d5a33"); R(x + (hf ? 2 : 13), y + 8, 1, 2, "#ffd54f"); R(x + (hf ? 7 : 8), y + 1, 1, 15, "#4a2a13"); }
+      break;
+    case ",": grass(x, y, i, j); break;
+    case '"': grass(x, y, i, j); R(x + 3, y + 4, 2, 2, "#ef5350"); R(x + 10, y + 3, 2, 2, "#fff176"); R(x + 7, y + 10, 2, 2, "#f48fb1"); R(x + 12, y + 11, 2, 2, "#ef5350"); break;
+    case "=": case "e": stone(x, y, i, j); break;
+    case "_": plaza(x, y); break;
+    case "x": dirt(x, y, i, j); break;
+    case "T":
+      if (a.name === "yard") dirt(x, y, i, j); else grass(x, y, i, j);
+      R(x + 6, y + 10, 4, 6, "#6b4423"); R(x + 1, y + 1, 14, 11, "#1b5e20"); R(x + 3, y, 10, 13, "#1b5e20");
+      R(x + 3, y + 2, 9, 7, "#2e7d32"); R(x + 4, y + 3, 4, 3, "#43a047"); break;
+    case "F": grass(x, y, i, j); R(x, y + 5, 16, 2, "#a0703c"); R(x, y + 10, 16, 2, "#a0703c"); R(x, y + 5, 16, 1, "#c48e55");
+      R(x + 2, y + 3, 3, 12, "#7d5228"); R(x + 11, y + 3, 3, 12, "#7d5228"); R(x + 2, y + 3, 3, 1, "#c48e55"); R(x + 11, y + 3, 3, 1, "#c48e55"); break;
+    case "O": R(x, y, 16, 16, "#b03a2e"); for (let k = 0; k < 16; k += 4) R(x, y + k + 3, 16, 1, "#7f2219"); R(x + ((j % 2) * 4 + i * 8) % 16, y, 1, 16, "#c9574a"); if (a.map[j - 1][i] !== "O") R(x, y, 16, 2, "#7f2219"); break;
+    case "H": case "n": R(x, y, 16, 16, "#e8dcc0"); R(x, y, 16, 2, "#7a4a2a"); R(x, y + 14, 16, 2, "#7a4a2a");
+      if (a.map[j][i - 1] !== "H" && a.map[j][i - 1] !== "n" && a.map[j][i - 1] !== "d") R(x, y, 2, 16, "#7a4a2a");
+      if (a.map[j][i + 1] !== "H" && a.map[j][i + 1] !== "n" && a.map[j][i + 1] !== "d") R(x + 14, y, 2, 16, "#7a4a2a");
+      if (c === "n") { R(x + 3, y + 3, 10, 9, "#5d3a1d"); R(x + 4, y + 4, 8, 7, "#8fd0ff"); R(x + 8, y + 4, 1, 7, "#5d3a1d"); R(x + 4, y + 7, 8, 1, "#5d3a1d"); }
+      break;
+    case "^": R(x, y, 16, 16, "#9e9e9e"); for (let k = 0; k < 4; k++) { R(x, y + k * 4, 16, 1, "#e0e0e0"); R(x, y + k * 4 + 3, 16, 1, "#616161"); } break;
+    case "o": {
+      R(x, y, 16, 16, "#3d7ccf");
+      const w = Math.floor(clock * 4 + i * 3 + j * 5) % 8;
+      R(x + w * 2 - 4, y + 5, 6, 1, "#9cc8ff"); R(x + 14 - w * 2, y + 11, 5, 1, "#9cc8ff");
+      if (a.map[j - 1][i] !== "o") R(x, y, 16, 3, "#9e9e9e");
+      if (a.map[j + 1][i] !== "o") R(x, y + 13, 16, 3, "#757575");
+      if (a.map[j][i - 1] !== "o") R(x, y, 3, 16, "#9e9e9e");
+      if (a.map[j][i + 1] !== "o") R(x + 13, y, 3, 16, "#8a8a8a");
+      if (i === 23 && j === 5) { R(x + 5, y + 2, 6, 12, "#bdbdbd"); R(x + 6, y - 1 - (Math.floor(clock * 6) % 2), 4, 4, "#d6ecff"); }
+      break;
+    }
+    case "A": R(x, y, 16, 16, "#8d8d8d"); for (let k = 0; k < 16; k += 5) R(x, y + k, 16, 1, "#666"); R(x + ((j % 2) ? 4 : 10), y, 1, 16, "#666"); R(x, y, 16, 1, "#b0b0b0"); break;
+    case "L": {
+      R(x, y, 16, 16, "#3b3b4f"); const hf = half(a, i, j, c);
+      R(x + (hf ? 0 : 12), y, 4, 2, "#5d4037");
+      if (!hf) { R(x + 8, y + 2, 8, 3, "#d4a017"); R(x + 5, y + 5, 11, 7, "#d4a017"); R(x + 3, y + 12, 13, 3, "#b8860b"); R(x + 8, y + 4, 2, 6, "#ffe082"); }
+      else { R(x, y + 2, 8, 3, "#d4a017"); R(x, y + 5, 11, 7, "#d4a017"); R(x, y + 12, 13, 3, "#b8860b"); R(x - 1, y + 13, 3, 3, "#5d4037"); }
+      break;
+    }
+    case "a": R(x, y, 16, 16, "#fafafa"); for (let k = 0; k < 16; k += 8) R(x + k, y, 4, 13, "#d32f2f"); for (let k = 0; k < 16; k += 4) R(x + k + 1, y + 13, 2, 2, (k % 8) ? "#fafafa" : "#d32f2f"); R(x, y + 15, 16, 1, "rgba(0,0,0,0.25)"); break;
+    case "k": plaza(x, y); R(x + 6, y, 4, 16, "#7d5228"); R(x + 6, y, 1, 16, "#a8743f"); break;
+    case "c": R(x, y, 16, 16, "#8b5a2b"); R(x, y, 16, 5, "#a8743f"); R(x, y + 15, 16, 1, "#5e3b1d");
+      if (i < 27) { for (const [ax, ay] of [[2, 1], [6, 0], [10, 1], [4, 3], [8, 3]]) { R(x + ax, y + ay, 3, 3, "#e53935"); R(x + ax + 1, y + ay, 1, 1, "#ff8a80"); } }
+      else { R(x + 3, y + 1, 10, 3, "#c49a6c"); }
+      break;
+    case "X": dirt(x, y, i, j); R(x + 2, y + 6, 12, 9, "#78909c"); R(x + 4, y + 3, 7, 5, "#90a4ae"); R(x + 9, y + 8, 5, 3, "#546e7a"); R(x + 3, y + 10, 3, 2, "#b0bec5"); R(x + 7, y + 4, 2, 1, "#cfd8dc"); break;
+    default: R(x, y, 16, 16, "#f0f");
+  }
+}
+
+const LOOKS = {
+  hero: { hair: "#e53935", hairD: "#a31515", skin: "#f6c69c", shirt: "#1e63c4", shirtD: "#164a93", pants: "#efe3c2", boots: "#6d4c41", spiky: true },
+  mom: { hair: "#7b4a2e", hairD: "#5a341f", skin: "#f6c69c", shirt: "#8e24aa", shirtD: "#6a1b9a", pants: "#8e24aa", boots: "#4e342e", long: true },
+  seller: { hair: "#262626", hairD: "#111", skin: "#e0a77e", shirt: "#ef8f00", shirtD: "#c06f00", pants: "#5d4037", boots: "#3e2723", apron: true },
+  oldman: { hair: "#e8e8e8", hairD: "#bdbdbd", skin: "#f0bf96", shirt: "#7b5e47", shirtD: "#5d4535", pants: "#4e5b6b", boots: "#3e2723", beard: true },
+  girl: { hair: "#f5c518", hairD: "#c99a00", skin: "#f6c69c", shirt: "#ec407a", shirtD: "#c2185b", pants: "#ec407a", boots: "#6d4c41", long: true },
+};
+
+function drawPerson(e, X, Y) {
+  const L = Math.round(X) - 8, top = Math.round(Y) + 5 - 24, k = LOOKS[e.look], f = e.face;
+  const P = (x, y, w, h, c) => R(L + x, top + y, w, h, c);
+  const step = e.dist > 0 ? Math.floor(e.dist / 6) % 4 : 0;
+  P(3, 22, 10, 3, "rgba(0,0,0,0.28)");
+  // legs
+  const la = step === 1 ? -1 : 0, lb = step === 3 ? -1 : 0;
+  if (f === "left" || f === "right") {
+    const sw = step === 1 ? 2 : step === 3 ? -2 : 0;
+    P(6 + sw, 18, 2, 4, k.pants); P(8 - sw, 18, 2, 4, k.pants);
+    P(6 + sw, 21, 3, 2, k.boots); P(8 - sw, 21, 3, 2, k.boots);
+  } else {
+    P(5, 18, 2, 4 + la, k.pants); P(9, 18, 2, 4 + lb, k.pants);
+    P(5, 21 + la, 2, 2, k.boots); P(9, 21 + lb, 2, 2, k.boots);
+  }
+  // body
+  P(4, 11, 8, 8, k.shirt); P(4, 17, 8, 1, k.shirtD);
+  if (k.long) P(3, 15, 10, 4, k.shirt);
+  if (k.apron && f !== "up") P(5, 12, 6, 7, "#f5f5f5");
+  if (f === "left" || f === "right") {
+    const sw = step === 1 ? 1 : step === 3 ? -1 : 0;
+    P(7 + sw, 12, 2, 5, k.shirtD); P(7 + sw, 17, 2, 1, k.skin);
+  } else {
+    P(2, 12, 2, 5, k.shirtD); P(12, 12, 2, 5, k.shirtD); P(2, 17, 2, 1, k.skin); P(12, 17, 2, 1, k.skin);
+  }
+  // head
+  P(4, 4, 8, 7, k.skin);
+  P(3, 1, 10, 4, k.hair); P(4, 1, 8, 1, k.hairD);
+  if (k.spiky) { P(3, 0, 2, 1, k.hair); P(7, -1, 2, 2, k.hair); P(11, 0, 2, 1, k.hair); P(1, 2, 2, 2, k.hair); P(13, 2, 2, 2, k.hair); }
+  if (f === "up") { P(3, 1, 10, 9, k.hair); P(4, 8, 8, 1, k.hairD); if (k.long) P(3, 9, 10, 4, k.hair); }
+  else if (f === "down") {
+    P(3, 5, 1, 3, k.hair); P(12, 5, 1, 3, k.hair);
+    P(5, 6, 2, 2, "#1a1a2e"); P(9, 6, 2, 2, "#1a1a2e"); P(5, 6, 1, 1, "#fff"); P(9, 6, 1, 1, "#fff");
+    if (k.long) { P(2, 5, 2, 7, k.hair); P(12, 5, 2, 7, k.hair); }
+    if (k.beard) P(5, 9, 6, 3, "#e8e8e8");
+  } else {
+    const r = f === "right";
+    P(r ? 3 : 8, 4, 5, 6, k.hair);
+    P(r ? 9 : 5, 6, 2, 2, "#1a1a2e");
+    if (k.long) P(r ? 2 : 10, 5, 4, 7, k.hair);
+    if (k.beard) P(r ? 8 : 4, 9, 4, 3, "#e8e8e8");
+  }
+}
+function drawCat(e, X, Y) {
+  const L = Math.round(X) - 7, top = Math.round(Y) - 6;
+  const P = (x, y, w, h, c) => R(L + x, top + y, w, h, c);
+  const r = e.face !== "left", bob = e.dist > 0 && Math.floor(e.dist / 4) % 2 ? 1 : 0;
+  P(1, 10, 12, 2, "rgba(0,0,0,0.25)");
+  P(2, 4, 10, 6, "#ef8a2c"); P(3, 6, 8, 1, "#c96a14");
+  P(r ? 9 : 0, 0, 5, 5, "#ef8a2c"); P(r ? 9 : 0, -1, 1, 1, "#ef8a2c"); P(r ? 13 : 4, -1, 1, 1, "#ef8a2c");
+  P(r ? 12 : 1, 2, 1, 1, "#1a1a2e");
+  P(r ? 0 : 12, 1 + bob, 2, 4, "#ef8a2c");
+  P(3, 10 - bob, 2, 1, "#c96a14"); P(9, 9 + bob, 2, 1, "#c96a14");
+}
+function drawRobot(e, X, Y) {
+  const L = Math.round(X) - 16, top = Math.round(Y) + 10 - 40;
+  const P = (x, y, w, h, c) => R(L + x, top + y, w, h, c);
+  const blink = Math.floor(clock * 2) % 6 === 0;
+  P(2, 36, 28, 4, "rgba(0,0,0,0.3)");
+  P(15, 0, 2, 4, "#555"); P(14, -2, 4, 3, Math.floor(clock * 3) % 2 ? "#ff5252" : "#ffab91");
+  P(6, 4, 20, 13, "#e98fb0"); P(7, 4, 18, 2, "#f6b6cd"); P(6, 15, 20, 2, "#b75f80");
+  P(9, 8, 5, 5, "#fff"); P(18, 8, 5, 5, "#fff");
+  if (!blink) { P(11, 9, 2, 3, "#1a1a2e"); P(20, 9, 2, 3, "#1a1a2e"); }
+  P(12, 14, 8, 1, "#7a3350");
+  P(4, 17, 24, 14, "#e98fb0"); P(4, 17, 24, 2, "#f6b6cd"); P(10, 20, 12, 8, "#9e9e9e"); P(12, 22, 8, 4, "#ffd54f");
+  P(0, 18, 4, 10, "#b75f80"); P(28, 18, 4, 10, "#b75f80"); P(0, 27, 4, 3, "#757575"); P(28, 27, 4, 3, "#757575");
+  P(7, 31, 7, 7, "#757575"); P(18, 31, 7, 7, "#757575"); P(6, 36, 9, 3, "#424242"); P(17, 36, 9, 3, "#424242");
+}
+function drawItem(it, X, Y) {
+  const t = Math.floor(clock * 5) % 4;
+  R(X + 5, Y + 9, 6, 2, "rgba(0,0,0,0.25)");
+  R(X + 6, Y + 5, 4, 4, "#ffd54f"); R(X + 7, Y + 6, 2, 2, "#fff8e1");
+  const s = [[8, 1, 1, 3], [8, 10, 1, 3], [3, 7, 3, 1], [11, 7, 3, 1]];
+  if (t !== 3) for (const [a, b, w, h] of s) R(X + a - (w > 1 ? 0 : 0), Y + b, w, h, t === 1 ? "#ffffff" : "#fff59d");
+  if (t === 2) { R(X + 2, Y + 2, 1, 1, "#fff"); R(X + 13, Y + 12, 1, 1, "#fff"); R(X + 13, Y + 2, 1, 1, "#fff"); }
+}
+
+function camera() {
+  const aw = cur.w * T, ah = cur.h * T;
+  const cx = aw <= PW ? (aw - PW) / 2 : Math.max(0, Math.min(aw - PW, player.x - PW / 2));
+  const cy = ah <= PH ? (ah - PH) / 2 : Math.max(0, Math.min(ah - PH, player.y - PH / 2));
+  return [Math.round(cx), Math.round(cy)];
+}
+
+function wrap(ctx, text, width) {
+  const out = []; let line = "";
+  for (const w of text.split(" ")) {
+    const t = line ? line + " " + w : w;
+    if (ctx.measureText(t).width > width && line) { out.push(line); line = w; } else line = t;
+  }
+  if (line) out.push(line);
+  return out;
+}
+function drawDialog() {
+  const s = S, bx = 6 * s, bw = PW * s - 12 * s, bh = 62 * s, by = PH * s - bh - 6 * s;
+  const grd = sx.createLinearGradient(0, by, 0, by + bh);
+  grd.addColorStop(0, "#2a3a9e"); grd.addColorStop(1, "#0b1450");
+  sx.fillStyle = "#000"; sx.fillRect(bx - s, by - s, bw + 2 * s, bh + 2 * s);
+  sx.fillStyle = grd; sx.fillRect(bx, by, bw, bh);
+  sx.strokeStyle = "#f2f2f2"; sx.lineWidth = 2 * s; sx.strokeRect(bx + s, by + s, bw - 2 * s, bh - 2 * s);
+  sx.strokeStyle = "#8a96d8"; sx.lineWidth = s; sx.strokeRect(bx + 3 * s, by + 3 * s, bw - 6 * s, bh - 6 * s);
+  const fs = 8 * s;
+  sx.font = `bold ${fs}px "DejaVu Sans Mono", monospace`;
+  sx.textBaseline = "top";
+  let y = by + 8 * s;
+  if (dialog.name) {
+    sx.fillStyle = "#ffd54f"; sx.fillText(dialog.name + ":", bx + 10 * s, y); y += fs * 1.3;
+  }
+  const line = dialog.lines[dialog.i];
+  const lines = wrap(sx, line, bw - 20 * s);
+  let left = Math.floor(dialog.shown);
+  sx.fillStyle = "#ffffff";
+  for (const l of lines) {
+    if (left <= 0) break;
+    sx.fillText(l.slice(0, left), bx + 10 * s, y);
+    left -= l.length + 1; y += fs * 1.3;
+  }
+  if (dialog.shown >= line.length && Math.floor(clock * 3) % 2 === 0) {
+    sx.fillStyle = "#ffffff";
+    const ax = bx + bw - 14 * s, ay = by + bh - 12 * s;
+    sx.beginPath(); sx.moveTo(ax, ay); sx.lineTo(ax + 6 * s, ay); sx.lineTo(ax + 3 * s, ay + 4 * s); sx.fill();
+  }
+}
+
+function render() {
+  R(0, 0, PW, PH, "#000");
+  const [cx, cy] = camera();
+  const i0 = Math.max(0, Math.floor(cx / T)), j0 = Math.max(0, Math.floor(cy / T));
+  const i1 = Math.min(cur.w - 1, Math.floor((cx + PW) / T)), j1 = Math.min(cur.h - 1, Math.floor((cy + PH) / T));
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) drawTile(cur, cur.map[j][i], i * T - cx, j * T - cy, i, j);
+  const ents = [...cur.npcs, player];
+  if (cur.item && !cur.item.taken) ents.push({ item: cur.item, y: cur.item.y * T + 8 });
+  ents.sort((a, b) => a.y - b.y);
+  for (const e of ents) {
+    if (e.item) drawItem(e.item, e.item.x * T - cx, e.item.y * T - cy);
+    else if (e.look === "cat") drawCat(e, e.x - cx, e.y - cy);
+    else if (e.look === "robot") drawRobot(e, e.x - cx, e.y - cy);
+    else drawPerson(e, e.x - cx, e.y - cy);
+  }
+  sx.drawImage(low, 0, 0, PW * S, PH * S);
+  if (dialog) drawDialog();
+  if (fade) {
+    const a = fade.t < 0.4 ? fade.t / 0.4 : Math.max(0, 1 - (fade.t - 0.4) / 0.4);
+    sx.fillStyle = `rgba(0,0,0,${Math.min(1, a)})`; sx.fillRect(0, 0, PW * S, PH * S);
+  }
+}
+
+function title() {
+  const [tx, ty] = tileAt(player);
+  const t = `Town area=${cur.name} x=${tx} y=${ty} talked=${talked.join(",")} items=${items.join(",")}`;
+  if (document.title !== t) document.title = t;
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt); render(); title();
+  requestAnimationFrame(frame);
+}
+title();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
