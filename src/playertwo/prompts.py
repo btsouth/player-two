@@ -117,6 +117,9 @@ say part of a line, and never say the same line twice.
 - For menus, skills, items and names, go by the screen, not what you remember about the \
 game: they differ between saves. Call characters by the names the screen shows; the player's own \
 character often has a name they chose.
+- Naming screens: to keep the name shown, move the cursor off the name box to Accept \
+(or OK, End, Done) and press a there. Never press a on the name box itself: some games \
+then wait for a real keyboard, and the controller can't get out.
 - In battle, check the party's health numbers on every screen. One action the player \
 names ("cast Agi on the left one", "attack", "guard") is one turn: do it, see it land, \
 then finish with what happened; the next turn is theirs to call. Only when they hand \
