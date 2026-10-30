@@ -93,13 +93,14 @@ loud and says how to fix it, instead of printing it where you can't see it.
   cursor, checks the highlight, confirms, then looks again to make sure it worked.
 - **Walks you there in 2D games.** "Take me to the man at the stall." Muse Spark points out your
   character and the stall once, SAM 3.1 pins the stall keeper down to the pixel, then code on your
-  PC steers there about ten times a second, goes around what's in the way, and stops next to it,
-  facing it, so the next "talk to him" works. It only says it got there when it can see your
-  character there. In Chrono Trigger, walks to something already on screen took 2 to 8 seconds in
-  my sessions; longer trips (downstairs, outside, across the map) took 20 seconds to a minute. For
-  places not on screen yet, it walks on in a direction while watching and stops at walls and
-  doorways. Everything that scrolls past is stitched into a map of the area, which it can look at
-  to find exits and gaps and walk back to.
+  PC steers there about ten times a second, finds its own way around what's in the way (it
+  remembers where it bumped and plans again), and stops next to it, facing it, so the next "talk
+  to him" works. It only says it got there when it can see your character there. In Chrono
+  Trigger, walks to something already on screen took 2 to 8 seconds in my sessions; longer trips
+  (downstairs, outside, across the map) took from 20 seconds to a few minutes. For places not on
+  screen yet, it lists the ways out (doors, stairs, paths off the edge) and tries them one at a
+  time, leaving the way it came in for last. Everything that scrolls past is stitched into a map
+  of the area, which it can look at to find exits and gaps and walk back to.
 - **Works hands-free.** For players who can't easily press a key, it can listen all the time and
   act on what starts with its name: "Player Two, open the menu." A small speech detector runs on
   your PC, so only stretches of speech are sent to Meta to be transcribed; what isn't for Player
@@ -215,8 +216,9 @@ hands_free = false        # listen all the time for "Player Two, ..."; no talk k
   or overwrite a save without asking. That's an instruction to the model, not a hard block in
   code, so back up saves you care about.
 - Walking goes to what it can see, or to a spot on the map of what it has seen. Finding a place
-  it hasn't seen yet, in a town or forest, is still hit and miss: it can miss a way in (a gap in
-  a fence, a chain to climb), so tell it which way when you know.
+  it hasn't seen yet is slow, since it tries the ways out one by one, and it can miss a way in
+  (a gap in a fence, a chain to climb). Tell it which way when you know ("Gato is west of the
+  bell"); with a hint it finds things it otherwise misses.
 - In 3D games it can't find its way around a dungeon yet. Menus, battles and dialogue work.
 - It reads the screen, not game memory, so it can misread tiny or blurry text. It says so when it
   can't read something instead of guessing.
