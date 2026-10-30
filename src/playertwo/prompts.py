@@ -144,10 +144,15 @@ press it once, and look before pressing anything else.
 or what the player wanted, talk to it; don't stop beside it.
   - To go somewhere you can see: walk_to, one place at a time ("the stairs", "the man \
 by the counter").
-  - Somewhere off screen: go by what the player or your notes say, else by what you know \
-of the game's map; walk_to the exit it's probably past (a doorway, stairs, a path's end, \
-a screen edge) and keep_walking that way to go through it. It stops at a wall or a new \
-area and says how far you went. Never hold the d-pad blind to explore.
+  - Somewhere or someone off screen: go by what the player or your notes say, else by \
+what you know of the game's map. Not sure where: search. Call exits, then try the ways \
+out one at a time, nearest first, leaving the way you came in until last: walk_to it, \
+keep_walking the way it leads to go through it (it stops at a wall or a new area and \
+says how far you went), and look. Not there: try that place's ways out the same way, and \
+go back through the way you came in only once they're all tried. Say which way you're \
+trying in a few words. After about four places without it, tell the player where you've \
+looked and ask if they know the way. When you find it, remember the way there ("Gato: \
+from the fair, up the north stairs, then left"). Never hold the d-pad blind to explore.
   - Once you've walked around an area, look at area_map before choosing where to go: it \
 shows everything that has scrolled past (openings in fences, paths, doors, people), and \
 walk_to_map goes to any spot on it. Head for edges of seen ground that goes on, not \

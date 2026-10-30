@@ -727,3 +727,47 @@ class TestAgentHonesty:
         muse.tools = tools
         run(agent.run("wait for it"))
         assert tools_seen[-1] == ["finish"] and len(tools_seen[0]) > 1
+
+
+def test_exits_are_listed_nearest_first_with_the_way_in_marked():
+    from playertwo.locate import Exit, Match, exits_text
+
+    exits = [Exit("path off the top edge", Match(0.5, 0.02, 0), "up"),
+             Exit("gap in the fence at the bottom", Match(0.48, 0.98, 0), "down"),
+             Exit("tent doorway at the left", Match(0.2, 0.5, 0), "in")]
+    text = exits_text(exits, (0.5, 0.8), (0.04, 0.07), came="up")
+    lines = text.splitlines()[1:]
+    assert lines[0].startswith("- gap in the fence") and "came in" in lines[0]
+    assert "came in" not in text.split("gap in the fence")[0]
+    assert "up" in lines[2] and "path off the top edge" in lines[2]
+    assert exits_text([], None, (0.04, 0.07)).startswith("no ways out")
+
+
+def test_the_way_in_is_remembered_from_the_walk_that_got_here():
+    from playertwo.agent import way
+
+    agent, _, _, _, muse = TestAgent().make([
+        [("keep_walking", {"direction": "up", "seconds": 2})],
+        [("exits", {})],
+        [("finish", {"text": "Two ways out."})],
+    ])
+
+    async def act(name, a):
+        if name == "keep_walking":
+            return "new_area: the screen changed to a new place after you went 4 steps up"
+        return await real(name, a)
+
+    async def json_reply(messages, effort=None, max_tokens=0):
+        return {"exits": [{"label": "stairs down at the bottom", "x": 500, "y": 950,
+                           "leads": "down"},
+                          {"label": "door at the top", "x": 500, "y": 50, "leads": "up"}],
+                "player": [500, 800]}
+
+    real = agent._act
+    agent._act = act
+    muse.json = json_reply
+    run(agent.run("find Gato"))
+    results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+    assert "stairs down at the bottom" in results[1] and "came in" in results[1]
+    assert "came in" not in results[1].split("door at the top")[1]
+    assert way(0) == "up" and way(271) == "left" and way(None) == ""

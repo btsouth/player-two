@@ -92,6 +92,13 @@ TOOLS = [
                         "default 3."},
         }, "required": ["direction"]}}},
     {"type": "function", "function": {
+        "name": "exits",
+        "description": "List the ways out of the place on screen (doors, stairs, paths off "
+                       "the edge, gaps in fences), nearest first, how far each is from your "
+                       "character, and which one you probably came in by (2D games). Use it "
+                       "to look for something that isn't on screen.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
         "name": "area_map",
         "description": "See a map of this area so far, stitched from everything on "
                        "screen while walking (2D games): exits, gaps, paths and people "
@@ -190,6 +197,13 @@ def skip_on(text: tuple | None, before: np.ndarray, after: np.ndarray) -> tuple[
             return text, "something new showed up outside the text"
         ys, xs = np.r_[ys, y0, y1], np.r_[xs, x0, x1]
     return (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())), ""
+
+
+def way(angle: float | None) -> str:
+    """The d-pad direction nearest a stick angle (0 up, 90 right), or ""."""
+    if angle is None:
+        return ""
+    return ("up", "right", "down", "left")[round(angle / 90) % 4]
 
 
 def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
@@ -524,6 +538,21 @@ class Agent:
             steps = walker.travel / walker.size if walker.size else None
             self.trail.add(f"walk_to {target}", walked.outcome, steps)
             return walked.text()
+        if name == "exits":
+            from .locate import exits_text, find_exits
+            from .walk import WIDTH
+
+            img = await self.walker_image()
+            found, me = await find_exits(self.muse, img)
+            th = img.height * WIDTH / img.width
+            step = (16 / WIDTH, 16 / th)  # about a character, when none is tracked
+            walker = self._walker
+            if walker is not None and walker.memory is not None \
+                    and await self._still_me(walker):
+                _look, at, (bw, _bh) = walker.memory
+                me = (float(at[0]) / WIDTH, float(at[1]) / th)
+                step = (bw / WIDTH, bw / th)
+            return exits_text(found, me, step, getattr(self, "_came_in", ""))
         if name == "area_map":
             await self.walker_image()  # the screen now: maybe somewhere new since
             if self.area.frames < 2:
@@ -804,6 +833,11 @@ class Agent:
                     acted = True
                     self._said_before_act = len(self.said)
                     result = self._check_walk(c.function.name, result)
+                    if result.startswith("new_area"):
+                        # Which way it was going when it got here: the way back is behind.
+                        self._came_in = (str(args.get("direction") or "")
+                                         if c.function.name == "keep_walking"
+                                         else way(getattr(self, "_facing", None)))
                 step.result = result
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
             if self.cancelled:

@@ -180,3 +180,64 @@ def where_request(text: str) -> str | None:
     if words and words[0] in {"we", "i", "us", "you", "it", "they", "this", "that"}:
         return None
     return what or None
+
+
+EXITS = """This is a 2D game screen seen from above; the player's character is on it. List \
+every way out of this place you can see: doors and doorways, stairs, ladders, paths or \
+gaps that lead off the edge of the screen, openings in fences, hedges or walls. Only ways \
+a character could walk through: not windows, not pictures. Answer JSON: {"exits": \
+[{"label": "a few words, e.g. 'stairs going up at the top middle'", "x": 0-1000, "y": \
+0-1000, "leads": "up, down, left, right or in"}], "player": [x, y] or null}"""
+
+OPPOSITE = {"up": "down", "down": "up", "left": "right", "right": "left"}
+
+
+@dataclass
+class Exit:
+    label: str
+    at: Match
+    leads: str
+
+
+async def find_exits(muse: Muse, img: Image.Image
+                     ) -> tuple[list[Exit], tuple[float, float] | None]:
+    """The ways out of the place on screen, and where the player's character is (both as
+    fractions of the screen), by Muse Spark."""
+    data = await muse.json([{"role": "user", "content": [
+        image_part(img, 1280), {"type": "text", "text": EXITS}]}], effort="minimal")
+    out = []
+    for e in data.get("exits") or []:
+        try:
+            x, y = float(e["x"]) / 1000, float(e["y"]) / 1000
+        except (TypeError, ValueError, KeyError):
+            continue
+        leads = str(e.get("leads") or "").lower()
+        out.append(Exit(str(e.get("label") or "a way out")[:80],
+                        Match(min(max(x, 0), 1), min(max(y, 0), 1), 0.0),
+                        leads if leads in (*OPPOSITE, "in") else "in"))
+    me = None
+    try:
+        p = data.get("player")
+        me = (float(p[0]) / 1000, float(p[1]) / 1000)
+    except (TypeError, ValueError, IndexError):
+        pass
+    return out, me
+
+
+def exits_text(exits: list[Exit], me: tuple[float, float] | None,
+               step: tuple[float, float], came: str = "") -> str:
+    """The exits for the agent, nearest first, from the character, the way it came in
+    (the nearest exit leading back the way it was walking when it arrived) marked."""
+    if not exits:
+        return "no ways out that I can see on this screen"
+    if me is not None:
+        exits = sorted(exits, key=lambda e: math.hypot((e.at.cx - me[0]) / step[0],
+                                                       (e.at.cy - me[1]) / step[1]))
+    back = OPPOSITE.get(came)
+    came_in = next((e for e in exits if back and e.leads == back), None)
+    lines = []
+    for e in exits:
+        where = from_you(e.at, me, step) if me is not None else where_words(e.at)
+        mark = " (probably the way you came in)" if e is came_in else ""
+        lines.append(f"- {e.label}, leading {e.leads}: {where}{mark}")
+    return "Ways out on this screen, nearest first:\n" + "\n".join(lines)
