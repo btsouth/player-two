@@ -604,7 +604,7 @@ class Walker:
         self._where: Callable[[], tuple[float, float]] | None = None
         # When "finding a way around" was last said: once is enough for a player
         # whose next few walks bump about the same room.
-        self._said_at = -math.inf
+        self._said_at: dict[str, float] = {}  # when each line was last said
         self._talk: asyncio.Task | None = None
 
     async def _frame(self) -> tuple[np.ndarray, np.ndarray]:
@@ -699,6 +699,8 @@ class Walker:
             self.steer(None)
 
     async def _walk(self, target, img, loc, t0, timeout, done, stuck_turns=0) -> Walked:
+        # Each look by the model (and its way points) gets its own bumps to plan with.
+        self._bumps, self._planning = 0, None
         rgb, g = small(img)
         w = g.shape[1]
         px1, py1, px2, py2 = loc.player
@@ -768,12 +770,13 @@ class Walker:
             dist = float(np.hypot(*off))
             if dist < best[0] - 0.3 * size:
                 best = (dist, time.monotonic())
+                self._planning = None  # getting closer: the planning clock starts over
             elif time.monotonic() - best[1] > 2.0:
                 # Moving, but not getting closer (sliding along a long wall).
                 best = (dist, time.monotonic())
                 way = self._reroute(detour, player, points[0], stick, size, budget, False)
                 if way is not None:
-                    detour, last_rel = way, time.monotonic()
+                    detour, last_rel, slide = way, time.monotonic(), 0
                     continue
                 stuck_turns += 1
                 if stuck_turns > 1:
@@ -828,6 +831,7 @@ class Walker:
                                   math.sin(t) * drift[0] + math.cos(t) * drift[1]])
                 stick = new
                 moves = []  # moves the other way say nothing about this one
+                last_rel = time.monotonic()  # nor is a turn being stuck
             self.steer(stick)
             await asyncio.sleep(0.01)
             rgb, g = await self._frame()
@@ -1013,9 +1017,9 @@ class Walker:
 
     def _tell(self, words: str) -> Awaitable[None] | None:
         """Say why it's taking longer, unless that was just said."""
-        if self.say is None or time.monotonic() - self._said_at < 60:
+        if self.say is None or time.monotonic() - self._said_at.get(words, -math.inf) < 60:
             return None
-        self._said_at = time.monotonic()
+        self._said_at[words] = time.monotonic()
         self._talk = asyncio.ensure_future(self.say(words))
         # Spoken while walking on: a voice that fails mustn't end the walk.
         self._talk.add_done_callback(lambda t: t.cancelled() or t.exception())

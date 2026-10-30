@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -376,6 +377,18 @@ class Agent:
                 return cur
         return seen[-1][1]
 
+    async def _walk_said(self, walker: Walker) -> None:
+        """A line the walk started saying ("Something's in the way") ends before the next
+        step, so it isn't taken for something said after the walk; stopped, it's cut."""
+        talk = getattr(walker, "_talk", None)
+        if talk is None or talk.done():
+            return
+        if self.cancelled:
+            talk.cancel()
+            return
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(asyncio.shield(talk), 8)
+
     async def _press_a_and_see(self) -> float:
         """Press a; how much of the screen changed in the next second (a text box takes
         a moment to open)."""
@@ -531,6 +544,7 @@ class Agent:
             try:
                 await self._find_me(walker)
                 walked = await walker.walk(target, me)
+                await self._walk_said(walker)
             except WALK_ERRORS as exc:
                 # Not the model's arguments: something broke while walking.
                 self.controls.steer(None)
@@ -588,6 +602,7 @@ class Agent:
             try:
                 await self._find_me(walker)
                 walked = await walker.walk_toward(where, label)
+                await self._walk_said(walker)
             except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"

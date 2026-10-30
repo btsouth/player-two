@@ -643,7 +643,8 @@ async def test_cut_off_ends_blocked_and_says_so_once():
     assert result.outcome == "blocked", result.text()
     assert result.seconds < 22
     assert "blocked" in game.asked[1]  # out of plans, asked the model for a way around
-    assert said == ["Something's in the way. Finding a way around."]
+    around = "Something's in the way. Finding a way around."
+    assert said.count(around) == 1, said  # other lines ("I lost sight of you") have their own
     # The next walk soon after, into the same pen, doesn't say it again.
     await w.walk("the green chest", timeout=8)
-    assert len(said) == 1
+    assert said.count(around) == 1, said
