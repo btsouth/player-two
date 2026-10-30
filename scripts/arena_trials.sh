@@ -8,7 +8,7 @@ URL=file://$ROOT/tests/arena/index.html
 pass=0; total=0
 # Forward the open-weight brain settings into the box when they're set.
 EXTRA=()
-for v in PLAYER_TWO_BRAIN PLAYER_TWO_OPEN_BASE_URL PLAYER_TWO_OPEN_MODEL MODAL_PROXY_KEY MODAL_PROXY_SECRET; do
+for v in PLAYER_TWO_AGENT_EFFORT PLAYER_TWO_BRAIN PLAYER_TWO_OPEN_BASE_URL PLAYER_TWO_OPEN_MODEL MODAL_PROXY_KEY MODAL_PROXY_SECRET; do
   [ -n "${!v:-}" ] && EXTRA+=(--pass "$v")
 done
 while IFS="|" read -r cmd want <&3; do
