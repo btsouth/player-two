@@ -184,8 +184,10 @@ def where_request(text: str) -> str | None:
 
 EXITS = """This is a 2D game screen seen from above; the player's character is on it. List \
 every way out of this place you can see: doors and doorways, stairs, ladders, paths or \
-gaps that lead off the edge of the screen, openings in fences, hedges or walls. Only ways \
-a character could walk through: not windows, not pictures. Answer JSON: {"exits": \
+gaps that lead off the edge of the screen, openings in fences, hedges or walls. Also any \
+screen edge where open ground (floor, grass, a plaza, a path) runs right up to it with no \
+wall or trees along it: the place goes on that way ("plaza floor running off the left \
+edge"). Only ways a character could walk through: not windows, not pictures. Answer JSON: {"exits": \
 [{"label": "a few words, e.g. 'stairs going up at the top middle'", "x": 0-1000, "y": \
 0-1000, "leads": "up, down, left, right or in"}], "player": [x, y] or null}"""
 

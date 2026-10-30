@@ -154,6 +154,8 @@ TOOLS = [
 
 
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
+# Out of steps but not done: the player can say to keep going (that adds steps).
+FINISH_OR_ASK = [t for t in TOOLS if t["function"]["name"] in ("finish", "ask_player")]
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 MOVES = {"up", "down", "left", "right", "lb", "rb"}
 # Something broke while walking (not the model's arguments): the model hears it failed.
@@ -762,7 +764,8 @@ class Agent:
                 break
             t_model = time.monotonic()
             last_turn = _turn == budget - 1
-            msg = await self.muse.tools(trim_images(msgs), FINISH_ONLY if last_turn else TOOLS)
+            msg = await self.muse.tools(trim_images(msgs), TOOLS if not last_turn else
+                                        FINISH_OR_ASK if self.ask else FINISH_ONLY)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
@@ -805,7 +808,7 @@ class Agent:
                 run.steps.append(step)
                 if finished is not None:
                     result = "ignored: it came after finish"
-                elif last_turn and c.function.name != "finish":
+                elif last_turn and c.function.name not in ("finish", "ask_player"):
                     result = "not done: only finish is left now"
                 elif c.function.name == "finish" and acted:
                     # It hasn't seen what its presses did: no telling the player yet.
@@ -887,9 +890,12 @@ class Agent:
                 *shown,
                 image_part(frame.image, self.muse.s.image_max_side),
                 {"type": "text", "text": "The screen now." + (
-                    " You're out of steps: call finish now, telling the player plainly how "
-                    "far you got, where things stand on screen, and what they could ask "
-                    "next." if last else "")},
+                    " You're out of steps. Done: finish. Not done: "
+                    + ("ask_player, saying in a sentence how far you got and asking whether "
+                       "to keep going (a yes gives you more steps); if it can't be done, "
+                       if self.ask else "")
+                    + "finish, telling the player plainly how far you got, where things "
+                    "stand on screen, and what they could ask next." if last else "")},
             ]})
         if out_of_turns:
             await self._speak("I couldn't finish that one. Want me to try another way?")

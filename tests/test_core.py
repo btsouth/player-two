@@ -725,8 +725,34 @@ class TestAgentHonesty:
             return await real(messages, tools, **kw)
 
         muse.tools = tools
+        agent.ask = None  # nobody to ask: only finish
         run(agent.run("wait for it"))
         assert tools_seen[-1] == ["finish"] and len(tools_seen[0]) > 1
+
+    def test_out_of_steps_asks_to_keep_going_and_a_yes_gives_more(self):
+        agent, pad, said, _, muse = self.make([
+            [("press", {"buttons": ["left"]})],
+            [("press", {"buttons": ["up"]})],
+            [("press", {"buttons": ["down"]})],
+            [("ask_player", {"question": "I looked west and north. Keep going?"})],
+            [("press", {"buttons": ["right"]})],
+            [("finish", {"text": "Found him."})],
+        ])
+        agent.max_turns = 4
+        tools_seen = []
+        real = muse.tools
+
+        async def tools(messages, tools, **kw):
+            tools_seen.append([t["function"]["name"] for t in tools])
+            return await real(messages, tools, **kw)
+
+        async def ask(question):
+            return "yes, keep looking"
+
+        muse.tools, agent.ask = tools, ask
+        result = run(agent.run("find Gato"))
+        assert sorted(tools_seen[3]) == ["ask_player", "finish"]
+        assert pad.log == ["left", "up", "down", "right"] and result.outcome == "Found him."
 
 
 def test_exits_are_listed_nearest_first_with_the_way_in_marked():
