@@ -362,6 +362,19 @@ class Agent:
                 return cur
         return seen[-1][1]
 
+    async def _press_a_and_see(self) -> float:
+        """Press a; how much of the screen changed in the next second (a text box takes
+        a moment to open)."""
+        before = await self.grab()
+        await asyncio.to_thread(self.controls.press, "a")
+        changed = 0.0
+        for _ in range(4):
+            await asyncio.sleep(0.25)
+            changed = max(changed, screen_change(before, await self.grab()))
+            if changed > 0.04:
+                break
+        return changed
+
     async def _act(self, name: str, a: dict) -> str:
         if name == "press":
             asked = a.get("buttons") or []
@@ -474,15 +487,18 @@ class Agent:
             await self.go.wait()
             if self.cancelled:
                 return "stopped by the player"
-            before = await self.grab()
-            await asyncio.to_thread(self.controls.press, "a")
-            # A text box takes a moment to open: did anything come up?
-            changed = 0.0
-            for _ in range(4):
-                await asyncio.sleep(0.25)
-                changed = max(changed, screen_change(before, await self.grab()))
+            changed = await self._press_a_and_see()
+            facing = getattr(self, "_facing", None)
+            if changed <= 0.04 and facing is not None and not self.cancelled:
+                # Small things on the ground answer only from right beside them: one
+                # step closer the way it was facing, and try again.
+                self.controls.steer(facing)
+                await asyncio.sleep(0.15)
+                self.controls.steer(None)
+                await asyncio.sleep(0.2)
+                changed = await self._press_a_and_see()
                 if changed > 0.04:
-                    break
+                    walked += "; stepped one closer"
             if changed <= 0.04:
                 return (f"{walked}; pressed a, but nothing came up on screen: they may "
                         "have nothing to say, or it isn't facing them. Look before saying "
@@ -646,7 +662,12 @@ class Agent:
 
                 return [m.box for m in await segment(self.muse, img, phrase) if m.box]
 
-            self._walker = Walker(self.muse, self.walker_image, self.controls.steer,
+            def steer(angle):
+                if angle is not None:
+                    self._facing = angle  # the way it last walked, to step closer by
+                self.controls.steer(angle)
+
+            self._walker = Walker(self.muse, self.walker_image, steer,
                                   self.walker_keep_going, note, say=self._speak, exact=exact)
         return self._walker
 
