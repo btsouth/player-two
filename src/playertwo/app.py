@@ -600,6 +600,24 @@ class Session:
         # the last one, like a friend would.
         self.narrating = asyncio.create_task(self._narrate(frame, interrupt=cut))
 
+    async def _typed_out(self, most: float = 2.5) -> Frame:
+        """The screen once text has finished typing out after a press (or after `most`
+        seconds): against a frame a quarter second back, since a few letters at a time
+        look still from one frame to the next."""
+        from .agent import screen_change
+
+        await asyncio.sleep(0.15)
+        seen = [(time.monotonic(), await self.grab_now())]
+        end = time.monotonic() + most
+        while time.monotonic() < end:
+            await asyncio.sleep(0.08)
+            now, cur = time.monotonic(), await self.grab_now()
+            old = [f for t, f in seen if now - t >= 0.25]
+            seen.append((now, cur))
+            if old and screen_change(old[-1], cur) <= 0.004:
+                return cur
+        return seen[-1][1]
+
     def _start_narration(self, frame: Frame, describe: bool = False) -> None:
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
@@ -1010,10 +1028,14 @@ class Session:
                                  "result": s.result[:200]}
                                 for s in run.steps],
                          turns=run.turns, seconds=round(run.seconds, 2))
-        # The agent already said what happened: count the screen it left as seen, so the
-        # narrator doesn't talk over its last line about the same thing.
+        # The narrator gets one look at the screen the agent left, from a clean start: a
+        # line of dialogue that came up as it finished is story the player would miss.
+        # What the agent said is in the narrator's recent lines, so it isn't said again.
         with contextlib.suppress(Exception):
-            self.watcher.accept(await self.grab_now())
+            frame = await self.grab_now()
+            self.watcher.accept(frame)
+            self.silent_streak, self.quiet_until = 0, 0.0
+            self.pending = (frame, 0.0)
 
     async def _working_ticks(self) -> None:
         """A soft tick every few seconds while acting, so a long silence isn't a mystery."""
@@ -1278,11 +1300,11 @@ class Session:
             except Exception as exc:  # noqa: BLE001
                 self.trouble(exc, "next", answer=True)
                 return
-            if self.paused:
-                # Narration is off, so read the new screen once, after the text types out.
-                await asyncio.sleep(0.8)
-                with contextlib.suppress(Exception):
-                    self._start_narration(await self.grab_now(), describe=True)
+            # The player asked for the next line: read it once it has typed out, now,
+            # whatever the back-off after quiet screens says.
+            self.silent_streak, self.quiet_until, self.pending = 0, 0.0, None
+            with contextlib.suppress(Exception):
+                self._start_narration(await self._typed_out(), describe=self.paused)
         elif action == "describe":
             try:
                 frame = await self.grab_now()

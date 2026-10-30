@@ -425,8 +425,20 @@ async def test_next_presses_a_without_the_model():
     assert local_action("next") == "next" and local_action("Player Two, next please") == "next"
     assert local_action("continue") is None  # a title screen option, for the agent
     s = bare_session()
+    from PIL import Image
+
+    from playertwo.screen import Frame
+
+    async def grab_now(show=False):
+        return Frame(Image.new("RGB", (64, 36)), 0)
+
+    read = []
+    s.grab_now = grab_now
+    s._start_narration = lambda frame, describe=False: read.append(describe)
+    s.silent_streak, s.quiet_until = 5, 1e12  # backed off after quiet screens
     await s.local("next")
     assert s.controls.log == ["a"]
+    assert read == [False] and s.quiet_until == 0  # the new line is read at once
     # Not in the middle of something the agent is doing.
     s.agent_task = asyncio.create_task(asyncio.sleep(10))
     await s.local("next")
