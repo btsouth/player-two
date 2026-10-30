@@ -37,9 +37,14 @@ for run in $(seq 1 "$RUNS"); do
     ob run -- sh -c "pkill -f '[b]in/player-two run'; pkill -f '[t]ests/town'; pkill wtype; rm -f $LOG; true" >/dev/null 2>&1
     ob run -d --wait -- chromium --kiosk --no-first-run --user-data-dir=/tmp/town-chrome "$URL?start=$start" >/dev/null 2>&1
     ob wait window Town --timeout 20 >/dev/null 2>&1
-    ob run -d --pass MODEL_API_KEY "${EXTRA[@]}" -- "$BIN" run --controls keyboard --window Town \
-      --companion off --game "a small top-down SNES-style RPG" --log $LOG >/dev/null 2>&1
-    if ! ob wait until --timeout 60 -- sh -c "grep -q '\"kind\": \"ready\"' $LOG" >/dev/null 2>&1; then
+    up=""
+    for try in 1 2; do  # a session still closing can hold the control socket: once more
+      ob run -d --pass MODEL_API_KEY "${EXTRA[@]}" -- "$BIN" run --controls keyboard --window Town \
+        --companion off --game "a small top-down SNES-style RPG" --log $LOG >/dev/null 2>&1
+      if ob wait until --timeout 60 -- sh -c "grep -q '\"kind\": \"ready\"' $LOG" >/dev/null 2>&1; then up=1; break; fi
+      ob run -- sh -c "pkill -f '[b]in/player-two run'; rm -f $LOG; true" >/dev/null 2>&1
+    done
+    if [ -z "$up" ]; then
       echo "FAIL  -     | $start | $req | Player Two didn't start"; continue
     fi
     t0=$(date +%s.%N)
