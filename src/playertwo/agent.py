@@ -687,18 +687,23 @@ class Agent:
                  + f'The player says: "{request}"'},
             ]},
         ]
-        for _turn in range(self.max_turns):
+        # The player's answer to a question sets a new course: it gets turns of its own.
+        budget, _turn, out_of_turns = self.max_turns, -1, True
+        while _turn + 1 < budget:
+            _turn += 1
             if self.cancelled:
                 run.outcome = "cancelled"
+                out_of_turns = False
                 break
             t_model = time.monotonic()
-            last_turn = _turn == self.max_turns - 1
+            last_turn = _turn == budget - 1
             msg = await self.muse.tools(trim_images(msgs), FINISH_ONLY if last_turn else TOOLS)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
             if self.cancelled:
                 run.outcome = "cancelled"
+                out_of_turns = False
                 break
             calls = msg.tool_calls or []
             msgs.append({"role": "assistant", "content": msg.content or "",
@@ -707,6 +712,7 @@ class Agent:
                 if msg.content:
                     await self._speak(msg.content)
                     run.outcome = msg.content
+                    out_of_turns = False
                     break
                 # Nothing at all (its thinking ran out of room): ask again rather than
                 # end in silence.
@@ -740,7 +746,7 @@ class Agent:
                     # It hasn't seen what its presses did: no telling the player yet.
                     result = "not finished: look at the screen after those actions first"
                 elif c.function.name == "finish" and not str(args.get("text") or "").strip() \
-                        and len(self.said) <= self._said_before_act:
+                        and len(self.said) <= self._said_before_act and not last_turn:
                     result = "not finished: give the text to tell the player what happened"
                 elif c.function.name == "say" and acted:
                     # Nor say what happened before seeing it.
@@ -761,6 +767,8 @@ class Agent:
                         answer = await self.ask(question)
                         result = f'The player said: "{answer}"' if answer else (
                             "No answer. Don't do it; finish and say you'll wait.")
+                        if answer:
+                            budget = max(budget, _turn + 1 + self.max_turns // 2)
                 elif c.function.name == "remember":
                     result = self.notes.add(self.game, str(args.get("note") or ""),
                                             str(args.get("instead_of") or ""))
@@ -779,19 +787,24 @@ class Agent:
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
             if self.cancelled:
                 run.outcome = "cancelled"
+                out_of_turns = False
                 break
             if finished is not None:
+                if not finished and last_turn and len(self.said) <= self._said_before_act:
+                    finished = ("I stopped there after a lot of steps. Say describe to hear "
+                                "where things stand.")
                 if finished and not self._already_said(finished):
                     await self._speak(finished)
                 # Kept for the next request's history even when say already said it.
                 run.outcome = finished or (self.said[-1] if self.said else "done")
+                out_of_turns = False
                 break
             turn["act_s"] = round(time.monotonic() - t_act, 2)
             t_look = time.monotonic()
             # After a say too: the model may be waiting for text still typing out.
             frame = await self._settled(noise)
             turn["look_s"] = round(time.monotonic() - t_look, 2)
-            last = _turn == self.max_turns - 2
+            last = _turn == budget - 2
             shown = []
             if self._show_map and self._map_image is not None:
                 self._show_map = False
@@ -808,7 +821,7 @@ class Agent:
                     "far you got, where things stand on screen, and what they could ask "
                     "next." if last else "")},
             ]})
-        else:
+        if out_of_turns:
             await self._speak("I couldn't finish that one. Want me to try another way?")
             run.outcome = "gave up"
         run.seconds = time.monotonic() - t0

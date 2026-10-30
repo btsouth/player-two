@@ -629,6 +629,19 @@ class TestAgentHonesty:
         result = next(m["content"] for m in muse.seen[-1] if m["role"] == "tool")
         assert ("stopped skipping" in result) == (pressed < 6), result
 
+    def test_an_answer_gets_turns_of_its_own_and_the_last_turn_always_ends(self):
+        agent, pad, said, _, _ = self.make([
+            [("press", {"buttons": ["start"]})],
+            [("press", {"buttons": ["down"]})],
+            [("ask_player", {"question": "Keep the name Crono?"})],
+            [("press", {"buttons": ["a"]})],  # past the first 4 turns
+            [("finish", {})],
+        ])
+        agent.max_turns = 4
+        result = run(agent.run("start a new game"))
+        assert pad.log == ["start", "down", "a"]
+        assert result.outcome != "gave up" and "stopped there" in said[-1]
+
     def test_holding_a_doesnt_get_around_looking(self):
         agent, pad, _, _, muse = self.make([
             [("hold", {"input": "a", "ms": 3000})],
