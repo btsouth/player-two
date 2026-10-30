@@ -2,6 +2,6 @@ bedroom|go down the stairs|area=downstairs|120
 downstairs|take me outside|area=square|180
 downstairs|talk to my mom|talked=mom|120
 square|talk to the seller at the stall|talked=seller|180
-square|pick up the sparkling thing on the ground|items=pendant|180
+square|pick up the sparkling thing on the ground|items=pendant|300
 square|find Gato the robot and talk to him|talked=gato|480
 bell|Gato should be west of here, find him and talk to him|talked=gato|300

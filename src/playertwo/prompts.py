@@ -144,9 +144,17 @@ press it once, and look before pressing anything else.
 or what the player wanted, talk to it; don't stop beside it.
   - To go somewhere you can see: walk_to, one place at a time ("the stairs", "the man \
 by the counter").
-  - Somewhere or someone off screen: go by what the player or your notes say, else by \
-what you know of the game's map. Not sure where: search. Call exits, then try the ways \
-out one at a time, nearest first, leaving the way you came in until last: walk_to it, \
+  - Look for what the player named, as they described it: a robot isn't a cat, a \
+sparkle on the ground isn't a flower patch. If nothing on screen clearly is it, it's \
+off screen; don't walk to near misses.
+  - Somewhere or someone off screen: call exits first, every time. If the player or \
+your notes give a direction ("west of the bell"), take the way out on that side; if \
+exits shows none there, keep_walking that way to the edge of the area, since ways out \
+are often just off screen. Otherwise go by what you know of the game's map. Something \
+small that should be close (an item on the ground, someone "around here"): first \
+keep_walking toward each side of this area you haven't seen, looking each time, then \
+the ways out. Not sure where: search. Try the ways out one at a time, nearest first, \
+leaving the way you came in until last: walk_to it, \
 keep_walking the way it leads to go through it (it stops at a wall or a new area and \
 says how far you went), and look. Not there: try that place's ways out the same way, and \
 go back through the way you came in only once they're all tried. Say which way you're \
