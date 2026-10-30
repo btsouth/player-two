@@ -730,7 +730,7 @@ class TestAgentHonesty:
         assert tools_seen[-1] == ["finish"] and len(tools_seen[0]) > 1
 
     def test_out_of_steps_asks_to_keep_going_and_a_yes_gives_more(self):
-        agent, pad, said, _, muse = self.make([
+        agent, pad, _, _, muse = self.make([
             [("press", {"buttons": ["left"]})],
             [("press", {"buttons": ["up"]})],
             [("press", {"buttons": ["down"]})],
@@ -797,3 +797,28 @@ def test_the_way_in_is_remembered_from_the_walk_that_got_here():
     assert "stairs down at the bottom" in results[1] and "came in" in results[1]
     assert "came in" not in results[1].split("door at the top")[1]
     assert way(0) == "up" and way(271) == "left" and way(None) == ""
+
+
+def test_keymap_from_env_overrides_known_buttons_only(monkeypatch):
+    from playertwo.controls import HyprlandKeys, keyboard
+
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("PLAYER_TWO_KEYMAP", "start=F5, back=F6,bogus=x,nokey")
+    monkeypatch.setenv("PLAYER_TWO_KEYS", "hyprland")
+    keys = keyboard()
+    assert isinstance(keys, HyprlandKeys)
+    assert (keys.map["start"], keys.map["back"], keys.map["a"]) == ("F5", "F6", "Return")
+    assert "bogus" not in keys.map
+
+
+def test_hyprland_keys_hold_and_let_go_by_key_state(monkeypatch):
+    from playertwo.controls import HyprlandKeys
+
+    sent = []
+    keys = HyprlandKeys()
+    monkeypatch.setattr(keys, "_state", lambda k, s: sent.append((k, s)))
+    keys.press("a", hold_ms=1)
+    keys.steer(90.0)  # right
+    keys.steer(90.0)  # still right: nothing new
+    keys.steer(None)
+    assert sent == [("Return", "down"), ("Return", "up"), ("Right", "down"), ("Right", "up")]

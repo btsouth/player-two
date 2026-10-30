@@ -310,6 +310,54 @@ class WaylandKeys(Controls):
             self._run(*[a for k in old for a in ("-p", k)])
 
 
+class HyprlandKeys(WaylandKeys):
+    """Keys through Hyprland's send_key_state, with the keyboard's real key codes. For
+    apps that read key codes rather than key names (RetroArch), where wtype's own keymap
+    lands on the wrong keys. PLAYER_TWO_KEYS=hyprland picks it."""
+
+    def _state(self, key: str, state: str) -> None:
+        import subprocess
+
+        lua = f'hl.dsp.send_key_state({{ mods = "", key = "{key}", state = "{state}" }})'
+        try:
+            subprocess.run(["hyprctl", "dispatch", lua], check=True, timeout=5,
+                           capture_output=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ControlsError(f"keyboard keys didn't go through ({exc})") from exc
+
+    def _run(self, *args: str) -> None:
+        """wtype's -P KEY (down), -p KEY (up) and -s MS (pause), done one by one."""
+        if self.focus:
+            self.focus()
+        for flag, arg in zip(args[::2], args[1::2], strict=False):
+            if flag == "-s":
+                time.sleep(int(arg) / 1000)
+            else:
+                self._state(arg, "down" if flag == "-P" else "up")
+
+    def steer(self, angle: float | None, strength: float = 1.0) -> None:
+        keys = [self.map[d] for d in steer_dirs(angle)]
+        old = self._held[0] if self._held else []
+        if keys == old:
+            return
+        if self.focus:
+            self.focus()
+        for k in old:
+            if k not in keys:
+                self._state(k, "up")
+        for k in keys:
+            if k not in old:
+                self._state(k, "down")
+        self._held = (keys, None) if keys else None
+
+    def close(self) -> None:
+        if self._held:
+            keys, self._held = self._held[0], None
+            for k in keys:
+                with contextlib.suppress(ControlsError):
+                    self._state(k, "up")
+
+
 class WindowsKeys(Controls):
     """Keyboard on Windows through SendInput with scan codes, which games read."""
 
@@ -401,8 +449,25 @@ BLOCKED = ("Windows is blocking my key presses. That happens when the game runs 
            "administrator: start the game normally, or start me as administrator too.")
 
 
+def keymap_from_env() -> dict[str, str]:
+    """Keys of your own for some buttons, e.g. an emulator's: PLAYER_TWO_KEYMAP="start=F5,
+    back=F6" (button=key, key names as wtype or Windows take them)."""
+    import os
+
+    pairs = (p.split("=", 1) for p in os.environ.get("PLAYER_TWO_KEYMAP", "").split(",")
+             if "=" in p)
+    return {b.strip(): k.strip() for b, k in pairs if b.strip() in WaylandKeys.MAP}
+
+
 def keyboard(focus=None) -> Controls:
-    return WindowsKeys(focus=focus) if sys.platform == "win32" else WaylandKeys(focus=focus)
+    keymap = keymap_from_env()
+    import os
+
+    if sys.platform == "win32":
+        return WindowsKeys(keymap, focus=focus)
+    if os.environ.get("PLAYER_TWO_KEYS") == "hyprland":
+        return HyprlandKeys(keymap, focus=focus)
+    return WaylandKeys(keymap, focus=focus)
 
 
 def pad_problem(exc: BaseException) -> str:
