@@ -21,6 +21,8 @@ start_delay_s = 8
 movie = { looks = "the intro movie, or a black screen", press = "a wait4" }
 logo = { looks = "the title logo or a pendulum, with no menu", press = "a wait4" }
 menu = { looks = "the title menu: New Game, Resume, Load", press = "a wait10" }
+# No autosave in the set (mountain-of-woe): Resume opens the file list. Slot 1.
+files = { looks = "a list of save files to load", press = "up up up up a wait4 a wait10" }
 
 [[task]]
 id = "new-game"
@@ -105,8 +107,8 @@ id = "fair-stall"
 save = "leene-square"
 setup = "wait4 a wait24 a wait3 a wait10"
 ready = "the Millennial Fair, with Crono on screen"
-request = "find a stall at the fair and talk to the seller"
-check = "a shop menu or a seller's lines are showing"
+request = "find a stall at the fair and show me what the seller has"
+check = "a shop menu (items with prices) or a seller's lines are showing"
 limit_s = 300
 
 [[task]]
