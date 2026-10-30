@@ -131,7 +131,7 @@ class Game:
     def stop(self) -> None:
         sh(self.host, "hyprctl", "dispatch",
            f'hl.dsp.window.close({{ window = "class:{self.window}" }})')
-        if not wait_for(lambda: not self.running(), 60, 1):
+        if not wait_for(lambda: not self.running(), 150, 1):  # Proton can take a minute
             raise RuntimeError(f"{self.name} is still running")
 
     def put_saves(self, folder: Path | None) -> None:
