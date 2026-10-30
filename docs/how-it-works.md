@@ -8,7 +8,7 @@ The parts, in the order a moment of play goes through them. File names are under
 - **Narrator** (`narrator.py`): streams Muse Spark's answer into the voice sentence by sentence, so
   speech starts before the model has finished.
 - **Agent** (`agent.py`): a tool loop with `press`, `hold`, `walk_to`, `talk_to`, `keep_walking`,
-  `area_map`, `walk_to_map`, `say`, `ask_player`, `remember` and `finish`. A rule in code stops
+  `exits`, `area_map`, `walk_to_map`, `say`, `ask_player`, `remember` and `finish`. A rule in code stops
   any press sequence just before an A that follows any other press, so it always looks at the
   highlight before confirming, and it can't press A twice and skip a line you didn't hear.
 - **Walking** (`walk.py`): first, in each new area, it taps the d-pad one way and back and
@@ -21,8 +21,12 @@ The parts, in the order a moment of play goes through them. File names are under
   it adds no wait, and without a match the model's box stands. Then plain image math takes over: phase correlation follows the
   scenery as it scrolls, your character is pinned down by what moves differently from the scenery and then
   followed by its colours (which hold when the sprite turns), and the stick and d-pad steer it in
-  eight directions. It asks Muse Spark again only when it's stuck or loses track, and never
-  says it arrived while your character is hidden behind something. When the screen changes, at
+  eight directions. When the character stops moving against something, it marks that spot on
+  a grid of character-sized cells fixed to the world (it moves with the scroll), plans a path
+  around what it knows is blocked (A* over the four d-pad directions, unknown cells counted as
+  open), and follows it, planning again at every bump (`nav.py`). It asks Muse Spark again only
+  when no path is left, after many bumps, or when it loses track, and never says it arrived
+  while your character is hidden behind something. When the screen changes, at
   once or over a fade through a door, it lets go, waits for the picture to settle, and says
   whether it's a new place.
 - **Exploring** (`explore.py`): `keep_walking` holds a direction and watches every frame: how far
@@ -30,7 +34,10 @@ The parts, in the order a moment of play goes through them. File names are under
   place or a text box came up. It reports that in steps ("blocked after 8 steps up"). The agent
   keeps a rough map of the current area from where each walk ended, and sees it with every
   request, so it tries new exits instead of the same ones. Once it has walked in a game, a long
-  d-pad hold is watched the same way.
+  d-pad hold is watched the same way. To look for something off screen, `exits` asks Muse Spark
+  for the ways out of the place on screen and lists them nearest first, from your character,
+  with the way it came in (opposite the way it was walking when the place changed) marked, and
+  the agent tries them one at a time.
 - **Area map** (`areamap.py`): every frame a walk looks at is laid where the camera was, and each
   spot keeps the colour seen there most often, so people walking about don't smear it. After a
   gap (the model thinking, a button pressed by hand) it finds the screen on the map again, and it
