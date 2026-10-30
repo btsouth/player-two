@@ -4,6 +4,7 @@ import time
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from playertwo.agent import Agent
@@ -591,6 +592,42 @@ class TestAgentHonesty:
         ])
         run(agent.run("skip the intro"))
         assert pad.log == ["a", "a", "a", "down"]
+
+    def game(self, replies, screens):
+        """An agent on a game whose screen after n presses is screens(n)."""
+        agent, pad, _, _, muse = self.make(replies)
+
+        async def grab():
+            return frame(screens(len(pad.log)), 0)
+
+        agent.grab = grab
+        return agent, pad, muse
+
+    @staticmethod
+    def text(n, menu_at=None, battle_at=None):
+        img = blank()
+        img[200:260, 20:300] = 60  # the text box, a different line each press
+        img[215:245, 30:30 + 25 * (n % 9 + 1)] = 230
+        if menu_at is not None and n >= menu_at:
+            img[40:120, 220:300] = 200  # a menu opens up top
+        if battle_at is not None and n >= battle_at:
+            img[:] = 140 - img // 2  # a battle: everything changes
+        return img
+
+    @pytest.mark.parametrize(("screens", "pressed"), [
+        (lambda n: TestAgentHonesty.text(n), 6),                # all text: every press goes
+        (lambda n: TestAgentHonesty.text(n, menu_at=3), 3),     # a menu after the third
+        (lambda n: TestAgentHonesty.text(n, battle_at=2), 2),   # a battle after the second
+    ])
+    def test_a_skip_stops_where_the_text_ends(self, screens, pressed):
+        agent, pad, muse = self.game([
+            [("press", {"buttons": ["a"] * 6, "skipping": True})],
+            [("finish", {"text": "Skipped."})],
+        ], screens)
+        run(agent.run("skip to the fight"))
+        assert pad.log == ["a"] * pressed
+        result = next(m["content"] for m in muse.seen[-1] if m["role"] == "tool")
+        assert ("stopped skipping" in result) == (pressed < 6), result
 
     def test_holding_a_doesnt_get_around_looking(self):
         agent, pad, _, _, muse = self.make([

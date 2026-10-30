@@ -52,7 +52,7 @@ if (new URLSearchParams(location.search).get("lang") === "ja") {
 const spells = [["Agi", 4, 45], ["Garu", 3, 30], ["Dia", 3, 0]];
 let state = "talk", line = 0, sel = 0, items = [], target = 0, pendingSpell = null;
 const hp = [80, 80];
-let sp = 40;
+let sp = 40, guards = 0;
 const $ = (id) => document.getElementById(id);
 
 function say(name, text) { $("name").textContent = name; $("text").textContent = text; }
@@ -75,7 +75,7 @@ function drawEnemies() {
   publish();
 }
 // The window title carries the game state so tests can check outcomes.
-function publish() { document.title = `Arena A${hp[0]} B${hp[1]} SP${sp} ${state}`; }
+function publish() { document.title = `Arena A${hp[0]} B${hp[1]} SP${sp} ${state}${guards ? ` guarded ${guards}` : ""}`; }
 function command() {
   state = "command"; say("", "Yu's turn. Choose a command.");
   menu(["Attack", "Skill", "Item", "Guard"]);
@@ -106,7 +106,7 @@ function step() {
     const c = items[sel];
     if (c === "Attack") chooseTarget(["Attack", 0, 20]);
     else if (c === "Skill") { state = "skill"; menu(spells.map((s) => `${s[0]}  ${s[1]} SP`)); say("", "Choose a skill."); }
-    else if (c === "Guard") { say("", "Yu braces for an attack."); state = "result"; hideMenu(); }
+    else if (c === "Guard") { guards++; say("", "Yu braces for an attack."); state = "result"; hideMenu(); }
     else say("", "You have no items.");
     return;
   }

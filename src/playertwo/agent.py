@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import openai
+from PIL import Image
 
 from .areamap import AreaMap
 from .controls import BUTTONS, DIRECTIONS, Controls
@@ -157,6 +158,38 @@ WALK_PAUSED = ("didnt_move", "interrupted")
 def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
     """Fraction of the screen that differs between two frames (small thumbnails)."""
     return float((abs(thumb(a.image) - thumb(b.image)) > cell).mean())
+
+
+def skip_grid(f: Frame) -> np.ndarray:
+    """A grey grid fine enough to tell one line of text from the next."""
+    img = f.image.convert("L").resize((192, 108), Image.Resampling.BILINEAR)
+    return np.asarray(img, np.float32) / 255
+
+
+def skip_on(text: tuple | None, before: np.ndarray, after: np.ndarray) -> tuple[tuple | None, str]:
+    """Whether a skip through text should go on after a press (grids from skip_grid).
+
+    Lines of text change the same box on screen each time. When a press changes
+    somewhere outside it (a menu, a Yes/No, a battle's commands) or the whole screen,
+    the text is over and another a would pick something, so the skip stops there.
+    Returns the box the text has used so far (top, bottom, left, right) and why to stop
+    ("" to go on).
+    """
+    moved = abs(after - before) > 0.06
+    if moved.mean() > 0.35:
+        return text, "the whole screen changed"
+    ys, xs = np.nonzero(moved)
+    if not len(ys):
+        return text, ""
+    if text is not None:
+        y0, y1, x0, x1 = text
+        pad = 4
+        inside = np.zeros_like(moved)
+        inside[max(0, y0 - pad):y1 + pad + 1, max(0, x0 - pad):x1 + pad + 1] = True
+        if (moved & ~inside).mean() > 0.004:
+            return text, "something new showed up outside the text"
+        ys, xs = np.r_[ys, y0, y1], np.r_[xs, x0, x1]
+    return (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())), ""
 
 
 def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
@@ -343,23 +376,39 @@ class Agent:
             if str(a.get("say") or "").strip():
                 await self._speak(str(a["say"]))
             held_back = ""
-            if self.look_before_confirm and not (
-                    a.get("skipping") is True and set(buttons) <= {"a", "b", "start"}):
+            skipping = a.get("skipping") is True and set(buttons) <= {"a", "b", "start"}
+            if self.look_before_confirm and not skipping:
                 buttons, held_back = split_before_confirm(buttons)
             gap = max(60, min(int(float(a.get("gap_ms") or 150)), 1000))
             if self.on_action:
                 self.on_action(name, {**a, "buttons": buttons})
+            # A skip watches each press land, and stops when the text is over.
+            watch = skipping and self.look_before_confirm and len(buttons) > 1
+            if watch:
+                noise = await self._noise()
+                before, box = skip_grid(await self.grab()), None
             # One press at a time, so "stop" takes effect between presses.
-            pressed = []
+            pressed, stopped = [], ""
             for i, b in enumerate(buttons):
                 await self.go.wait()
                 if self.cancelled:
                     return f"stopped by the player after {' '.join(pressed) or 'no presses'}"
                 await asyncio.to_thread(self.controls.press, b)
                 pressed.append(b)
-                if i < len(buttons) - 1:
+                if i == len(buttons) - 1:
+                    break
+                if not watch:
                     await asyncio.sleep(gap / 1000)
-            done = f"pressed {' '.join(buttons)}"
+                    continue
+                after = skip_grid(await self._settled(noise))
+                box, stopped = skip_on(box, before, after)
+                if stopped:
+                    break
+                before = after
+            done = f"pressed {' '.join(pressed)}"
+            if stopped:
+                done += (f" and stopped skipping there, {len(pressed)} of {len(buttons)}: "
+                         f"{stopped}. Look before pressing anything else")
             if ignored:
                 done += f" (ignored {', '.join(ignored)}: not buttons)"
             if buttons == ["a"] and not str(a.get("say") or "").strip():
