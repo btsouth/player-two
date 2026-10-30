@@ -609,12 +609,15 @@ class Session:
         await asyncio.sleep(0.15)
         seen = [(time.monotonic(), await self.grab_now())]
         end = time.monotonic() + most
+        calm = 0
         while time.monotonic() < end:
             await asyncio.sleep(0.08)
             now, cur = time.monotonic(), await self.grab_now()
             old = [f for t, f in seen if now - t >= 0.25]
             seen.append((now, cur))
-            if old and screen_change(old[-1], cur) <= 0.004:
+            # A few looks in a row: text can pause a moment mid-line before typing on.
+            calm = calm + 1 if old and screen_change(old[-1], cur) <= 0.004 else 0
+            if calm >= 3:
                 return cur
         return seen[-1][1]
 
