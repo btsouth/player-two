@@ -129,7 +129,7 @@ request = "go through the forest to the castle"
 to = "0x1F0"
 exit = "outside, toward Guardia Castle"
 near = [280, 240]      # the forest's north end on the world map (the south is [280, 280])
-location = "0x1F0"
+location = ["0x1F0", "0x15"]  # out at the north end, or on into the castle (0x15)
 walk_s = 180           # its monsters: a fight or two on the way
 limit_s = 300
 

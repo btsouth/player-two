@@ -217,6 +217,16 @@ class Rooms:
                 _, score, _, (x, y) = cv2.minMaxLoc(r)
                 if score > 0.7:
                     return self._player(v, room, (x0 + x - EDGE, y0 + y - EDGE), score, near)
+            # Further round it before anywhere else: a forest's trees look alike all
+            # over, and a match far off would make the walk jump back and forth.
+            x0, y0 = max(0, near.cam[0] - 120), max(0, near.cam[1] - 120)
+            win = room.image[y0:y0 + t.shape[0] + 2 * EDGE + 240,
+                             x0:x0 + t.shape[1] + 2 * EDGE + 240]
+            if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
+                r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+                _, score, _, (x, y) = cv2.minMaxLoc(r)
+                if score > 0.6:
+                    return self._player(v, room, (x0 + x - EDGE, y0 + y - EDGE), score, near)
         # Everywhere, at half size first, then exactly around the best.
         ts = cv2.resize(t, (t.shape[1] // 2, t.shape[0] // 2), interpolation=cv2.INTER_AREA)
         scores = []

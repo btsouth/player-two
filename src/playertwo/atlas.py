@@ -87,6 +87,15 @@ class WorldMap:
         if self.blocked is None:
             self.blocked = ground(self.image)
 
+    def opens(self, name: str) -> bool:
+        """Whether a place's icon goes in somewhere. On a map whose doors were all tried,
+        no: it doesn't open yet in the story, or it's reached through another place
+        (Guardia Castle through Guardia Forest). Maps without a door survey: yes."""
+        if not self.doors:
+            return True
+        cells = self.entrance(name)
+        return bool(cells) and any(c in self.doors for c in cells)
+
     def learn_step(self, a: tuple[int, int], b: tuple[int, int]) -> None:
         """A step from cell a to cell b that didn't go: route round it from now on."""
         self.no_step.add((a, b))

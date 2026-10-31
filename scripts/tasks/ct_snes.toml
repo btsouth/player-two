@@ -396,3 +396,11 @@ state = "world-12000-late"
 request = "go into the Last Village"
 location = "0x1aa"
 limit_s = 180
+
+[[task]]
+id = "g-castle"
+category = "world trip"
+state = "world-1000-home"
+request = "take me to Guardia Castle"
+location = "0x15"  # the castle; its icon doesn't open: in by Guardia Forest, out its north end
+limit_s = 300

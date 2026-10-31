@@ -1011,6 +1011,9 @@ class Agent:
         m, name = found
         if spot is not None and m.name == spot.map:
             name = nearest_of_kind(m, name, place, (spot.x, spot.y))
+            via = await self._through(m, name, (spot.x, spot.y))
+            if via is not None:  # Guardia Castle: in by Guardia Forest and out its far end
+                return await self._go_through(atlas, m, name, spot, *via)
         walker = self.walker()
 
         async def shoot():
@@ -1084,6 +1087,72 @@ class Agent:
         result = await self._pilot(atlas).go_to_era(era)
         await told
         return result
+
+    async def _through(self, m, name: str, at: tuple[float, float] | None = None
+                       ) -> tuple[str, str] | None:
+        """A place whose icon doesn't open, reached through another place on the map:
+        (that place, its way out by this one), from the room survey."""
+        import math
+
+        if m.opens(name) or getattr(m, "world", None) is None:
+            return None
+        if getattr(self, "_rooms", None) is None:
+            from .rooms import Rooms
+
+            self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
+        if self._rooms is None:
+            return None
+        goal = m.places[name]
+        best = None
+        for room in self._rooms.rooms.values():
+            via = next((p for p in m.places if p != name and (cells := m.entrance(p))
+                        and any(m.doors.get(c) == room.loc for c in cells)), None)
+            if via is None:
+                continue
+            for e in room.exits:
+                if e.to == m.world and any(e.at) and math.dist(e.at, goal) < 80:
+                    d = math.dist(e.at, goal)
+                    if best is None or d < best[0]:
+                        best = (d, via, e.label)
+        if best is None or (at is not None and math.dist(at, goal) < best[0] + 40):
+            return None  # already on its side (come out of the forest's far end)
+        return best[1], best[2]
+
+    async def _go_through(self, atlas, m, name: str, spot, via: str, way_out: str) -> str:
+        """Into `via` on the map, out of it by `way_out`, and on to `name`."""
+        from .atlas import walk_to
+
+        walker = self.walker()
+
+        async def shoot():
+            return (await self.grab()).image
+
+        async def keep_going():
+            return await self.walker_keep_going()
+
+        told = asyncio.create_task(self._speak(f"Going to {name}, through {via}."))
+        try:
+            first = await walk_to(atlas, m, via, shoot, self.controls.steer,
+                                  self.controls.press, keep_going, walker.log, 90.0, spot)
+            if not first.startswith("arrived"):
+                return f"on the way to {name}, which is reached through {via}: {first}"
+            await asyncio.sleep(1.0)  # the fade into it
+            out = await self._go_to_exit(way_out, 180.0)  # a fight or two on the way
+            if not out.startswith("arrived"):
+                return (f"in {via} on the way to {name} (out by {way_out!r}, then a short "
+                        f"walk): {out}")
+            await asyncio.sleep(1.0)
+            self._last_spot = None
+            last = await walk_to(atlas, m, name, shoot, self.controls.steer,
+                                 self.controls.press, keep_going, walker.log, 60.0)
+        finally:
+            await told
+        if last.startswith("arrived"):
+            await self._speak(f"We're at {name}.")
+            last += (f'. The player has heard "Going to {name}, through {via}." and "We\'re '
+                     f'at {name}." Add one short line only if something on screen needs '
+                     "them; otherwise finish.")
+        return f"through {via}, then {last}"
 
     async def _inside(self, image):
         """(rooms, where) when the screen is inside a place the room survey knows."""

@@ -554,12 +554,7 @@ async def pick_place(muse, game: str, said: str, maps: list, aliases: dict[str, 
     for k, v in (hints or {}).items():
         known.setdefault(k, set()).update(h for h in v if not town(h))
     def shut(m, n: str) -> bool:
-        """On a map whose doors were all tried: no door of this place went anywhere (it
-        doesn't open yet in the story, or it's scenery)."""
-        if not getattr(m, "doors", None):
-            return False
-        cells = m.entrance(n)
-        return not cells or not any(c in m.doors for c in cells)
+        return hasattr(m, "opens") and not m.opens(n)
 
     lines = []
     for m in maps:
