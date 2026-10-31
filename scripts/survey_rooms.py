@@ -5,7 +5,8 @@ where the character and the camera are. src/playertwo/rooms.py finds the player 
 pictures and walks the ground to a named way out.
 
     python scripts/survey_rooms.py scripts/tasks/ct_rooms.toml --door 0x1 [--follow 0x2]
-        [--box 11] [--speed 2] [--minutes 8]
+        [--box 11] [--speed 2] [--minutes 8] [--diagonal]
+    python scripts/survey_rooms.py scripts/tasks/ct_rooms.toml --state STATE --follow 0x188
     python scripts/survey_rooms.py scripts/tasks/ct_rooms.toml --names     # Muse, no box
     python scripts/survey_rooms.py scripts/tasks/ct_rooms.toml --sprites   # the player's look
 
@@ -52,8 +53,16 @@ from playertwo.atlas import ATLASES, slug
 TILE = 16  # field maps are made of 16-pixel tiles
 SPEED = 2.0
 DIRS = {(0, -1): ["Up"], (1, 0): ["Right"], (0, 1): ["Down"], (-1, 0): ["Left"]}
+# With --diagonal, the ways between too: ground only walked slantwise (the Mountain of
+# Woe's chain bridges) is tried as well, after the four straight ways.
+DIAGONALS = {(1, -1): ["Up", "Right"], (1, 1): ["Down", "Right"], (-1, 1): ["Down", "Left"],
+             (-1, -1): ["Up", "Left"]}
 TOP = 8  # the emulator's raw frame has 8 blank lines above the picture
 HIGH = 208  # and the game draws a field 211 lines high: the rest of the 224 is black
+# With --moving-ground: places whose ground never stands still (the Mountain of Woe's
+# drifting mist) keep a frame that doesn't settle if the view didn't move while it was
+# taken; the picture's middle value over several such frames is the ground.
+MOVING = False
 
 
 def secs(s: float) -> float:
@@ -207,7 +216,8 @@ class Shots:
                 break
             a = b
         else:
-            return
+            if not MOVING:
+                return
         if a.shape[0] < TOP + 224 or cam() != c:
             return
         f = b[TOP:TOP + HIGH]
@@ -471,7 +481,7 @@ class RoomSurvey:
                     g.hold([])
                     d = ((1 if "Right" in keys else -1 if "Left" in keys else 0),
                          (1 if "Down" in keys else -1 if "Up" in keys else 0))
-                    if abs(d[0]) + abs(d[1]) == 1:
+                    if d != (0, 0) and d in DIRS:
                         self.went_out(tile_of(last), d)
                     else:
                         self.reload()
@@ -946,6 +956,10 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true",
                     help="carry on from what an earlier survey of a place found")
     ap.add_argument("--keep-up", action="store_true")
+    ap.add_argument("--moving-ground", action="store_true",
+                    help="keep frames whose ground never settles (drifting mist)")
+    ap.add_argument("--diagonal", action="store_true",
+                    help="try the four slanting ways too (chain bridges, slopes)")
     args = ap.parse_args()
     spec = tomllib.loads(args.tasks.read_text())
     gspec = spec["game"]
@@ -993,8 +1007,11 @@ def main() -> None:
         (folder / "names.json").write_text(json.dumps({"names": every, "worlds": worlds},
                                                       indent=1))
         return
-    global SPEED
+    global SPEED, MOVING
     SPEED = args.speed
+    MOVING = args.moving_ground
+    if args.diagonal:
+        DIRS.update(DIAGONALS)
     ram = {k: int(v, 16) if isinstance(v, str) else v for k, v in gspec["ram"].items()}
     box = Box(args.box, gspec)
     states = Path(gspec["states"]).expanduser() / "rooms"
