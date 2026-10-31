@@ -297,6 +297,12 @@ def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
     return buttons, ""
 
 
+# A plain request to go somewhere: on a world map the atlas knows, it's walked at once.
+TRIP = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|us) |"
+                  r"(?:let'?s |please )?(?:go|head|walk|run) )(?:back )?(?:over )?"
+                  r"(?:in)?to (?P<place>.{3,60})")
+
+
 @dataclass
 class Step:
     tool: str
@@ -801,22 +807,26 @@ class Agent:
 
         return Progress.load(self.notes.folder, self.game or "")
 
-    async def _on_surveyed_map(self) -> str:
-        """When the screen is a world map the atlas has walked (surveyed), the way to
-        go anywhere on it is go_to_place: walking by sight there goes astray."""
+    async def _the_atlas(self):
+        """The game's atlas, loaded once (its map pictures take a moment), or None."""
         from .atlas import Atlas
 
         game = self.game or ""
         if getattr(self, "_atlas_game", None) != game:
+            self._atlas = await asyncio.to_thread(Atlas.for_game, game)
             self._atlas_game = game
-            self._atlas = await asyncio.to_thread(Atlas.for_game, game) \
-                if Atlas.folder_for(game) else None
-        if self._atlas is None:
+        return self._atlas
+
+    async def _on_surveyed_map(self) -> str:
+        """When the screen is a world map the atlas has walked (surveyed), the way to
+        go anywhere on it is go_to_place: walking by sight there goes astray."""
+        atlas = await self._the_atlas()
+        if atlas is None:
             return ""
-        spot = await self._spot(self._atlas, (await self.grab()).image)
+        spot = await self._spot(atlas, (await self.grab()).image)
         if spot is None or spot.margin < 0.1:
             return ""
-        m = self._atlas.map(spot.map)
+        m = atlas.map(spot.map)
         if not m.surveyed:
             return ""
         return (f"Not done: this is the {m.name} world map, where walking by sight goes "
@@ -835,7 +845,7 @@ class Agent:
         from . import atlas as atlas_mod
         from .quests import where_text
 
-        atlas = atlas_mod.Atlas.for_game(self.game or "")
+        atlas = await self._the_atlas()
         if atlas is None:
             return "no atlas for this game: answer from the screen"
         image = (await self.grab()).image
@@ -862,7 +872,6 @@ class Agent:
 
     async def _next_goal(self, step: int = 0, player_says: str = "") -> str:
         """What to do next, from the quest list and where the player seems to be in it."""
-        from .atlas import Atlas
         from .quests import Guess, Quests, place_in_story, tell
 
         quests = Quests.for_game(self.game or "")
@@ -875,7 +884,7 @@ class Agent:
             progress.save(self.notes.folder, self.game or "")
             return tell(quests, Guess(step, "high", "the player confirmed it", ask=False))
         image = (await self.grab()).image
-        atlas = Atlas.for_game(self.game or "")
+        atlas = await self._the_atlas()
         spot = await self._spot(atlas, image)
         era = near = ""
         if spot is not None:
@@ -897,10 +906,10 @@ class Agent:
         """Walk to a named place on a world map by the game's atlas (see atlas.walk_to).
         Which place the player means is Muse's pick from the map's names and the other
         names the walkthrough uses for them, not shared words ("Truce" isn't Truce Inn)."""
-        from .atlas import Atlas, walk_to
+        from .atlas import walk_to
         from .quests import Quests, atlas_aliases, pick_place
 
-        atlas = Atlas.for_game(self.game or "")
+        atlas = await self._the_atlas()
         if atlas is None:
             return "no atlas for this game: use travel and the guide instead"
         spot = await self._spot(atlas, (await self.grab()).image)
@@ -1155,6 +1164,21 @@ class Agent:
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
         frame = frame or await self.grab()
+        tried = ""
+        trip = TRIP.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
+        if trip and await self._on_surveyed_map():
+            # "Take me to the fair" on a world map the atlas knows: go now, without a
+            # model turn first (the player hears it set off in a second or two).
+            result = await self._act("go_to_place", {"place": trip.group("place")})
+            run.steps.append(Step("go_to_place", {"place": trip.group("place")},
+                                  time.monotonic() - t0, result))
+            if result.startswith("arrived") or self.cancelled:
+                run.outcome = self.said[-1] if self.said else result
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
+            frame = await self.grab()
+            tried = f"go_to_place({trip.group('place')!r}) was tried already: {result}\n\n"
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
         trail = self.trail.notes()
         msgs: list[dict] = [
@@ -1162,7 +1186,7 @@ class Agent:
             {"role": "user", "content": [
                 image_part(frame.image, self.muse.s.image_max_side),
                 {"type": "text", "text": (f"Earlier requests:\n{recent}\n\n" if recent else "")
-                 + (f"{trail}\n\n" if trail else "")
+                 + (f"{trail}\n\n" if trail else "") + tried
                  + f'The player says: "{request}"'},
             ]},
         ]
