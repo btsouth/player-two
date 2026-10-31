@@ -1,0 +1,9 @@
+# Dragon Quest I (the I & II SNES remake, fan translation), for world-map tasks in a game
+# Player Two isn't tuned on. States are RetroArch save states, kept outside the repo.
+
+[game]
+name = "Dragon Quest I & II (SNES)"
+core = "/usr/lib/libretro/snes9x_libretro.so"
+core_name = "Snes9x"
+rom = "/data/Emulation/Games/SNES/Dragon Quest I & II (English Translated by RPGOne, Rev 2 With Bugfixes by Rod Merida, Rev 1.053rtm).sfc"
+states = "~/.cache/player-two/emu/states/dq1"

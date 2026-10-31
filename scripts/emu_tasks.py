@@ -76,8 +76,11 @@ class Box:
     def up(self) -> None:
         sh("omabox", "down", "-b", self.name, timeout=60)
         (EMU / f"port-{self.port}.cfg").write_text(f'network_cmd_port = "{self.port}"\n')
-        guides = Path.home() / ".config/player-two/guides"  # the player's walkthroughs
-        seed = ["--seed", f"{guides}:.config/player-two/guides"] if guides.is_dir() else []
+        seed = []  # the player's walkthroughs and map atlases
+        for kind in ("guides", "atlas"):
+            d = Path.home() / ".config/player-two" / kind
+            if d.is_dir():
+                seed += ["--seed", f"{d}:.config/player-two/{kind}"]
         out = sh("omabox", "up", self.name, "--ro-bind", str(self.rom.parent),
                  "--ro-bind", str(EMU), "--ro-bind", str(ROOT), *seed, timeout=180)
         if f"box '{self.name}' up" not in out:
@@ -162,7 +165,16 @@ def do(box: Box, request: str, limit: float, answers: list[str]) -> dict | None:
         asks = [e for e in evs if e["kind"] == "ask"]
         if len(asks) > answered:
             answered += 1
-            box.p2("do", answers.pop(0) if answers else "yes")
+            answer = answers.pop(0) if answers else "yes"
+            # Make sure it was heard: a busy session can miss the control command.
+            for _ in range(5):
+                n = len(box.events())
+                out = box.p2("do", answer)
+                if wait_for(lambda n=n: any(e["kind"] == "heard"
+                                            for e in box.events()[n:]), 5, 0.5):
+                    break
+                print(f"{box.name}: answer {answer!r} not heard ({out.strip()[:120]})",
+                      flush=True)
         time.sleep(1)
     box.p2("stop")
     wait_for(lambda: any(e["kind"] == "agent" for e in box.events()[seen:]), 30)
@@ -204,6 +216,31 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
     return r
 
 
+def make_state(game: dict, states: Path, name: str, start: str | None,
+               requests: list[str], n: int) -> None:
+    """Play from a state (or power-on) by Player Two's requests and save where it ends."""
+    box = Box(n, game)
+    box.up()
+    try:
+        if start:
+            box.load(states / f"{start}.state")
+        box.start_p2()
+        for req in requests:
+            run = do(box, req, 600, [])
+            print(f"{req!r}: {(run or {}).get('outcome', 'timed out')}", flush=True)
+        box.cmd("SAVE_STATE", wait=0.5)
+        time.sleep(2)
+        made = box.home / ".config/retroarch/states" / game["core_name"] / \
+            f"{box.rom.stem}.state"
+        states.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(made, states / f"{name}.state")
+        shot = box.shot(states / f"{name}.png")
+        print(f"saved {states / f'{name}.state'}; look: {shot}")
+    finally:
+        box.p2("quit", timeout=10)
+        box.down()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("tasks", type=Path)
@@ -213,12 +250,17 @@ def main() -> None:
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--only", nargs="*", default=[])
     p.add_argument("--out", type=Path)
+    p.add_argument("--make-state", metavar="NAME",
+                   help="instead of tasks: play to a point and save a state there, from "
+                        "--from (a state) or power-on, by the --do requests")
+    p.add_argument("--from", dest="start", metavar="STATE")
+    p.add_argument("--do", nargs="*", default=[], help="requests, in order")
     args = p.parse_args()
 
     spec = tomllib.loads(args.tasks.read_text())
     game = spec["game"]
     states = Path(game["states"]).expanduser()
-    tasks = [t for t in spec["task"] if not args.only or t["id"] in args.only]
+    tasks = [t for t in spec.get("task", []) if not args.only or t["id"] in args.only]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = args.out or Path.home() / ".cache/player-two/tasks/runs" / f"emu-{stamp}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -227,6 +269,9 @@ def main() -> None:
     os.environ["MODEL_API_KEY"] = api_key()  # passed into each box, never printed
     os.environ.setdefault("PLAYER_TWO_KEYMAP", KEYMAP)
     os.environ["PLAYER_TWO_KEYS"] = "hyprland"
+    if args.make_state:
+        return make_state(game, states, args.make_state, args.start, args.do,
+                          args.first_box)
 
     work: queue.Queue = queue.Queue()
     for n in range(args.repeat):

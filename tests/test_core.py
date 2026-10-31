@@ -244,6 +244,7 @@ class TestAgent:
     def test_gives_up_after_max_turns(self):
         agent, _, said, _, _ = self.make([[("press", {"buttons": ["a"]})]] * 10)
         agent.max_turns = 3
+        agent.ask = None  # nobody to say keep going
         result = run(agent.run("loop forever"))
         assert result.outcome == "gave up"
         assert "couldn't finish" in said[-1]
@@ -822,3 +823,25 @@ def test_hyprland_keys_hold_and_let_go_by_key_state(monkeypatch):
     keys.steer(90.0)  # still right: nothing new
     keys.steer(None)
     assert sent == [("Return", "down"), ("Return", "up"), ("Right", "down"), ("Right", "up")]
+
+
+def test_out_of_steps_without_asking_still_asks_the_player():
+    agent, pad, _, _, _ = TestAgent().make([
+        [("press", {"buttons": ["left"]})],
+        [("press", {"buttons": ["down"]})],
+        [("press", {"buttons": ["down"]})],
+        [("press", {"buttons": ["up"]})],   # its last turn: it doesn't ask or finish
+        [("press", {"buttons": ["right"]})],
+        [("finish", {"text": "There."})],
+    ])
+    agent.max_turns = 4
+    asked = []
+
+    async def ask(question):
+        asked.append(question)
+        return "yes"
+
+    agent.ask = ask
+    result = run(agent.run("go there"))
+    assert asked and "keep going" in asked[0]
+    assert pad.log == ["left", "down", "down", "right"] and result.outcome == "There."

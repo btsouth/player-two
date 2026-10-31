@@ -93,6 +93,17 @@ TOOLS = [
                         "default 3."},
         }, "required": ["direction"]}}},
     {"type": "function", "function": {
+        "name": "go_to_place",
+        "description": "On a world map, go to a named place with the game's atlas (its "
+                       "maps, if the player has them): it knows exactly where you are and "
+                       "where the place is, walks the way there around water and forest, "
+                       "and goes in. Use it first for any 'take me to X' on a world map; "
+                       "with no atlas or no such place it says so and lists the places.",
+        "parameters": {"type": "object", "properties": {
+            "place": {"type": "string", "description": "The place's name, as the "
+                      "player said it."},
+        }, "required": ["place"]}}},
+    {"type": "function", "function": {
         "name": "guide",
         "description": "Look something up in this game's walkthrough, if the player has "
                        "one: where a place is and how to get there, what to do next, how a "
@@ -637,6 +648,15 @@ class Agent:
             steps = walker.travel / walker.size if walker.size else None
             self.trail.add(f"walk_to_map {label}", walked.outcome, steps)
             return walked.text()
+        if name == "go_to_place":
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            try:
+                return await self._go_to_place(str(a.get("place") or ""))
+            except WALK_ERRORS as exc:
+                self.controls.steer(None)
+                return f"walking failed ({exc})"
         if name == "guide":
             from .guide import look_up
 
@@ -680,6 +700,29 @@ class Agent:
                 self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
             return went.text(direction.replace("_", " and "))
         return "ok"
+
+    async def _go_to_place(self, place: str, limit: float = 90.0) -> str:
+        """Walk to a named place on a world map by the game's atlas (see atlas.walk_to)."""
+        from .atlas import Atlas, walk_to
+
+        atlas = Atlas.for_game(self.game or "")
+        if atlas is None:
+            return "no atlas for this game: use travel and the guide instead"
+        found = atlas.find_place(place)
+        if found is None:
+            names = sorted({n for m in atlas.maps for n in m.places})
+            return f"no place called {place!r} in the atlas; places: {', '.join(names)}"
+        m, name = found
+        walker = self.walker()
+
+        async def shoot():
+            return (await self.grab()).image
+
+        async def keep_going():
+            return await self.walker_keep_going()
+
+        return await walk_to(atlas, m, name, shoot, self.controls.steer,
+                             self.controls.press, keep_going, walker.log, limit)
 
     async def _travel(self, direction: str, target: str, secs: float) -> str:
         """Head `direction` across a scrolling map until `target` is in sight. The view
@@ -917,7 +960,9 @@ class Agent:
                 if finished is not None:
                     result = "ignored: it came after finish"
                 elif last_turn and c.function.name not in ("finish", "ask_player"):
-                    result = "not done: only finish is left now"
+                    result = ("not done: you're out of steps; ask_player whether to keep "
+                              "going, or finish" if self.ask else
+                              "not done: only finish is left now")
                 elif c.function.name == "finish" and acted:
                     # It hasn't seen what its presses did: no telling the player yet.
                     result = "not finished: look at the screen after those actions first"
@@ -980,6 +1025,17 @@ class Agent:
                 run.outcome = finished or (self.said[-1] if self.said else "done")
                 out_of_turns = False
                 break
+            if last_turn and self.ask is not None and not self.cancelled and not any(
+                    c.function.name == "ask_player" for c in calls):
+                # Out of steps and not done: the player says whether it's worth more.
+                answer = await self.ask("This is taking a lot of steps and I'm not there "
+                                        "yet. Should I keep going?")
+                if answer and not re.match(r"\s*(no|nope|stop|don't|do not|cancel)\b",
+                                           answer.lower()):
+                    budget = max(budget, _turn + 1 + self.max_turns // 2)
+                    msgs.append({"role": "user", "content": (
+                        "You were out of steps, so the player was asked whether to keep "
+                        f'going. They said: "{answer}". Carry on.')})
             turn["act_s"] = round(time.monotonic() - t_act, 2)
             t_look = time.monotonic()
             # After a say too: the model may be waiting for text still typing out.

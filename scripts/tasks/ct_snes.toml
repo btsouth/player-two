@@ -116,3 +116,60 @@ state = "new-game-bedroom"
 request = "find the item shop in Truce village and talk to the shopkeeper. It's the market in the village, not the inn"
 check = "a shop menu (items and prices) or a shopkeeper's lines are showing, in a shop rather than an inn"
 limit_s = 480
+
+# From the world map outside Crono's house (state world-1000-home).
+[[task]]
+id = "w-leene"
+category = "world map"
+state = "world-1000-home"
+request = "take me to Leene Square"
+check = "Crono is in Leene Square (the Millennial Fair): tents, stalls and people around him, not the world map"
+limit_s = 240
+
+[[task]]
+id = "w-market"
+category = "world map"
+state = "world-1000-home"
+request = "take me to the Truce market"
+check = "Crono is inside a market or shop (a counter, shelves, a shopkeeper) in Truce, not the world map"
+limit_s = 240
+
+[[task]]
+id = "w-lucca"
+category = "world map"
+state = "world-1000-home"
+request = "take me to Lucca's house"
+check = "Crono is inside Lucca's house (machines, pipes or a workshop), not the world map"
+limit_s = 300
+
+[[task]]
+id = "w-inn"
+category = "world map"
+state = "world-1000-home"
+request = "take me to the Truce Inn"
+check = "Crono is inside an inn (a counter, beds or tables, an innkeeper), not the world map"
+limit_s = 240
+
+[[task]]
+id = "w-manor"
+category = "world map"
+state = "world-1000-home"
+request = "take me to the mayor's manor in Truce"
+check = "Crono is inside a large manor house (the mayor's manor), not the world map"
+limit_s = 240
+
+[[task]]
+id = "w-forest"
+category = "world map"
+state = "world-1000-home"
+request = "take me into Guardia Forest"
+check = "Crono is inside Guardia Forest: among trees on a forest path, a closer view than the world map"
+limit_s = 300
+
+[[task]]
+id = "w-zenan"
+category = "world map"
+state = "world-1000-home"
+request = "take me to Zenan Bridge"
+check = "Crono is at Zenan Bridge: on or right at a long bridge, either on the world map at its end or on the bridge itself"
+limit_s = 300
