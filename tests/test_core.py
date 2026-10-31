@@ -845,3 +845,13 @@ def test_out_of_steps_without_asking_still_asks_the_player():
     result = run(agent.run("go there"))
     assert asked and "keep going" in asked[0]
     assert pad.log == ["left", "down", "down", "right"] and result.outcome == "There."
+
+
+def test_a_game_pack_is_shared_by_every_version_of_the_game(tmp_path):
+    from playertwo.notes import GameNotes
+
+    (tmp_path / "chrono-trigger.pack.txt").write_text("- L and R together runs.\n")
+    notes = GameNotes(tmp_path)
+    assert "L and R together runs" in notes.prompt("Chrono Trigger (SNES)")
+    assert "game pack" in notes.prompt("Chrono Trigger")
+    assert notes.prompt("Other Game") == ""

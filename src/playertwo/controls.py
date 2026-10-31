@@ -39,6 +39,16 @@ class Controls:
         go. For walking somewhere in a loop that keeps correcting the direction."""
         raise NotImplementedError
 
+    def chord(self, buttons: list[str], ms: int) -> None:
+        """Hold several buttons down together (L and R at once to run from a fight)."""
+        import threading
+
+        threads = [threading.Thread(target=self.press, args=(b, ms)) for b in buttons]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
     def sequence(self, buttons: list[str], gap_ms: int = 140, hold_ms: int = 100) -> None:
         for i, b in enumerate(buttons):
             self.press(b, hold_ms)
@@ -59,6 +69,9 @@ class DryRun(Controls):
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         self.log.append(f"{which}:{direction}:{ms}")
+
+    def chord(self, buttons: list[str], ms: int) -> None:
+        self.log.append(f"chord:{'+'.join(buttons)}:{ms}")
 
     def steer(self, angle: float | None, strength: float = 1.0) -> None:
         self.log.append("steer:off" if angle is None else f"steer:{round(angle)}")
@@ -104,26 +117,28 @@ class LinuxPad(Controls):
     def _syn(self) -> None:
         self.ui.syn()
 
-    def press(self, button: str, hold_ms: int = 100) -> None:
+    def _set(self, button: str, down: bool) -> None:
         e = self.e
         if button in self.keys:
-            self.ui.write(e.EV_KEY, self.keys[button], 1)
-            self._syn()
-            time.sleep(hold_ms / 1000)
-            self.ui.write(e.EV_KEY, self.keys[button], 0)
+            self.ui.write(e.EV_KEY, self.keys[button], int(down))
         elif button in self.hats:
             axis, v = self.hats[button]
-            self.ui.write(e.EV_ABS, axis, v)
-            self._syn()
-            time.sleep(hold_ms / 1000)
-            self.ui.write(e.EV_ABS, axis, 0)
+            self.ui.write(e.EV_ABS, axis, v if down else 0)
         elif button in self.triggers:
-            self.ui.write(e.EV_ABS, self.triggers[button], 255)
-            self._syn()
-            time.sleep(hold_ms / 1000)
-            self.ui.write(e.EV_ABS, self.triggers[button], 0)
+            self.ui.write(e.EV_ABS, self.triggers[button], 255 if down else 0)
         else:
             raise ValueError(f"unknown button {button}")
+
+    def press(self, button: str, hold_ms: int = 100) -> None:
+        self.chord([button], hold_ms)
+
+    def chord(self, buttons: list[str], ms: int) -> None:
+        for b in buttons:
+            self._set(b, True)
+        self._syn()
+        time.sleep(ms / 1000)
+        for b in buttons:
+            self._set(b, False)
         self._syn()
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
@@ -178,18 +193,25 @@ class WindowsPad(Controls):
                      "up": B.XUSB_GAMEPAD_DPAD_UP, "down": B.XUSB_GAMEPAD_DPAD_DOWN,
                      "left": B.XUSB_GAMEPAD_DPAD_LEFT, "right": B.XUSB_GAMEPAD_DPAD_RIGHT}
 
-    def press(self, button: str, hold_ms: int = 100) -> None:
+    def _set(self, button: str, down: bool) -> None:
         if button in ("lt", "rt"):
             setter = self.pad.left_trigger if button == "lt" else self.pad.right_trigger
-            setter(255)
-            self.pad.update()
-            time.sleep(hold_ms / 1000)
-            setter(0)
-        else:
+            setter(255 if down else 0)
+        elif down:
             self.pad.press_button(self.keys[button])
-            self.pad.update()
-            time.sleep(hold_ms / 1000)
+        else:
             self.pad.release_button(self.keys[button])
+
+    def press(self, button: str, hold_ms: int = 100) -> None:
+        self.chord([button], hold_ms)
+
+    def chord(self, buttons: list[str], ms: int) -> None:
+        for b in buttons:
+            self._set(b, True)
+        self.pad.update()
+        time.sleep(ms / 1000)
+        for b in buttons:
+            self._set(b, False)
         self.pad.update()
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
@@ -261,6 +283,11 @@ class WaylandKeys(Controls):
     def press(self, button: str, hold_ms: int = 100) -> None:
         key = self.map[button]
         self._run("-P", key, "-s", str(hold_ms), "-p", key)
+
+    def chord(self, buttons: list[str], ms: int) -> None:
+        keys = [self.map[b] for b in buttons]
+        self._run(*[a for k in keys for a in ("-P", k)], "-s", str(ms),
+                  *[a for k in keys for a in ("-p", k)])
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         keys = [self.STICK[d] for d in direction.split("_")]
@@ -400,12 +427,17 @@ class WindowsKeys(Controls):
             raise ControlsError("SendInput sent no keys", say=BLOCKED)
 
     def press(self, button: str, hold_ms: int = 100) -> None:
-        key = self.map[button]
+        self.chord([button], hold_ms)
+
+    def chord(self, buttons: list[str], ms: int) -> None:
+        keys = [self.map[b] for b in buttons]
         if self.focus:
             self.focus()
-        self._key(key, False)
-        time.sleep(hold_ms / 1000)
-        self._key(key, True)
+        for k in keys:
+            self._key(k, False)
+        time.sleep(ms / 1000)
+        for k in keys:
+            self._key(k, True)
 
     def stick(self, which: str, direction: str, ms: int, strength: float = 1.0) -> None:
         keys = [WaylandKeys.STICK[d] for d in direction.split("_")]

@@ -73,10 +73,10 @@ limit_s = 180
 [[task]]
 id = "b-item"
 category = "item"
-state = "battle-guardia-600"
+state = "battle-guardia-600-hurt"
 request = "use an item"
-answers = ["a tonic on Crono"]
-ram_check = ["item", "acts<=2"]
+answers = ["a tonic on Marle"]
+ram_check = ["item", "healed:Marle", "acts<=2"]
 limit_s = 180
 
 [[task]]
@@ -118,7 +118,7 @@ limit_s = 480
 id = "b-attack-eye"
 category = "attack"
 state = "battle-ocean-palace"
-request = "attack the flying eyeball on the left"
+request = "attack the Scouter on the left"
 ram_check = ["hit:7", "acts<=2"]
 limit_s = 180
 

@@ -37,6 +37,10 @@ TOOLS = [
             "say": {"type": "string", "description": "Said out loud before pressing: the "
                     "dialogue line on screen (who, then the line word for word) when a "
                     "moves it on, so it's one step."},
+            "battle": {"type": "boolean", "description": "true for a command in a fight's "
+                       "menus, cursor moves and confirms together (a then a to attack the "
+                       "highlighted enemy): the fight goes on while you look, so a command is "
+                       "one press. Not for dialogue or other menus."},
             "skipping": {"type": "boolean", "description": "true only when the player asked "
                          "to skip or fast-forward text or a cutscene: then a can be pressed "
                          "several times. Otherwise any a after another press waits for you to "
@@ -46,12 +50,16 @@ TOOLS = [
         "name": "hold",
         "description": "Hold a button or d-pad direction for a while (2D games walk with "
                        "the d-pad), or push a stick in a direction (3D games walk with the "
-                       "left stick).",
+                       "left stick); or several buttons down at once with `together` (lb and "
+                       "rb held together runs from a fight in Chrono Trigger).",
         "parameters": {"type": "object", "properties": {
             "input": {"type": "string", "enum": ["left_stick", "right_stick", *AGENT_BUTTONS]},
+            "together": {"type": "array", "items": {"type": "string", "enum": AGENT_BUTTONS},
+                         "description": "Buttons held down at the same time (then input is "
+                         "ignored). Holding one and then the other isn't the same."},
             "direction": {"type": "string", "enum": list(DIRECTIONS)},
             "ms": {"type": "integer", "description": "How long, in milliseconds (max 5000)."},
-        }, "required": ["input", "ms"]}}},
+        }, "required": ["ms"]}}},
     {"type": "function", "function": {
         "name": "walk_to",
         "description": "Walk the player's character to something you can see on screen: "
@@ -543,7 +551,8 @@ class Agent:
                 await self._speak(str(a["say"]))
             held_back = ""
             skipping = a.get("skipping") is True and set(buttons) <= {"a", "b", "start"}
-            if self.look_before_confirm and not skipping:
+            battle = a.get("battle") is True and "start" not in buttons
+            if self.look_before_confirm and not skipping and not battle:
                 buttons, held_back = split_before_confirm(buttons)
             gap = max(60, min(int(float(a.get("gap_ms") or 150)), 1000))
             if self.on_action:
@@ -577,7 +586,7 @@ class Agent:
                          f"{stopped}. Look before pressing anything else")
             if ignored:
                 done += f" (ignored {', '.join(ignored)}: not buttons)"
-            if buttons == ["a"] and not str(a.get("say") or "").strip():
+            if buttons == ["a"] and not battle and not str(a.get("say") or "").strip():
                 # The player can't read along: a text box skipped is story lost.
                 done += (". If a new line of dialogue shows now, say it word for word "
                          "(who, then the line) before pressing again.")
@@ -598,7 +607,13 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             ms = max(50, min(int(float(a.get("ms") or 500)), 5000))
-            inp = a.get("input") or "left_stick"
+            together = [b for b in (a.get("together") or []) if b in AGENT_BUTTONS]
+            if len(together) >= 2:
+                if "a" in together and self.look_before_confirm:
+                    return "not held: a held with others confirms what the player can't read"
+                await asyncio.to_thread(self.controls.chord, together, ms)
+                return f"held {' and '.join(together)} together for {ms} ms"
+            inp = a.get("input") or (together[0] if together else "left_stick")
             if ms >= 400 and (inp in ANGLES or inp.endswith("_stick")) and \
                     time.monotonic() > getattr(self, "_map_free_until", 0.0):
                 on_map = await self._on_surveyed_map()

@@ -122,17 +122,22 @@ character often has a name they chose.
 - Naming screens: to keep the name shown, move the cursor off the name box to Accept \
 (or OK, End, Done) and press a there. Never press a on the name box itself: some games \
 then wait for a real keyboard, and the controller can't get out.
-- In battle, check the party's health numbers on every screen. One action the player \
-names ("cast Agi on the left one", "attack", "guard") is one turn: do it, see it land, \
-then finish with what happened; the next turn is theirs to call. Only when they hand \
-you the whole fight ("win this", "fight for me", "keep attacking") take turns until it \
-ends, and then ask once at the start what to do if someone gets low (unless they \
-said), so you don't have to stop mid-fight. If anyone is knocked out or under about a third of \
-their health and the player hasn't said what to do then, stop and tell them who and how \
-low, and ask (heal, guard, escape), even in the middle of a longer request. Never turn \
-on auto-battle when anyone is low. If enemies act while you think (a gauge filling, \
-attacks coming between your turns), you are too slow for that: the first time, tell \
-the player and offer to set the game's battle mode to wait (or the slowest battle \
+- In battle, check the party's health numbers on every screen, and be quick: the fight \
+goes on while you think. Put a whole command in one press with battle true (the cursor \
+moves and the confirms: open Attack, pick the enemy, confirm), look once to see it land, \
+then say what happened in a few words. One action the player names ("attack the one on \
+the left", "heal Marle", "use Cyclone") is one command: do it and finish; the next turn is \
+theirs to call. If the enemy they named isn't the one highlighted, move the cursor and \
+look before confirming. Only when they hand you the whole fight ("win this", "fight for \
+me", "keep attacking") take turns until it ends, without asking first: heal anyone under \
+about a third of their health when a healing tech or item is there, otherwise attack. \
+Stop and ask only when someone is knocked out and you have nothing to revive them. To run \
+from a fight, hold the game's run buttons down together with hold's together (Chrono \
+Trigger: lb and rb for about three seconds) and look; some fights can't be run from. If \
+another character's commands come up before the one the player named, pick the named \
+one's commands if the game lets you (another column, a button that changes who acts); \
+if not, wait a second and look, without asking. If enemies act while you think and the party is losing to it, tell \
+the player once and offer to set the game's battle mode to wait (or the slowest battle \
 speed) in its settings menu, then remember it.
 - When you learn something about this game that will help next time (a control, how \
 its menus or battles work, where a place or person is), remember it, in a few words.

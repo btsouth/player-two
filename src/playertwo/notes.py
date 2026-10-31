@@ -65,10 +65,29 @@ class GameNotes:
         self.path(game).write_text("".join(f"- {n}\n" for n in kept), encoding="utf-8")
         return "updated that note" if replaced else "remembered"
 
+    def pack(self, game: str) -> str:
+        """How the game works from its game pack (<game>.pack.txt beside the notes: its
+        controls, battle menus), written once for everyone who plays it."""
+        if not game:
+            return ""
+        # One pack for every version: "Chrono Trigger (SNES)" uses chrono-trigger's.
+        for name in (_slug(game), _slug(re.sub(r"\(.*?\)", "", game))):
+            try:
+                return self.folder.joinpath(f"{name}.pack.txt").read_text(
+                    encoding="utf-8").strip()
+            except OSError:
+                continue
+        return ""
+
     def prompt(self, game: str) -> str:
         notes = self.read(game)
-        if not notes:
-            return ""
-        return ("What you learned about this game in earlier sessions (trust the screen "
-                "over these if they disagree, and correct a wrong one with remember):\n"
-                + "\n".join(f"- {n}" for n in notes))
+        pack = self.pack(game)
+        parts = []
+        if pack:
+            parts.append("How this game works, from its game pack (trust the screen over "
+                         "it if they disagree):\n" + pack)
+        if notes:
+            parts.append("What you learned about this game in earlier sessions (trust the "
+                         "screen over these if they disagree, and correct a wrong one with "
+                         "remember):\n" + "\n".join(f"- {n}" for n in notes))
+        return "\n\n".join(parts)

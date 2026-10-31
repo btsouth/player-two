@@ -78,8 +78,8 @@ class Box:
         sh("omabox", "down", "-b", self.name, timeout=60)
         (EMU / f"port-{self.port}.cfg").write_text(f'network_cmd_port = "{self.port}"\n'
                                                    + extra)
-        seed = []  # the player's walkthroughs and map atlases
-        for kind in ("guides", "atlas"):
+        seed = []  # the player's walkthroughs, map atlases and game notes
+        for kind in ("guides", "atlas", "games"):  # games: notes and game packs
             d = Path.home() / ".config/player-two" / kind
             if d.is_dir():
                 seed += ["--seed", f"{d}:.config/player-two/{kind}"]

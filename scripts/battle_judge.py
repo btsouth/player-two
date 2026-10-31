@@ -11,7 +11,8 @@ must have happened. All must hold:
     "all_hit"         every enemy lost HP
     "healed:Marle"    her HP went up at some point
     "mp" "mp:Lucca"   someone's (her) MP went down: a tech
-    "item"            the inventory has fewer items: one was used
+    "item"            an item was used: the inventory has fewer, or someone was healed
+                      without MP spent (the fight's inventory is written back after it)
     "acts<=2"         at most that many party actions: runs of readings in a row where an
                       enemy lost HP, someone was healed, MP was spent or an item used
     "in_battle"       the fight is still on at the end
@@ -71,8 +72,7 @@ class Watch:
 
     def save(self, path) -> None:
         with open(path, "w") as f:
-            for s in self.samples:
-                f.write(json.dumps(s) + "\n")
+            f.writelines(json.dumps(s) + "\n" for s in self.samples)
 
     def judge(self, checks: list[str]) -> dict:
         ok, why = judge(self.samples, checks)
@@ -100,7 +100,7 @@ def _events(samples: list[dict]) -> dict:
         if not (a["battle"] or b["battle"]):
             before = False
             continue
-        acted = False
+        acted, healed, spent = False, False, False
         ea = {e["slot"]: e["hp"] for e in a["enemies"]}
         for e in b["enemies"]:
             if e["slot"] in ea and e["hp"] < ea[e["slot"]]:
@@ -113,11 +113,13 @@ def _events(samples: list[dict]) -> dict:
                 continue
             if p["hp"] > q["hp"]:
                 ev["healed"][p["name"]] = ev["healed"].get(p["name"], 0) + 1
-                acted = True
+                acted = healed = True
             if p["mp"] < q["mp"]:
                 ev["mp"][p["name"]] = ev["mp"].get(p["name"], 0) + 1
-                acted = True
-        if b["items"] < a["items"]:
+                acted = spent = True
+        # The inventory in memory is only written back after the fight: a heal that cost
+        # no MP was an item.
+        if b["items"] < a["items"] or (healed and not spent):
             ev["item"] += 1
             acted = True
         ev["acts"] += acted and not before
