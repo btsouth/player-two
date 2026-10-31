@@ -1049,6 +1049,8 @@ class Agent:
         """Pause the fight while the model thinks (Start), if it isn't already."""
         if st.paused:
             return st
+        if self.on_action:
+            self.on_action("battle_pause", {})  # the game window gets focus first
         try:
             return await self.executor().pause()
         except Stop:
@@ -1080,19 +1082,26 @@ class Agent:
             if mode.startswith(("run", "flee", "escape")):
                 out = await ex.run_away()
             else:
-                out = await ex.win(self._decide)
+                def now_and_then(line: str) -> None:
+                    # A long fight isn't a silent one: a turn's line after a quiet spell.
+                    if time.monotonic() - getattr(self, "_spoke_at", 0.0) >= PROGRESS_GAP_S:
+                        self._spoke_at = time.monotonic()
+                        asyncio.get_running_loop().create_task(self._speak(line))
+
+                out = await ex.win(self._decide, say=now_and_then)
         else:
             intent = Intent(str(a.get("actor") or ""), str(a.get("command") or "attack"),
                             str(a.get("name") or ""), str(a.get("target") or ""))
             out = await ex.act(intent)
         st = out.state
         now = ctsteam.describe(st) if st is not None else "the screen can't be read"
+        pressed = f" (pressed {' '.join(out.presses)})" if out.presses else ""
         held = (" The fight is paused until the player's next request." if st is not None
                 and st.paused else "")
         if out.ok:
-            return f"done: {out.text}. Now: {now}{held}"
+            return f"done: {out.text}. Now: {now}{held}{pressed}"
         return (f"stopped, nothing more pressed: {out.text}. Now: {now}{held} Fix it once "
-                "if the fix is plain, or tell the player.")
+                f"if the fix is plain, or tell the player.{pressed}")
 
     async def _field_menu(self, a: dict) -> str:
         await self.go.wait()

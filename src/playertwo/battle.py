@@ -654,7 +654,7 @@ class Executor:
         return st, said
 
     async def win(self, decide: Callable[[State, str], Awaitable[Intent | None]] | None = None,
-                  say: Callable[[str], Awaitable[None]] | None = None) -> Outcome:
+                  say: Callable[[str], None] | None = None) -> Outcome:
         """Fight until it's won, lost or the player stops it."""
         start = len(self.presses)
         t0 = time.monotonic()
@@ -710,6 +710,8 @@ class Executor:
                         st = out.state or await self.look()
                         if out.ok:
                             turns.append(str(option))
+                            if say:
+                                say(progress(seen, option))
                             break
                         self.log(f"{option} didn't go: {out.stopped}")
                         if "glove" in out.stopped:
@@ -728,6 +730,14 @@ class Executor:
         except Stop as exc:
             return Outcome(False, f"{exc} after {len(turns)} commands",
                            await self._settle_stopped(), str(exc), self.presses[start:])
+
+
+def progress(st: State, done: Intent) -> str:
+    """A short line on a turn of a fight, for the player to hear now and then."""
+    what = "attacks" if done.command == "attack" else f"uses {done.name}" + (
+        f" on {done.target}" if done.target else "")
+    hp = ", ".join(f"{m.name} {m.hp}" for m in st.party if m.hp is not None)
+    return f"{done.actor} {what}." + (f" HP: {hp}." if hp else "")
 
 
 def _hp(st: State | None) -> dict[str, int | None]:
