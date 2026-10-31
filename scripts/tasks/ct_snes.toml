@@ -12,6 +12,16 @@ core_name = "Snes9x"
 rom = "/data/Emulation/Games/SNES/Chrono Trigger (NA).sfc"
 states = "~/.cache/player-two/emu/states/ct-snes"
 
+# Where things are in the game's memory (offsets into its 128 KB of work RAM, found by
+# comparing memory while walking known ways and going in and out of places).
+[game.ram]
+x = "0x283"         # the character on a world map, map pixels (16 bits)
+y = "0x285"
+location = "0x100"  # which map or place: 0x1F0 is the 1000 A.D. world map (9 bits)
+location_mask = 0x1FF
+exit = "0x1B32"     # the place icon underfoot on a world map, 255 when none
+exit_none = 255
+
 [[task]]
 id = "downstairs"
 category = "rooms"

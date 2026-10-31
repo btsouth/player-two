@@ -73,9 +73,11 @@ class Box:
         finally:
             s.close()
 
-    def up(self) -> None:
+    def up(self, extra: str = "") -> None:
+        """`extra`: more RetroArch settings, as config lines."""
         sh("omabox", "down", "-b", self.name, timeout=60)
-        (EMU / f"port-{self.port}.cfg").write_text(f'network_cmd_port = "{self.port}"\n')
+        (EMU / f"port-{self.port}.cfg").write_text(f'network_cmd_port = "{self.port}"\n'
+                                                   + extra)
         seed = []  # the player's walkthroughs and map atlases
         for kind in ("guides", "atlas"):
             d = Path.home() / ".config/player-two" / kind
