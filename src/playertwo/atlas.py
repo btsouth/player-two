@@ -59,6 +59,11 @@ class WorldMap:
     places: dict[str, tuple[float, float]]
     blocked: np.ndarray = field(default=None)  # type: ignore[assignment]  # per CELL
     learned: set[tuple[int, int]] = field(default_factory=set)  # cells found shut
+    # Steps (from cell, to cell) found not to go, though both cells are walkable: the
+    # game's ground isn't the same from every side (a diagonal past a corner, a ledge).
+    # Kept beside the survey (steps-<map>.json), so a trip learns it once.
+    no_step: set[tuple[tuple[int, int], tuple[int, int]]] = field(default_factory=set)
+    steps_file: Path | None = None
     # From walking the map (scripts/survey.py): cells known walkable or shut, and the
     # cells of each place's icon, by the game's own number for it.
     walk: set[tuple[int, int]] = field(default_factory=set)
@@ -81,6 +86,14 @@ class WorldMap:
     def __post_init__(self) -> None:
         if self.blocked is None:
             self.blocked = ground(self.image)
+
+    def learn_step(self, a: tuple[int, int], b: tuple[int, int]) -> None:
+        """A step from cell a to cell b that didn't go: route round it from now on."""
+        self.no_step.add((a, b))
+        if self.steps_file is not None:
+            with contextlib.suppress(OSError):
+                self.steps_file.write_text(json.dumps(sorted(
+                    [list(x), list(y)] for x, y in self.no_step)))
 
     @property
     def surveyed(self) -> bool:
@@ -201,6 +214,11 @@ class Atlas:
                 wm.world = sv.get("world")
                 wm.doors = {(r, c): loc for r, c, loc in sv.get("doors", [])}
                 wm.names = sv.get("names", {})
+                wm.steps_file = folder / f"steps-{slug(m['name'])}.json"
+                if wm.steps_file.exists():
+                    with contextlib.suppress(ValueError, TypeError):
+                        wm.no_step = {(tuple(a), tuple(b)) for a, b in
+                                      json.loads(wm.steps_file.read_text())}
                 # Places the game names that the map picture didn't: add them where
                 # their door is, when the name is the only one of its kind.
                 labels = [label for _, label in wm.door_groups() if label]
@@ -292,7 +310,10 @@ class Atlas:
                 best = spot
             if near is not None and m.name == near.map and score > 0.7:
                 break
-        if best is None or best.score < 0.6:
+        # A weaker match that's still the only good one on the map is the map under mist
+        # or clouds drifting over it (1000 A.D. near Porre); scenes inside a place score
+        # about 0.5 at best, but as well in several spots (a margin under 0.1).
+        if best is None or best.score < 0.42 or (best.score < 0.6 and best.margin < 0.2):
             return None
         return best
 
@@ -588,9 +609,12 @@ class Atlas:
             for dy in (-1, 0, 1):
                 for dx in (-1, 0, 1):
                     v = (u[0] + dy, u[1] + dx)
-                    if (dy or dx) and not shut(v):
+                    if (dy or dx) and not shut(v) and (u, v) not in m.no_step:
                         if dy and dx and (shut((u[0] + dy, u[1])) or shut((u[0], u[1] + dx))):
                             continue  # no cutting corners
+                        if dy and dx and ((u, (v[0], u[1])) in m.no_step
+                                          or ((v[0], u[1]), v) in m.no_step):
+                            continue  # its two steps (down or up, then across) don't go
                         c = cost[u] + (1.42 if dy and dx else 1.0) + edge(v)
                         if c < cost.get(v, 1e18):
                             cost[v], came[v] = c, u
@@ -654,6 +678,8 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
             return resting(q) and cell((q[0] + 2, q[1] + 2)) in door
         return math.dist(q, goal) <= CELL * 0.75
 
+    if atlas.route(m, p, goal, door) is None and m.no_step:
+        m.no_step.clear()  # steps learned wrongly (a slip): better than no way at all
     path = atlas.route(m, p, goal, door)
     if path is None:
         return (f"no way to {name} over open ground from here "
@@ -663,6 +689,8 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
     i, last, last_t, stalls, misses, presses, angle = 0, p, t0, 0, 0, 0, 0.0
     logged, trail = t0, deque([(t0, p)])
     cur: tuple[tuple[int, int] | None, float] = (None, t0)  # the tile and since when
+    aim: tuple[tuple[int, int], tuple[int, int]] | None = None  # the step under way
+    slips: dict = {}  # steps that ended somewhere else, and how often
 
     async def gone(secs: float) -> bool:
         """Whether the screen stops being the map within secs (went in somewhere)."""
@@ -721,6 +749,47 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
                 # tile; from a standstill one tap is one step.
                 cells = [cell(q) for q in path]
                 c = cell((p[0] + 2, p[1] + 2))
+                # A diagonal goes as two steps, the game's way (up or down, then
+                # across): its corner is on the way, not off it.
+                corners = {(aim[1][0], aim[0][1]), (aim[0][0], aim[1][1])} \
+                    if aim is not None else set()
+                past = (2 * aim[1][0] - aim[0][0], 2 * aim[1][1] - aim[0][1]) \
+                    if aim is not None else None  # held a beat long: one step on
+                if aim is not None and resting(p) and c != aim[0] and c not in corners \
+                        and c != past:
+                    ahead = cells[cells.index(aim[1]):] if aim[1] in cells else []
+                    if c not in ahead:
+                        # The step slid somewhere else: a held key a beat long, or (the
+                        # same step again) a corner the survey couldn't tell, where it
+                        # would go back and forth for ever. Twice: it doesn't go.
+                        slips[aim] = slips.get(aim, 0) + 1
+                        if slips[aim] >= 2:
+                            m.learn_step(*aim)
+                            log(f"go_to_place: {aim[0]} to {aim[1]} slid to {c} again")
+                        path = atlas.route(m, p, goal, door)
+                        if path is None:
+                            return (f"blocked: no way through to {name} from here; "
+                                    f"{m.nearest(*p)[0]} is nearest")
+                        cells = [cell(q) for q in path]
+                    aim = None
+                if c in corners and c not in cells:
+                    # Halfway through a diagonal: carry on to its far cell.
+                    d = (aim[1][0] - c[0], aim[1][1] - c[1])
+                    steer(math.degrees(math.atan2(d[1], -d[0])) % 360)
+                    if c != cur[0]:
+                        cur = (c, time.monotonic())
+                    elif time.monotonic() - cur[1] > 1.5:
+                        stalls += 1
+                        m.learn_step(c, aim[1])
+                        log(f"go_to_place: stuck at {p[0]:.0f},{p[1]:.0f} on a diagonal, "
+                            f"{c} to {aim[1]} shut ({stalls})")
+                        steer(None)
+                        aim = None
+                        if stalls > 20:
+                            return (f"blocked: no way through to {name} from here; "
+                                    f"{m.nearest(*p)[0]} is nearest")
+                    await asyncio.sleep(0.01)
+                    continue
                 if c not in cells:
                     path = atlas.route(m, p, goal, door)
                     if path is None:
@@ -732,9 +801,21 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
                 if c != cur[0]:
                     cur = (c, time.monotonic())
                 elif k < len(cells) - 1 and time.monotonic() - cur[1] > 1.5:
-                    # Not off this tile in a while: the next one is shut after all.
+                    # Not off this tile in a while. A tap can go missing on a busy
+                    # machine: push that way firmly once before calling it shut.
+                    d = (cells[k + 1][0] - c[0], cells[k + 1][1] - c[1])
+                    steer(math.degrees(math.atan2(d[1], -d[0])) % 360)
+                    await asyncio.sleep(0.25)
+                    steer(None)
+                    await asyncio.sleep(0.15)
+                    now = await asyncio.to_thread(atlas.locate, await shoot(), spot)
+                    if now is not None and cell((here(now)[0] + 2, here(now)[1] + 2)) != c:
+                        spot, p = now, here(now)
+                        cur = (None, time.monotonic())
+                        continue
+                    # That step doesn't go after all (the cell may from elsewhere).
                     stalls += 1
-                    m.learned.add(cells[k + 1])
+                    m.learn_step(c, cells[k + 1])
                     log(f"go_to_place: stuck at {p[0]:.0f},{p[1]:.0f}, shut "
                         f"{cells[k + 1]} ({stalls})")
                     steer(None)
@@ -745,6 +826,8 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
                                 f"{m.nearest(*p)[0]} is nearest")
                     continue
                 if k < len(cells) - 1:
+                    if resting(p):
+                        aim = (c, cells[k + 1])
                     d = (cells[k + 1][0] - c[0], cells[k + 1][1] - c[1])
                     j = k + 1
                     while j + 1 < len(cells) and (cells[j + 1][0] - cells[j][0],

@@ -40,3 +40,21 @@ def test_find_place_prefers_the_map_the_player_is_on():
     a.maps = [M("1000 A.D."), M("600 A.D.")]
     assert a.find_place("Truce Inn")[0].name == "1000 A.D."
     assert a.find_place("the Truce Inn", "600 A.D.")[0].name == "600 A.D."
+
+
+def test_a_step_found_not_to_go_is_routed_round_and_kept(tmp_path):
+    import numpy as np
+
+    from playertwo.atlas import CELL, Atlas, WorldMap
+
+    m = WorldMap("M", np.zeros((8 * CELL, 8 * CELL, 3), np.uint8), {})
+    m.blocked = np.zeros((8, 8), bool)
+    m.walk = {(r, c) for r in range(3) for c in range(3)}
+    m.steps_file = tmp_path / "steps-m.json"
+    a = Atlas.__new__(Atlas)
+    start, goal = (0, CELL), (2 * CELL, CELL)  # (x, y): cell (1, 0) to cell (1, 2)
+    assert a.route(m, start, goal) == [(0, CELL), (CELL, CELL), (2 * CELL, CELL)]
+    m.learn_step((1, 0), (1, 1))
+    path = a.route(m, start, goal)
+    assert path[0] == (0, CELL) and (CELL, CELL) != path[1]
+    assert m.steps_file.exists()

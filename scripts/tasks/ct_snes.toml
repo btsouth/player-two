@@ -348,3 +348,51 @@ state = "world-12000-late"
 request = "go to the hut on the west side of the Last Village"
 location = "0x1a9"
 limit_s = 180
+
+[[task]]
+id = "g600-market"
+category = "world trip"
+state = "world-600"
+request = "I need to buy some potions"
+location = "0x76"
+limit_s = 180
+
+[[task]]
+id = "g600-bridge"
+category = "world trip"
+state = "world-600"
+request = "head over to Zenan Bridge"
+location = "0x87"
+limit_s = 180
+
+[[task]]
+id = "g600-rest"
+category = "world trip"
+state = "world-600-epoch"
+request = "find us somewhere to rest in Choras"
+location = "0xbd"
+limit_s = 180
+
+[[task]]
+id = "g65m-ioka"
+category = "world trip"
+state = "world-65m"
+request = "take me to the hut"
+location = "0x114"
+limit_s = 180
+
+[[task]]
+id = "gzeal-enhasa"
+category = "world trip"
+state = "world-zeal"
+request = "let's go to Enhasa"
+location = "0x163"
+limit_s = 180
+
+[[task]]
+id = "g12k-village"
+category = "world trip"
+state = "world-12000-late"
+request = "go into the Last Village"
+location = "0x1aa"
+limit_s = 180
