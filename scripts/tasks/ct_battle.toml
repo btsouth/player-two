@@ -127,7 +127,9 @@ id = "b-fire"
 category = "tech"
 state = "battle-ocean-palace"
 request = "have Lucca use a fire tech on them"
-ram_check = ["mp:Lucca", "hit", "acts<=2"]
+# These Scouters take no fire damage (their HP stays at 300 after Fire 2), so the check is
+# that Lucca cast a tech, and nothing else happened.
+ram_check = ["mp:Lucca", "acts<=2"]
 limit_s = 180
 
 # --- 600 AD Magus's Castle, Crono, Frog and Marle -----------------------------------

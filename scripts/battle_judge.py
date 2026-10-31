@@ -138,7 +138,9 @@ def judge(samples: list[dict], checks: list[str]) -> tuple[bool, str]:
     wiped = any(s["party"] and all(p["hp"] == 0 for p in s["party"]) for s in samples)
     fought = [s for s in samples if s["battle"]]
     over = first["battle"] and not last["battle"] and not wiped
-    won = over and all(end_hp.get(s, 0) == 0 for s in start_enemies)
+    # Every enemy down is a win even while the victory screen still counts as the fight.
+    won = not wiped and bool(start_enemies) and all(
+        end_hp.get(s, 0) == 0 for s in start_enemies)
     failed = []
     for c in checks:
         name, _, arg = c.partition(":")
