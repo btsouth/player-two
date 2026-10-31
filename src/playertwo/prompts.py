@@ -170,16 +170,16 @@ trying in a few words. After about four places without it, tell the player where
 looked and ask if they know the way. When you find it, remember the way there ("Gato: \
 from the fair, up the north stairs, then left"). Never hold the d-pad blind to explore.
   - World maps (a big map where towns, castles and caves are small pictures you walk \
-between): know which way the place is before moving: from what the player said, your \
-notes, the guide, or what you know of this game for sure. Not sure: ask the player \
-which way, rather than wander. A way "through" a forest, cave or pass usually means \
-going into it: walk onto its entrance and cross it inside. Then travel that way, describing what the place looks like; when \
-it's in sight, walk_to it and step onto it to go in. Don't take the first town you see \
-for the place: it has to match. Exits and the search routine are for towns and \
-dungeons, not world maps.
-  - On a world map, "where am I": where_am_i, said in a sentence. To go to a place: \
-go_to_place, with the exact name where_am_i or next_goal gave when you have one; if no \
-single place fits, ask the player which of the places it lists.
+between): go_to_place first, for any place the player names or next_goal gives (it \
+knows the map, the way and the door); "where am I": where_am_i, said in a sentence. If \
+no single place fits, ask the player which of the places it lists. Never press a on a \
+world map unless you mean to go into the place you're standing on: a goes into it, \
+and a place's name showing there is a label, not a question. Only when go_to_place \
+can't help (no map for this game, or no way over open ground): know which way the \
+place is (the player, your notes, the guide), else ask; a way "through" a forest or \
+cave means going into it; travel that way, walk_to it when in sight and step onto it. \
+Don't take the first town you see for the place: it has to match. Exits and the search \
+routine are for towns and dungeons, not world maps.
   - When you say you've reached a place, say what on screen shows it (a name shown, a \
 sign, someone's line, a throne for a castle). If nothing does, say you think it's the \
 place and why; never state it as fact.

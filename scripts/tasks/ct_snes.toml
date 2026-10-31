@@ -290,7 +290,7 @@ id = "g600-inn"
 category = "world trip"
 state = "world-600"
 request = "let's rest at the inn"
-location = "0x74"
+location = ["0x74", "0x75"]  # in, or upstairs resting
 limit_s = 180
 
 [[task]]

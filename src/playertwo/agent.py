@@ -484,6 +484,11 @@ class Agent:
             if isinstance(asked, str):
                 asked = [asked]  # one button given bare, not a list of letters
             asked = [str(b) for b in asked]
+            if sum(b in ANGLES for b in asked) >= 2 and \
+                    time.monotonic() > getattr(self, "_map_free_until", 0.0):
+                on_map = await self._on_surveyed_map()  # walking by d-pad presses
+                if on_map:
+                    return on_map
             buttons = [b for b in asked if b in AGENT_BUTTONS][:12]
             ignored = [b for b in asked if b not in AGENT_BUTTONS]
             if not buttons:
@@ -549,6 +554,11 @@ class Agent:
                 return "stopped by the player"
             ms = max(50, min(int(float(a.get("ms") or 500)), 5000))
             inp = a.get("input") or "left_stick"
+            if ms >= 400 and (inp in ANGLES or inp.endswith("_stick")) and \
+                    time.monotonic() > getattr(self, "_map_free_until", 0.0):
+                on_map = await self._on_surveyed_map()
+                if on_map:
+                    return on_map
             if not (inp in ("left_stick", "right_stick") or inp in AGENT_BUTTONS):
                 return f"can't hold {inp!r}"
             if inp.endswith("_stick"):
@@ -583,6 +593,11 @@ class Agent:
             return f"held {inp} for {ms} ms"
         if name not in TOOL_NAMES:
             return f"no tool called {name}; use one of {', '.join(sorted(TOOL_NAMES))}"
+        if name in ("walk_to", "talk_to", "travel", "walk_to_map", "keep_walking") and \
+                time.monotonic() > getattr(self, "_map_free_until", 0.0):
+            on_map = await self._on_surveyed_map()
+            if on_map:
+                return on_map
         if name == "talk_to":
             walked = await self._act("walk_to", a)
             if not walked.startswith("arrived"):
@@ -690,10 +705,14 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             try:
-                return await self._go_to_place(str(a.get("place") or ""))
+                went = await self._go_to_place(str(a.get("place") or ""))
             except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"
+            if went.startswith(("no way", "blocked", "no atlas", "no place", "not on")):
+                # It can't help here: the other ways of walking are open for a while.
+                self._map_free_until = time.monotonic() + 180
+            return went
         if name == "go_to_exit":
             await self.go.wait()
             if self.cancelled:
@@ -759,6 +778,28 @@ class Agent:
         from .quests import Progress
 
         return Progress.load(self.notes.folder, self.game or "")
+
+    async def _on_surveyed_map(self) -> str:
+        """When the screen is a world map the atlas has walked (surveyed), the way to
+        go anywhere on it is go_to_place: walking by sight there goes astray."""
+        from .atlas import Atlas
+
+        game = self.game or ""
+        if getattr(self, "_atlas_game", None) != game:
+            self._atlas_game = game
+            self._atlas = await asyncio.to_thread(Atlas.for_game, game) \
+                if Atlas.folder_for(game) else None
+        if self._atlas is None:
+            return ""
+        spot = await self._spot(self._atlas, (await self.grab()).image)
+        if spot is None or spot.margin < 0.1:
+            return ""
+        m = self._atlas.map(spot.map)
+        if not m.surveyed:
+            return ""
+        return (f"Not done: this is the {m.name} world map, where walking by sight goes "
+                f"astray. Use go_to_place with the place's name ({', '.join(m.places)}); "
+                "it walks there and goes in.")
 
     async def _spot(self, atlas, image):
         """Where the screen is on the atlas's maps, or None (off the world map). A match
