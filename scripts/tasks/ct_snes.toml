@@ -1,0 +1,85 @@
+# Tasks for scripts/emu_tasks.py in Chrono Trigger (SNES, in RetroArch). A task is
+# judged by its last screen against `check`, or for a question by `expect`: words its
+# answer must have. States are
+# RetroArch save states named in `state`, kept outside the repo (they come from the
+# player's own copy of the game):
+#   new-game-bedroom  a new game in Wait mode, Crono in his bedroom after Mom's wake-up
+
+[game]
+name = "Chrono Trigger (SNES)"
+core = "/usr/lib/libretro/snes9x_libretro.so"
+core_name = "Snes9x"
+rom = "/data/Emulation/Games/SNES/Chrono Trigger (NA).sfc"
+states = "~/.cache/player-two/emu/states/ct-snes"
+
+[[task]]
+id = "downstairs"
+category = "rooms"
+state = "new-game-bedroom"
+request = "go down the stairs"
+check = "Crono is downstairs: a kitchen and a dining table are on screen, not his bedroom with the bed"
+limit_s = 180
+
+[[task]]
+id = "talk-mom"
+category = "rooms"
+state = "new-game-bedroom"
+request = "go talk to my mom"
+expect = ["dinner"]  # her line downstairs: be back before dinner
+limit_s = 240
+
+[[task]]
+id = "outside"
+category = "rooms"
+state = "new-game-bedroom"
+request = "take me outside"
+check = "Crono is outside his house: on the world map or in the town, not inside a room"
+limit_s = 240
+
+[[task]]
+id = "fair"
+category = "world map"
+state = "new-game-bedroom"
+request = "take me to the Millennial Fair"
+check = "Crono is at the Millennial Fair (Leene Square): tents, stalls and crowds of people around him, not the world map"
+limit_s = 480
+
+[[task]]
+id = "castle"
+category = "world map"
+state = "new-game-bedroom"
+request = "take me to Guardia Castle"
+check = "Crono is at or inside Guardia Castle: stone castle walls, guards or a throne room, not the world map far away"
+limit_s = 480
+
+[[task]]
+id = "lucca-house"
+category = "world map"
+state = "new-game-bedroom"
+request = "take me to Lucca's house"
+check = "Crono is inside Lucca's house (machines, pipes or a workshop) or right at its door"
+limit_s = 480
+
+[[task]]
+id = "truce-shop"
+category = "towns"
+state = "new-game-bedroom"
+request = "find a shop in Truce village and talk to the shopkeeper"
+check = "a shop menu (items and prices) or a shopkeeper's lines are showing"
+limit_s = 480
+
+[[task]]
+id = "gold"
+category = "menus"
+state = "new-game-bedroom"
+request = "how much gold do I have?"
+expect = ["400"]
+limit_s = 180
+
+[[task]]
+id = "equipment"
+category = "menus"
+state = "new-game-bedroom"
+request = "what weapon does Crono have equipped?"
+expect = ["wood sword"]
+limit_s = 180
