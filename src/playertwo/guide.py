@@ -4,7 +4,10 @@ next. Blind players already play with text guides; this reads one so they don't 
 Guides are plain text files the player puts in ~/.config/player-two/guides/, named after
 the game ("chrono-trigger.txt"), with blank lines between paragraphs; a line starting
 with a number and a dot ("3. The Queen is Gone") starts a chapter. A search is plain
-word matching, rarer words counting more, so it needs no index or model.
+word matching, rarer words counting more, so it needs no index or model. Boss stat
+tables, move names and enemy lists are left out: they match names but say nothing about
+where to go. A short heading with a place in brackets ("Guardia Castle (1000 A.D.)")
+labels the passages under it.
 """
 
 from __future__ import annotations
@@ -22,6 +25,19 @@ STOP = set("""a an and are as at be but by can do does for from get go going how
 it its me my of on or so than that the then there this to up was what when where
 which who why will with you your""".split())  # noqa: SIM905
 CHAPTER = re.compile(r"^\d+\.\s+\S")
+SECTION = re.compile(r"^[A-Z][^.!?:]{2,50}\(\d[^)]*[A-Za-z][^)]*\)$")  # "Lab 16 (2300 A.D.)"
+STATS = re.compile(r"\bLevel HP\b|Tech Points|Treasures:|^Combo: |\bDef\. ")
+
+
+def noise(para: str) -> bool:
+    """Not walkthrough prose: a stat table, an enemy or treasure list, a boss or move
+    name, a "Chapters" link."""
+    if STATS.search(para):
+        return True
+    digits = sum(c.isdigit() for c in para)
+    if digits > 12 and digits > len(para) * 0.12:
+        return True
+    return len(para) < 60 and not re.search(r"[.!?]$", para)
 
 
 def words(text: str) -> list[str]:
@@ -30,6 +46,41 @@ def words(text: str) -> list[str]:
 
 def slug(name: str) -> str:
     return "-".join(words(re.sub(r"\(.*?\)", "", name)))
+
+
+def guide_path(game: str, folder: Path = GUIDES) -> Path | None:
+    """The guide whose file name is this game's name, or is all in it."""
+    if not folder.is_dir():
+        return None
+    name = slug(game)
+    for f in sorted(folder.glob("*.txt")):
+        if f.stem == name or (f.stem and all(w in name.split("-") for w in f.stem.split("-"))):
+            return f
+    return None
+
+
+def chapters(text: str) -> list[tuple[str, str]]:
+    """The guide cut into its numbered chapters: (title, text). Chapter numbers go up one
+    at a time, so a numbered list inside a chapter ("1. Rename characters at...") isn't
+    taken for one."""
+    out: list[tuple[str, list[str]]] = []
+    want = 1
+    for line in text.splitlines():
+        m = re.match(r"^\s*(\d+)\.\s+(\S.*)$", line)
+        if m and int(m.group(1)) == want and len(line.strip()) < 70:
+            out.append((line.strip(), []))
+            want += 1
+        elif out:
+            out[-1][1].append(line)
+        elif line.strip():
+            out.append(("", [line]))
+    return [(title, "\n".join(body).strip()) for title, body in out]
+
+
+def prose(text: str) -> str:
+    """A chapter's text without stat tables and lists (see noise), paragraphs kept."""
+    paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
+    return "\n\n".join(p for p in paras if p and (SECTION.match(p) or not noise(p)))
 
 
 @dataclass
@@ -41,15 +92,21 @@ class Passage:
 class Guide:
     def __init__(self, text: str):
         self.passages: list[Passage] = []
-        chapter = ""
+        chapter = section = ""
         for para in re.split(r"\n\s*\n", text):
             para = " ".join(para.split())
             if not para:
                 continue
             if CHAPTER.match(para) and len(para) < 80:
-                chapter = para
+                chapter, section = para, ""
                 continue
-            self.passages.append(Passage(chapter, para))
+            if SECTION.match(para):
+                section = para
+                continue
+            if noise(para):
+                continue
+            self.passages.append(Passage(f"{chapter} / {section}" if section else chapter,
+                                         para))
         n = len(self.passages) or 1
         df: dict[str, int] = {}
         self._words = [words(p.text) for p in self.passages]
@@ -60,15 +117,8 @@ class Guide:
 
     @classmethod
     def for_game(cls, game: str, folder: Path = GUIDES) -> Guide | None:
-        """The guide whose file name is this game's name, or is all in it."""
-        if not folder.is_dir():
-            return None
-        name = slug(game)
-        for f in sorted(folder.glob("*.txt")):
-            if f.stem == name or (f.stem and all(w in name.split("-")
-                                                 for w in f.stem.split("-"))):
-                return cls(f.read_text(encoding="utf-8", errors="replace"))
-        return None
+        f = guide_path(game, folder)
+        return cls(f.read_text(encoding="utf-8", errors="replace")) if f else None
 
     def search(self, query: str, limit: int = 5, max_chars: int = 2400) -> list[Passage]:
         q = words(query)

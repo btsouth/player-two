@@ -100,9 +100,29 @@ TOOLS = [
                        "and goes in. Use it first for any 'take me to X' on a world map; "
                        "with no atlas or no such place it says so and lists the places.",
         "parameters": {"type": "object", "properties": {
-            "place": {"type": "string", "description": "The place's name, as the "
+            "place": {"type": "string", "description": "The place's exact name when "
+                      "you have it (where_am_i and next_goal give them), else as the "
                       "player said it."},
         }, "required": ["place"]}}},
+    {"type": "function", "function": {
+        "name": "where_am_i",
+        "description": "Where the player is on a world map, from the game's atlas: the "
+                       "era or map, the nearest place and which way the others are, and "
+                       "the names go_to_place knows. Off the world map it says so; answer "
+                       "from the screen then.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "next_goal",
+        "description": "What to do next in the story and where, from this game's quest "
+                       "list (made from the walkthrough): the step the player is on, the "
+                       "way there and the one after. If it isn't sure where they are, it "
+                       "says what to ask them.",
+        "parameters": {"type": "object", "properties": {
+            "step": {"type": "integer", "description": "The step number the player "
+                     "just confirmed they're on."},
+            "player_says": {"type": "string", "description": "What the player said "
+                            "about where they are in the story, if they did."},
+        }}}},
     {"type": "function", "function": {
         "name": "guide",
         "description": "Look something up in this game's walkthrough, if the player has "
@@ -661,6 +681,14 @@ class Agent:
             from .guide import look_up
 
             return look_up(self.game or "", str(a.get("query") or ""))
+        if name == "where_am_i":
+            return await self._where_am_i()
+        if name == "next_goal":
+            try:
+                step = int(a["step"]) if a.get("step") not in (None, "") else 0
+            except (TypeError, ValueError):
+                step = 0
+            return await self._next_goal(step, str(a.get("player_says") or ""))
         if name == "travel":
             direction = str(a.get("direction") or "")
             if direction not in ANGLES:
@@ -701,17 +729,97 @@ class Agent:
             return went.text(direction.replace("_", " and "))
         return "ok"
 
+    def _progress(self):
+        from .quests import Progress
+
+        return Progress.load(self.notes.folder, self.game or "")
+
+    async def _spot(self, atlas, image):
+        """Where the screen is on the atlas's maps, or None (off the world map). A match
+        no better than the next best spot is a flat patch of map matching a scene that
+        isn't the map (a cutscene of sky and hills): not on it."""
+        spot = await asyncio.to_thread(atlas.locate, image) if atlas is not None else None
+        return spot if spot is not None and spot.margin >= 0.02 else None
+
+    async def _where_am_i(self) -> str:
+        """Where the player is on a world map, said from the places around them."""
+        from . import atlas as atlas_mod
+        from .quests import where_text
+
+        atlas = atlas_mod.Atlas.for_game(self.game or "")
+        if atlas is None:
+            return "no atlas for this game: answer from the screen"
+        spot = await self._spot(atlas, (await self.grab()).image)
+        progress = self._progress()
+        if spot is None:
+            last = f" Last on the world map near {progress.visited[-1]}." \
+                if progress.visited else ""
+            return ("not on a world map (inside a place, a menu, a battle or a fade): "
+                    "answer from the screen: the place's name if it shows, else what kind "
+                    f"of place it is.{last}")
+        m = atlas.map(spot.map)
+        text, at = where_text(m, spot.x, spot.y, getattr(atlas_mod, "CELL", 8),
+                              getattr(atlas_mod, "RISE", 0))
+        if at:
+            progress.went(at)
+            progress.save(self.notes.folder, self.game or "")
+        return f"{text} Places on this map for go_to_place: {', '.join(m.places)}."
+
+    async def _next_goal(self, step: int = 0, player_says: str = "") -> str:
+        """What to do next, from the quest list and where the player seems to be in it."""
+        from .atlas import Atlas
+        from .quests import Guess, Quests, place_in_story, tell
+
+        quests = Quests.for_game(self.game or "")
+        if quests is None or not quests.steps:
+            return ("no quest list for this game (scripts/build_quests.py makes one from "
+                    "the walkthrough): use the guide")
+        progress = self._progress()
+        if quests.step(step) is not None:
+            progress.step, progress.confirmed = step, True
+            progress.save(self.notes.folder, self.game or "")
+            return tell(quests, Guess(step, "high", "the player confirmed it", ask=False))
+        image = (await self.grab()).image
+        atlas = Atlas.for_game(self.game or "")
+        spot = await self._spot(atlas, image)
+        era = near = ""
+        if spot is not None:
+            m = atlas.map(spot.map)
+            era = m.name
+            if m.places:
+                near = m.nearest(spot.x, spot.y)[0]
+        try:
+            guess = await place_in_story(self.muse, quests, progress, image, era, near,
+                                         player_says, self.game or "")
+        except (ValueError, OSError, openai.APIError) as exc:
+            return f"couldn't work out where you are in the story ({exc}): use the guide"
+        if not guess.ask:
+            progress.step = guess.step
+            progress.save(self.notes.folder, self.game or "")
+        return guess.text
+
     async def _go_to_place(self, place: str, limit: float = 90.0) -> str:
-        """Walk to a named place on a world map by the game's atlas (see atlas.walk_to)."""
+        """Walk to a named place on a world map by the game's atlas (see atlas.walk_to).
+        Which place the player means is Muse's pick from the map's names and the other
+        names the walkthrough uses for them, not shared words ("Truce" isn't Truce Inn)."""
         from .atlas import Atlas, walk_to
+        from .quests import Quests, atlas_aliases, pick_place
 
         atlas = Atlas.for_game(self.game or "")
         if atlas is None:
             return "no atlas for this game: use travel and the guide instead"
-        found = atlas.find_place(place)
-        if found is None:
-            names = sorted({n for m in atlas.maps for n in m.places})
-            return f"no place called {place!r} in the atlas; places: {', '.join(names)}"
+        spot = await self._spot(atlas, (await self.grab()).image)
+        maps = [atlas.map(spot.map)] if spot is not None else atlas.maps
+        quests = Quests.for_game(self.game or "")
+        near = maps[0].nearest(spot.x, spot.y)[0] if spot is not None and maps[0].places \
+            else ""
+        found = await pick_place(self.muse, self.game or "", place, maps,
+                                 atlas_aliases(self.game or ""), near,
+                                 quests.aliases() if quests else None)
+        if isinstance(found, str):
+            names = "; ".join(f"{m.name}: {', '.join(m.places)}" for m in maps if m.places)
+            return (f"no single place on the map for {place!r} ({found}). Places: {names}. "
+                    "Ask the player which, or call go_to_place with an exact name")
         m, name = found
         walker = self.walker()
 
@@ -721,8 +829,13 @@ class Agent:
         async def keep_going():
             return await self.walker_keep_going()
 
-        return await walk_to(atlas, m, name, shoot, self.controls.steer,
-                             self.controls.press, keep_going, walker.log, limit)
+        result = await walk_to(atlas, m, name, shoot, self.controls.steer,
+                               self.controls.press, keep_going, walker.log, limit)
+        if result.startswith("arrived"):
+            progress = self._progress()
+            progress.went(name)
+            progress.save(self.notes.folder, self.game or "")
+        return result
 
     async def _travel(self, direction: str, target: str, secs: float) -> str:
         """Head `direction` across a scrolling map until `target` is in sight. The view

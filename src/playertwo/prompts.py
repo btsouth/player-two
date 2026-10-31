@@ -147,8 +147,10 @@ by the counter").
   - Look for what the player named, as they described it: a robot isn't a cat, a \
 sparkle on the ground isn't a flower patch. If nothing on screen clearly is it, it's \
 off screen; don't walk to near misses.
-  - Where to go next, or where a place or person is: if the game has a guide, look it \
-up there before searching.
+  - What to do or where to go next in the story: next_goal. If it isn't sure where the \
+player is, ask them what it says to, and call it again with their answer; never present \
+a guess as fact. Where a place or person is: if the game has a guide, look it up there \
+before searching.
   - Somewhere or someone off screen: call exits first, every time. If the player or \
 your notes give a direction ("west of the bell"), take the way out on that side; if \
 exits shows none there, keep_walking that way to the edge of the area, since ways out \
@@ -171,6 +173,9 @@ going into it: walk onto its entrance and cross it inside. Then travel that way,
 it's in sight, walk_to it and step onto it to go in. Don't take the first town you see \
 for the place: it has to match. Exits and the search routine are for towns and \
 dungeons, not world maps.
+  - On a world map, "where am I": where_am_i, said in a sentence. To go to a place: \
+go_to_place, with the exact name where_am_i or next_goal gave when you have one; if no \
+single place fits, ask the player which of the places it lists.
   - When you say you've reached a place, say what on screen shows it (a name shown, a \
 sign, someone's line, a throne for a castle). If nothing does, say you think it's the \
 place and why; never state it as fact.
