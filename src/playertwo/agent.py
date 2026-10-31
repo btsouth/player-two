@@ -105,10 +105,27 @@ TOOLS = [
                       "player said it."},
         }, "required": ["place"]}}},
     {"type": "function", "function": {
+        "name": "go_to_exit",
+        "description": "Inside a place (a house, a shop, a town, a castle, a forest) the "
+                       "game's room survey knows: go through the way out to where the player "
+                       "wants, even off screen and through other rooms on the way: "
+                       "'outside', 'upstairs', 'Leene Square', 'the way to the castle'; or to "
+                       "a thing in this place ('the counter', 'the bell'). It knows exactly "
+                       "where you are and every way out. Use it first for any "
+                       "'take me outside', 'go upstairs', 'where's the exit, take me there' "
+                       "indoors; in a place it doesn't know it says so: then exits and "
+                       "walk_to.",
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "string", "description": "Where to, as the player said it "
+                   "('outside', 'downstairs', 'the fair'), or a place's exact name from "
+                   "where_am_i."},
+        }, "required": ["to"]}}},
+    {"type": "function", "function": {
         "name": "where_am_i",
         "description": "Where the player is on a world map, from the game's atlas: the "
                        "era or map, the nearest place and which way the others are, and "
-                       "the names go_to_place knows. Off the world map it says so; answer "
+                       "the names go_to_place knows. Inside a surveyed place: which place and "
+                       "its ways out, by direction and steps. Elsewhere it says so; answer "
                        "from the screen then.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
@@ -677,6 +694,15 @@ class Agent:
             except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"
+        if name == "go_to_exit":
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            try:
+                return await self._go_to_exit(str(a.get("to") or ""))
+            except WALK_ERRORS as exc:
+                self.controls.steer(None)
+                return f"walking failed ({exc})"
         if name == "guide":
             from .guide import look_up
 
@@ -749,9 +775,15 @@ class Agent:
         atlas = atlas_mod.Atlas.for_game(self.game or "")
         if atlas is None:
             return "no atlas for this game: answer from the screen"
-        spot = await self._spot(atlas, (await self.grab()).image)
+        image = (await self.grab()).image
+        spot = await self._spot(atlas, image)
         progress = self._progress()
         if spot is None:
+            inside = await self._inside(image)
+            if inside is not None:
+                from .rooms import describe
+
+                return describe(*inside) + "; go_to_exit goes through any of them."
             last = f" Last on the world map near {progress.visited[-1]}." \
                 if progress.visited else ""
             return ("not on a world map (inside a place, a menu, a battle or a fade): "
@@ -835,6 +867,50 @@ class Agent:
             progress = self._progress()
             progress.went(name)
             progress.save(self.notes.folder, self.game or "")
+        return result
+
+    async def _inside(self, image):
+        """(rooms, where) when the screen is inside a place the room survey knows."""
+        from .rooms import Rooms
+
+        if getattr(self, "_rooms", None) is None:
+            self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
+        if self._rooms is None:
+            return None
+        here = await asyncio.to_thread(self._rooms.locate, image)
+        return (self._rooms, here) if here is not None else None
+
+    async def _go_to_exit(self, to: str, limit: float = 90.0) -> str:
+        """Walk out of the place on screen to where the player means, by the surveyed
+        rooms (see rooms.walk_out): Muse picks the place from those reachable from here."""
+        from .rooms import pick_exit, walk_out
+
+        inside = await self._inside((await self.grab()).image)
+        if inside is None:
+            return ("this place isn't in the room survey (or this isn't inside a place): "
+                    "use exits and walk_to")
+        rooms, here = inside
+        choices = rooms.reachable(here.loc)
+        spots = {f"{k} (in here)": v for k, v in rooms.rooms[here.loc].spots.items()}
+        choices.update({k: (here.loc, 0) for k in spots})
+        if not choices:
+            return f"in {rooms.name(here.loc)}, but no ways out are surveyed: use exits"
+        label, why = await pick_exit(self.muse, self.game or "", to, rooms.name(here.loc),
+                                     choices)
+        if label is None:
+            return (f"no single place from here fits {to!r} ({why}). From here: "
+                    f"{'; '.join(choices)}. Ask the player which, or call go_to_exit with "
+                    "an exact name")
+        walker = self.walker()
+
+        async def shoot():
+            return (await self.grab()).image
+
+        result = await walk_out(rooms, choices[label][0], shoot, self.controls.steer,
+                                self.walker_keep_going, walker.log, limit, here, label,
+                                spots.get(label))
+        if result.startswith("arrived"):
+            walker.memory = None  # somewhere else now
         return result
 
     async def _travel(self, direction: str, target: str, secs: float) -> str:

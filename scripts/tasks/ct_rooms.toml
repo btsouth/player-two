@@ -1,0 +1,128 @@
+# Trips inside places in Chrono Trigger (SNES, in RetroArch) for scripts/emu_tasks.py,
+# judged by the game's location number when done, and the settings scripts/survey_rooms.py
+# uses to survey those places. States are RetroArch save states kept outside the repo
+# (from the player's own copy of the game): ~/.cache/player-two/emu/states/ct-snes, and
+# rooms/ under it for the ones the room survey saved on going through each way out.
+
+[game]
+name = "Chrono Trigger (SNES)"
+core = "/usr/lib/libretro/snes9x_libretro.so"
+core_name = "Snes9x"
+rom = "/data/Emulation/Games/SNES/Chrono Trigger (NA).sfc"
+states = "~/.cache/player-two/emu/states/ct-snes"
+
+# Offsets into the game's 128 KB of work RAM, found by comparing memory while stepping.
+[game.ram]
+x = "0x283"         # the character on a world map, map pixels (16 bits)
+y = "0x285"
+location = "0x100"  # which map or place: 0x1F0 is the 1000 A.D. world map (9 bits)
+location_mask = 0x1FF
+exit = "0x1B32"     # the place icon underfoot on a world map, 255 when none
+exit_none = 255
+field_x = "0x1800"  # inside a place: each object's x and y, 1/16 pixels (16 bits, two
+field_y = "0x1880"  # bytes an object): the middle of its feet; high byte, 16-pixel tile
+player = "0x197"    # which object the player walks, times two
+cam_x = "0x1D09"    # the view's top left inside a place, 1/32 pixels
+cam_y = "0x1D0D"
+battle = "0x117"    # 1 in a fight
+
+[rooms]
+start = "world-1000-home"        # a world-map state the doors are walked to from
+world_survey = "survey-1000-a-d.json"
+worlds = ["0x1F0", "0x1F1", "0x1F2", "0x1F3", "0x1F4", "0x1F5", "0x1F6", "0x1F7"]
+
+# Names the game gives on the world map are used as they are; these are the rest.
+[rooms.names]
+"0x1" = "Crono's house, downstairs"
+"0x2" = "Crono's house, upstairs"
+"0x3" = "Lucca's house, upstairs"
+"0x1B2" = "Norstein Bekkler's tent"
+"0x1B7" = "the fair, up the north stairs"
+"0x1F0" = "outside (the world map)"
+
+# Trips inside places. `to` is where scripts/rooms_bench.py walks (no model), `request`
+# what scripts/emu_tasks.py asks the full agent; both judged by `location`. States under
+# rooms/ are the survey's: door-X stands just inside the place X, deep-X as far from its
+# ways out as it gets, arrive-X-Y in Y just come from X. They're after the new game's
+# first scene downstairs (Mom, naming Lucca): new-game-bedroom has it still to come.
+
+[[task]]
+id = "r-bed-out"
+category = "rooms"
+state = "rooms/deep-2"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 240
+
+[[task]]
+id = "r-bed-down"
+category = "rooms"
+state = "rooms/deep-2"
+request = "go downstairs"
+to = "0x1"
+location = "0x1"
+limit_s = 180
+
+[[task]]
+id = "r-kitchen-up"
+category = "rooms"
+state = "rooms/deep-1"
+request = "go back upstairs"
+to = "0x2"
+location = "0x2"
+limit_s = 180
+
+[[task]]
+id = "r-market-out"
+category = "rooms"
+state = "rooms/deep-11"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-inn-out"
+category = "rooms"
+state = "rooms/deep-c"
+request = "where's the exit? take me out"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-leene-out"
+category = "rooms"
+state = "rooms/deep-5"
+request = "get me out of here, back to the world map"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 240
+
+[[task]]
+id = "r-lucca-out"
+category = "rooms"
+state = "rooms/deep-3"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 240
+
+[[task]]
+id = "r-forest-out"
+category = "rooms"
+state = "rooms/deep-13"
+request = "get me out of the forest"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 240
+
+[[task]]
+id = "r-fair-back"
+category = "rooms"
+state = "rooms/deep-1b2"
+request = "go back out to the square"
+to = "0x5"
+location = "0x5"
+limit_s = 180

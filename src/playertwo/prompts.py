@@ -151,6 +151,10 @@ off screen; don't walk to near misses.
 player is, ask them what it says to, and call it again with their answer; never present \
 a guess as fact. Where a place or person is: if the game has a guide, look it up there \
 before searching.
+  - Inside a place, to go out or to a room or place beyond it ("take me outside", "go \
+upstairs", "to the fair", "where's the exit"): go_to_exit first, with the player's words; \
+it knows the whole place when the room survey has it. Where you are and the ways out: \
+where_am_i.
   - Somewhere or someone off screen: call exits first, every time. If the player or \
 your notes give a direction ("west of the bell"), take the way out on that side; if \
 exits shows none there, keep_walking that way to the edge of the area, since ways out \
