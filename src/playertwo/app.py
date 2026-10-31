@@ -12,6 +12,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from .ack import ack
 from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
@@ -1018,6 +1019,10 @@ class Session:
             self.narrating.cancel()
         self.pending = None
         self.voice.cue("working")
+        # Heard, in the player's words, before the model's first word seconds later.
+        line = ack(text) if "English" in (self.narrator.language or "English") else None
+        if line:
+            self.announce(line, status=True)
         ticks = self.spawn(self._working_ticks())
         try:
             run = await self.agent.run(text, self.latest if self.game is not False else None)

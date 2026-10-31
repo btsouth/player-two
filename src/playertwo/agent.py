@@ -10,6 +10,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,8 @@ from .screen import Frame, thumb
 from .walk import Walker, small
 
 # Never the guide button: it opens the Steam overlay or the system menu, not the game.
+# Seconds of silence in a run before the model's own line about its plan is spoken.
+PROGRESS_GAP_S = 8.0
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
 
 TOOLS = [
@@ -464,7 +467,30 @@ class Agent:
         await self.go.wait()
         if not self.cancelled and text.strip():
             self.said.append(text)
+            self._spoke_at = time.monotonic()
             await self.speak(text)
+
+    def _progress_line(self, content: str, calls, t0: float) -> None:
+        """Speak the model's own line about the screen or its plan, written with its tool
+        calls, when the player has heard nothing for a while: a long run isn't a silent
+        one. It was written from the screen before these calls run, so it can't claim
+        their effect."""
+        now = time.monotonic()
+        if any(c.function.name in ("say", "finish", "ask_player") for c in calls):
+            return
+        quiet_since = max(t0, getattr(self, "_spoke_at", 0.0))
+        line = " ".join(content.split())
+        if not line or now - quiet_since < PROGRESS_GAP_S:
+            return
+        first = re.split(r"(?<=[.!?])\s+", line)
+        line = " ".join(first[:2]) if len(first[0]) < 60 else first[0]
+        if len(line) > 160 or line.endswith(":") or re.match(
+                r"(?i)(i('ll| will) (look|check)|let me|looking|now i|ok(ay)?[,.]? )", line):
+            return
+        if self.said and SequenceMatcher(None, self.said[-1].lower(), line.lower()).ratio() > 0.6:
+            return
+        self._spoke_at = now
+        asyncio.get_running_loop().create_task(self._speak(line))
 
     def _already_said(self, text: str) -> bool:
         """Whether the last say already said it (a finish that restates it). Only a say
@@ -1463,6 +1489,7 @@ class Agent:
                 msgs.append({"role": "user", "content": "You replied with nothing. Call a "
                              "tool; if you're done, finish with what to tell the player."})
                 continue
+            self._progress_line(msg.content or "", calls, t0)
             acted = False
             finished = None
             noise = None
