@@ -249,8 +249,27 @@ class FieldMenu:
             x > RIGHT_X and self.who(ls, (x, y)) for x, y in t))
         on_blocks = [t for t in tips if t[0] > RIGHT_X and self.who(lines, t)]
         if len(on_blocks) >= 2:  # everyone at once
-            await self.tap("a")
-            return f"used {what} on everyone"
+            # The picker stays open after a cast, so a again casts again: keep going until
+            # everyone's HP is full (or nothing changes: out of MP), up to 8 casts.
+            hp = lambda ls: [self.hp_near(ls, t) for t in on_blocks]
+            def full(v: list) -> bool:
+                return all(x and x.split("/")[0] == x.split("/")[1] for x in v)
+            first = hp(lines)
+            casts, now = 0, first
+            while casts < 8 and not (casts and full(now)):
+                await self.tap("a")
+                casts += 1
+                await asyncio.sleep(0.9)
+                _tips, lines = await self.look()
+                after = hp(lines)
+                if after == now and casts > 1:
+                    break  # nothing changed: out of MP, or it can't do more
+                now = after
+            names = [self.who(lines, t) for t in on_blocks]
+            shown = ", ".join(f"{n} {v}" for n, v in zip(names, now, strict=False) if n and v)
+            return (f"used {what} on everyone, {casts} time{'s' if casts > 1 else ''}"
+                    + (f"; HP now {shown}" if shown else "")
+                    + (" (everyone full)" if full(now) else ""))
         if not on_blocks:
             return f"used {what} (no one to pick: it went off at once)"
         who = snap(target, ctsteam.NAMES, 0.6)
