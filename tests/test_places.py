@@ -56,5 +56,13 @@ def test_a_step_found_not_to_go_is_routed_round_and_kept(tmp_path):
     assert a.route(m, start, goal) == [(0, CELL), (CELL, CELL), (2 * CELL, CELL)]
     m.learn_step((1, 0), (1, 1))
     path = a.route(m, start, goal)
-    assert path[0] == (0, CELL) and (CELL, CELL) != path[1]
+    assert path[0] == (0, CELL) and path[1] != (CELL, CELL)
     assert m.steps_file.exists()
+
+
+def test_others_of_kind_for_a_shut_way_unless_the_town_was_named():
+    from playertwo.agent import others_of_kind
+
+    assert others_of_kind(M, "Truce Inn", "take me to the inn", (440, 280)) == ["Porre Inn"]
+    assert others_of_kind(M, "Porre Inn", "the inn in Porre", (440, 280)) == []
+    assert others_of_kind(M, "Leene Square", "the fair", (440, 280)) == []

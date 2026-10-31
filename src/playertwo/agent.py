@@ -394,6 +394,25 @@ def nearest_of_kind(m, name: str, said: str, at: tuple[float, float]) -> str:
         return name if name in named else named[0]  # they said which town
     return min([name, *same], key=lambda n: math.dist(m.places[n], at))
 
+
+def others_of_kind(m, name: str, said: str, at: tuple[float, float]) -> list[str]:
+    """The other places of the same kind as `name`, nearest first, for when the way to it
+    turns out shut; none when the player said which town ("the inn in Porre")."""
+    import math
+
+    def tokens(n: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", n.lower().replace("'s", "")))
+
+    def kind(n: str) -> set[str]:
+        w = re.findall(r"[a-z0-9]+", n.lower().replace("'s", ""))
+        return set(w[1:]) if len(w) > 1 else set(w)
+
+    same = [n for n in m.places if n != name and kind(n) == kind(name) and kind(n)]
+    if any((tokens(n) - kind(n)) & tokens(said) for n in [name, *same]):
+        return []
+    return sorted(same, key=lambda n: math.dist(m.places[n], at))
+
+
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
@@ -1031,6 +1050,22 @@ class Agent:
             result = await walk_to(atlas, m, name, shoot, self.controls.steer,
                                    self.controls.press, keep_going, walker.log, limit,
                                    spot)
+            if result.startswith(("blocked", "no way")) and spot is not None:
+                # "The market" whose way is shut at this point in the story: the next
+                # nearest market, before flying anywhere.
+                said = getattr(self, "_request", "") or place  # the player's, not the model's
+                for other in others_of_kind(m, name, said, (spot.x, spot.y))[:2]:
+                    if not m.opens(other):
+                        continue
+                    await told
+                    told = asyncio.create_task(self._speak(
+                        f"Can't get to {name} from here. Going to {other} instead."))
+                    again = await walk_to(atlas, m, other, shoot, self.controls.steer,
+                                          self.controls.press, keep_going, walker.log,
+                                          limit)
+                    if again.startswith("arrived"):
+                        name, result = other, again
+                        break
             if needs_epoch(result) and epoch_ok(atlas):
                 # Another continent: fly the Epoch, when the party has it.
                 flew = await self._pilot(atlas).travel(m, name)
@@ -1364,6 +1399,7 @@ class Agent:
         t0 = time.monotonic()
         self._failed_walks = 0
         run = Run(request)
+        self._request = request  # the player's own words (tools get the model's)
         self.cancelled = False
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
