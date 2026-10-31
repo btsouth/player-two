@@ -1505,8 +1505,12 @@ class Agent:
                         await self._speak(text)
                         result = "said"
                 elif c.function.name == "ask_player":
-                    question = args.get("question", "")
-                    if self.ask is None:
+                    question = str(args.get("question") or "").strip()
+                    if not question:
+                        # An empty question would play silence and wait for nothing.
+                        result = ("ask_player needs the question itself, in the "
+                                  "question field. Ask again with it, or carry on.")
+                    elif self.ask is None:
                         await self._speak(question)
                         result = "The player can't answer right now. Don't do it; finish."
                     else:
