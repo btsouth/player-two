@@ -77,4 +77,7 @@ def test_world_exits_named_by_their_end(tmp_path):
 
     rooms = Rooms(tmp_path, Atlas())
     assert set(rooms.reachable(19)) == {"outside, toward Guardia Castle",
-                                        "outside, toward Truce Market"}
+                                        "outside, toward Truce Market",
+                                        "outside, the nearest way out"}
+    assert pick_words("take me outside", {k: k for k in rooms.reachable(19)}) == \
+        "outside, the nearest way out"

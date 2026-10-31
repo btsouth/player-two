@@ -346,6 +346,9 @@ class Rooms:
                 if e.to not in dist:
                     dist[e.to] = dist[u] + 1
                     q.append(e.to)
+        outs = [v for v in out.values() if v[0] in self.worlds]
+        if len(outs) > 1:  # outside with no side named: the nearest way
+            out[NEAREST_OUT] = min(outs, key=lambda v: v[1])
         return out
 
     def route(self, room: Room, start: tuple[int, int], goals: set[tuple[int, int]]
@@ -431,15 +434,17 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 faded = faded or rooms.dark
                 way = gone_by
                 if way is None and here is not None and here.loc in rooms.rooms:
-                    # Went through a way out on the way to it (they're often wider than
-                    # the tile walked to): the nearest, if it's close.
+                    # Went through a way out before reaching its tile (they're often
+                    # wider): the one it was walking to (where it was last seen can be
+                    # a glimpse off), else the nearest if it's close. Into another
+                    # surveyed place instead, it's seen there after the fade.
                     exits = rooms.rooms[here.loc].exits
-                    if exits:
+                    if heading in exits:
+                        way = heading
+                    elif exits:
                         e = min(exits, key=lambda e: math.dist(centre(e.frm), (here.x, here.y)))
                         if math.dist(centre(e.frm), (here.x, here.y)) <= 2.5 * TILE:
                             way = e
-                    if way is None and faded and heading is not None:
-                        way = heading  # a fade: through the way it was going, seen late
                 if misses >= 3 and not faded:
                     # Not a fade: something over the place (a text box, a scene).
                     steer(None)
@@ -584,12 +589,15 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 rad = math.radians(a)
                 ahead = (int((here.y - 12 * math.cos(rad)) // TILE),
                          int((here.x + 12 * math.sin(rad)) // TILE))
-                if ahead == here.tile:
-                    ahead = path[1]
+                if ahead in (here.tile, tile) and len(path) > 1:
+                    ahead = path[1]  # (the tile it stands on, as the survey has it)
                 if ahead not in goals:
                     room.learned.add(ahead)
                 log(f"rooms: stuck at {tile} in {rooms.name(here.loc)}, shut {ahead} "
                     f"({stalls})")
+                # A step aside, one way then the other: round someone in the way.
+                steer((a + (90 if stalls % 2 else -90)) % 360)
+                await asyncio.sleep(0.3)
                 steer(None)
                 stuck_t = now_t
                 trail.clear()
@@ -604,6 +612,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
 
 
 WORDS_OUT = {"out", "outside", "exit", "leave", "outdoors", "world"}
+NEAREST_OUT = "outside, the nearest way out"
 
 
 def pick_words(said: str, choices: dict[str, str]) -> str | None:
@@ -615,6 +624,8 @@ def pick_words(said: str, choices: dict[str, str]) -> str | None:
         outs = [k for k, v in choices.items() if "world map" in v or v.startswith("outside")]
         if len(outs) == 1:
             return outs[0]
+        if NEAREST_OUT in choices:
+            return NEAREST_OUT
     for k, v in choices.items():
         if v.lower() == said.lower().strip(" .!?"):
             return k
@@ -625,7 +636,8 @@ PICK_EXIT = """The player is inside {here} in {game} and says: "{said}".
 The places they can walk to from here, by how many ways out away:
 {places}
 Which one do they mean? "outside", "the way out", "leave" mean the world map unless
-they name a place. "Upstairs" or "downstairs" is the floor of the same building. JSON:
+they name a place (with more than one way outside and none of them named or meant, "outside,
+the nearest way out"). "Upstairs" or "downstairs" is the floor of the same building. JSON:
 {{"place": "the number before the name", "why": "a few words"}} or {{"place": null,
 "why": "..."}} if none fits."""
 
