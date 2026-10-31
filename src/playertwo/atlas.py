@@ -69,6 +69,10 @@ class WorldMap:
     world: int | None = None
     doors: dict[tuple[int, int], int] = field(default_factory=dict)  # tile -> location
     names: dict[str, str] = field(default_factory=dict)  # location -> the game's name
+    # Islands over a sky that moves on its own (the game scrolls it, the rip has it
+    # still): matched with the sky left out ("sky": true in atlas.json).
+    sky: bool = False
+    flat: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.blocked is None:
@@ -114,6 +118,18 @@ class WorldMap:
         best = min(self.places.items(), key=lambda kv: math.dist(kv[1], (x, y)))
         name, (px, py) = best
         return name, math.dist((px, py), (x, y)), compass(px - x, py - y)
+
+
+def no_sky(img: np.ndarray) -> np.ndarray:
+    """The picture with sky and cloud (blue, or pale and grey-white) made one flat grey,
+    so only the ground in it is matched."""
+    import cv2
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(int)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    out = img.copy()
+    out[((h >= 90) & (h <= 130) & (s > 30)) | ((s < 45) & (v > 165))] = 128
+    return out
 
 
 def words(name: str) -> set[str]:
@@ -162,7 +178,10 @@ class Atlas:
                 continue
             img = img[: m.get("height", img.shape[0])]
             wm = WorldMap(m["name"], img,
-                          {k: tuple(v) for k, v in m.get("places", {}).items()})
+                          {k: tuple(v) for k, v in m.get("places", {}).items()},
+                          sky=bool(m.get("sky")))
+            if wm.sky:
+                wm.flat = no_sky(img)
             for x0, y0, x1, y1 in m.get("open", []):  # bridges, stairs: walkable
                 wm.blocked[int(y0) // CELL:int(y1) // CELL + 1,
                            int(x0) // CELL:int(x1) // CELL + 1] = False
@@ -238,9 +257,10 @@ class Atlas:
             m = self.map(near.map)
             x0 = max(0, int(near.x - nw / 2 + 16 - 48))
             y0 = max(0, int(near.y - nh / 2 + 16 - 48))
-            win = m.image[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
+            img, tm = (m.flat, no_sky(t)) if m.sky else (m.image, t)
+            win = img[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
             if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
-                r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+                r = cv2.matchTemplate(win, tm, cv2.TM_CCOEFF_NORMED)
                 _, score, _, (x, y) = cv2.minMaxLoc(r)
                 if score > 0.65:
                     return Spot(m.name, x0 + x - 16 + nw / 2, y0 + y - 16 + nh / 2,
@@ -249,8 +269,13 @@ class Atlas:
         maps = self.maps
         if near is not None:
             maps = sorted(self.maps, key=lambda m: m.name != near.map)
+        sky_t = None
         for m in maps:
-            r = cv2.matchTemplate(m.image, t, cv2.TM_CCOEFF_NORMED)
+            if m.sky:
+                sky_t = no_sky(t) if sky_t is None else sky_t
+                r = cv2.matchTemplate(m.flat, sky_t, cv2.TM_CCOEFF_NORMED)
+            else:
+                r = cv2.matchTemplate(m.image, t, cv2.TM_CCOEFF_NORMED)
             _, score, _, (x, y) = cv2.minMaxLoc(r)
             r2 = r.copy()
             r2[max(0, y - 24):y + 24, max(0, x - 24):x + 24] = -1
@@ -311,8 +336,8 @@ class Atlas:
         soft = self._full()["soft"]
         key = (m.name, half)
         if key not in soft:
-            g = cv2.GaussianBlur(cv2.cvtColor(m.image, cv2.COLOR_BGR2GRAY), (0, 0),
-                                 self.SOFT)
+            g = cv2.GaussianBlur(cv2.cvtColor(m.flat if m.sky else m.image,
+                                              cv2.COLOR_BGR2GRAY), (0, 0), self.SOFT)
             soft[key] = cv2.pyrDown(g) if half else g
         return soft[key]
 
@@ -394,6 +419,9 @@ class Atlas:
 
         h, w = rgb.shape[:2]
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        if any(m.sky for m in self.maps):  # the same view with its sky left out
+            gray = (gray, cv2.cvtColor(no_sky(np.ascontiguousarray(rgb[:, :, ::-1])),
+                                       cv2.COLOR_BGR2GRAY))
         st = self._full()
         size = st["scales"].get((w, h))
         if size is not None:
@@ -411,7 +439,7 @@ class Atlas:
         if time.monotonic() - st["tried"].get((w, h), -1e9) < 5:
             return None
         st["tried"][(w, h)] = time.monotonic()
-        size = self._calibrate(gray)
+        size = self._calibrate(gray[0] if isinstance(gray, tuple) else gray)
         if size is None:
             return None
         self._keep((w, h), size)
@@ -432,7 +460,9 @@ class Atlas:
         import cv2
 
         vw, vh = size
+        gray, sky = gray if isinstance(gray, tuple) else (gray, None)
         t, b, a = self._cut(gray, size, self.SOFT)
+        t_sky = self._cut(sky, size, self.SOFT)[0] if sky is not None else t
 
         def spot(m: WorldMap, x: float, y: float, score: float, margin: float) -> Spot:
             return Spot(m.name, x - b + vw / 2, y - a + vh / 2 + self.FULL_DROP,
@@ -444,7 +474,7 @@ class Atlas:
             y0 = max(0, int(near.y - self.FULL_DROP - vh / 2 + a - 48))
             win = self._soft(m)[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
             if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
-                r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+                r = cv2.matchTemplate(win, t_sky if m.sky else t, cv2.TM_CCOEFF_NORMED)
                 _, score, _, (x, y) = cv2.minMaxLoc(r)
                 if score > 0.65:
                     return spot(m, x0 + x, y0 + y, score, 1.0)
@@ -456,7 +486,7 @@ class Atlas:
             M = self._soft(m)
             if M.shape[0] < t.shape[0] or M.shape[1] < t.shape[1]:
                 continue
-            r = cv2.matchTemplate(M, t, cv2.TM_CCOEFF_NORMED)
+            r = cv2.matchTemplate(M, t_sky if m.sky else t, cv2.TM_CCOEFF_NORMED)
             _, score, _, (x, y) = cv2.minMaxLoc(r)
             r[max(0, y - 24):y + 24, max(0, x - 24):x + 24] = -1
             s = spot(m, x, y, score, float(score - r.max()))
