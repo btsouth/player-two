@@ -50,8 +50,8 @@ ERA_WORDS = {
     "65,000,000 B.C.": ("65", "prehistor", "dinosaur", "ayla", "reptite", "stone age",
                         "65000000", "65,000,000"),
 }
-FLY = 0.35  # seconds of the hold that tells flying (about 40 px) from walking (about 20)
-FLY_PX = 32
+FLY = 0.35  # seconds of a hold that tells flying (48 px or more) from walking (24 to 32)
+FLY_PX = 40
 
 
 def era_of(map_name: str) -> str | None:
@@ -307,12 +307,38 @@ class Pilot:
     # eyes
     async def where(self, near: bool = True) -> Spot | None:
         img = await self.shoot()
-        s = await asyncio.to_thread(self.atlas.locate, img, self.spot if near else None)
+        s = await asyncio.to_thread(self._locate, img, self.spot if near else None)
         if s is not None and s.margin < 0.05:
             s = None
         if s is not None:
             self.spot = s
         return s
+
+    def _locate(self, img, near: Spot | None) -> Spot | None:
+        """Atlas.locate, but around the last spot it takes a weaker match that still
+        stands out: over the sea, with clouds and the Epoch over the middle, the match
+        drops under locate's bar and every miss would cost a search of every map."""
+        import cv2
+
+        if near is not None:
+            rgb = np.asarray(img.convert("RGB"))
+            if self.atlas._boxed(rgb):
+                v = self.atlas._view(rgb)
+                nw, nh = self.atlas.native
+                t = v[16:nh - 24, 16:nw - 16]
+                m = self.atlas.map(near.map)
+                x0 = max(0, int(near.x - nw / 2 + 16 - 48))
+                y0 = max(0, int(near.y - nh / 2 + 16 - 48))
+                win = m.image[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
+                if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
+                    r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+                    _, score, _, (x, y) = cv2.minMaxLoc(r)
+                    r[max(0, y - 8):y + 8, max(0, x - 8):x + 8] = -1
+                    margin = score - float(r.max())
+                    if score > 0.45 and margin > 0.1:
+                        return Spot(m.name, x0 + x - 16 + nw / 2, y0 + y - 16 + nh / 2,
+                                    float(score), 1.0)
+        return self.atlas.locate(img, near)
 
     @staticmethod
     def here(s: Spot) -> tuple[float, float]:
@@ -500,12 +526,14 @@ class Pilot:
                     return True
                 fixes += 1
                 if fixes > 12:
+                    self.log(f"epoch: couldn't settle on {goal}, at {p}")
                     return False
                 tx = (dx > 2) - (dx < -2)
                 ty = (dy > 2) - (dy < -2)
                 far = max(abs(dx), abs(dy))
+                one = 0.05 if s.tap < 0.08 else s.tap  # a tile's tap (the port's is longer)
                 await self.tap(math.degrees(math.atan2(tx, -ty)) % 360,
-                               0.05 if far <= CELL + 2 else 0.1)
+                               one if far <= CELL + 2 else 2 * one)
                 await asyncio.sleep(0.25)
         finally:
             self.steer(None)
@@ -547,8 +575,16 @@ class Pilot:
         return f"found nowhere to land near {name} ({len(spots)} spots tried)"
 
     async def set_era(self, era: str, check=None) -> str:
-        """With the Epoch flying, go to an era by its time gauge: "" when there.
+        """With the Epoch flying, go to an era by its time gauge: "" when there (a
+        press lost on the gauge lands in a neighbouring era: then once more from there).
         check: optional async (image) -> the era the gauge shows, to confirm."""
+        why = await self._gauge(era, check)
+        if why.startswith("after the time gauge, the screen is the "):
+            self.log(f"epoch: {why}; once more")
+            why = await self._gauge(era, check)
+        return why
+
+    async def _gauge(self, era: str, check=None) -> str:
         s = await self.where(near=False)
         if s is None:
             return "not on a world map"

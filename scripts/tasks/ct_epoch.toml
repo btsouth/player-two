@@ -1,0 +1,105 @@
+# Epoch tasks for scripts/emu_tasks.py in Chrono Trigger (SNES, in RetroArch): trips to
+# places on other continents and in other eras, which need the Epoch (the time machine),
+# judged by the game's location number when it's done. Asked the way a player would.
+# States (from scripts/ct_states.py, see index.json in the states folder) have the Epoch
+# parked beside the party:
+#   world-1000-epoch  1000 A.D., by Lucca's house
+#   world-600-epoch   600 A.D., by Hero's Grave (Choras side)
+#   world-2300-epoch  2300 A.D., by Geno Dome
+
+[game]
+name = "Chrono Trigger (SNES)"
+core = "/usr/lib/libretro/snes9x_libretro.so"
+core_name = "Snes9x"
+rom = "/data/Emulation/Games/SNES/Chrono Trigger (NA).sfc"
+states = "~/.cache/player-two/emu/states/ct-snes"
+
+# Where things are in the game's memory (offsets into its 128 KB of work RAM, found by
+# comparing memory while walking known ways and going in and out of places).
+[game.ram]
+x = "0x283"         # the character on a world map, map pixels (16 bits)
+y = "0x285"
+location = "0x100"  # which map or place: 0x1F0 is the 1000 A.D. world map (9 bits)
+location_mask = 0x1FF
+exit = "0x1B32"     # the place icon underfoot on a world map, 255 when none
+exit_none = 255
+
+[[task]]
+id = "e-medina"
+category = "epoch continent"
+state = "world-1000-epoch"
+request = "take me to Medina Village"
+location = ["0x1f", "0x21", "0x23", "0x24", "0x27"]  # any of Medina's doors
+limit_s = 300
+
+[[task]]
+id = "e-melchior"
+category = "epoch continent"
+state = "world-1000-epoch"
+request = "take me to Melchior's hut"
+location = "0x28"
+limit_s = 300
+
+[[task]]
+id = "e-cathedral"
+category = "epoch continent"
+state = "world-600-epoch"
+request = "take me to the cathedral"
+location = "0x81"
+limit_s = 300
+
+[[task]]
+id = "e-bangor"
+category = "epoch continent"
+state = "world-2300-epoch"
+request = "take me to Bangor Dome"
+location = "0xd0"
+limit_s = 300
+
+[[task]]
+id = "e-era-600"
+category = "epoch era"
+state = "world-1000-epoch"
+request = "take me to 600 AD"
+location = "0x1f1"
+limit_s = 240
+
+[[task]]
+id = "e-era-future"
+category = "epoch era"
+state = "world-600-epoch"
+request = "let's go to the future"
+location = "0x1f2"
+limit_s = 240
+
+[[task]]
+id = "e-truce-600"
+category = "epoch era place"
+state = "world-1000-epoch"
+request = "take me to the inn in Truce in 600 AD"
+location = "0x74"
+limit_s = 360
+
+[[task]]
+id = "e-ioka"
+category = "epoch era place"
+state = "world-1000-epoch"
+request = "take me to Ayla's village in prehistoric times"
+location = ["0x114", "0x115", "0x116", "0x117"]  # an Ioka hut
+limit_s = 360
+
+[[task]]
+id = "e-dorino"
+category = "epoch continent"
+state = "world-600-epoch"
+request = "take me to the village of Dorino"
+location = ["0x88", "0x89", "0x8a", "0x8b"]  # any of Dorino's doors
+limit_s = 300
+
+[[task]]
+id = "e-choras-inn"
+category = "epoch continent"
+state = "world-1000-epoch"
+request = "take me to the inn in Choras"
+location = "0x3e"
+limit_s = 300
