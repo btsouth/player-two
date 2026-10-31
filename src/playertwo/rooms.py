@@ -10,7 +10,8 @@ picture. Here the screen is found on those pictures by plain image matching (the
 is a window onto the place), the character on it by its look, the way to the chosen way
 out planned on the walkable tiles (through other places when it's further), and walking
 checks where it is several times a second. Pictures only: it works on any copy of the
-game, the emulator's memory is only for making the survey.
+game, the emulator's memory is only for making the survey. The Steam port's redrawn
+screens are found on the same pictures (see STEAM_VIEW).
 
 <atlas folder>/rooms/:
     loc-002.json, loc-002.png   one place: its tiles, ways out and picture (survey_rooms.py)
@@ -42,6 +43,25 @@ NATIVE = (256, 224)  # the game's screen, in its own pixels
 # view follows it; at a place's edges the view stops and the character walks on.
 FOLLOW = (128, 138)
 EDGE = 8  # a margin off the screen's edges, for matching
+# The Steam port of Chrono Trigger draws the same places redrawn and smoothed, filling a
+# wide window: 304x191 of the game's pixels in any 16:9 window (as on the world map, see
+# view-scales.json), a place narrower than that in the middle of a dark red fill. Its
+# view is matched in colour on the pictures padded with black (a view can hang off a
+# small place), accepted when it stands out from anywhere else.
+STEAM_VIEW = (304, 191)
+STEAM_FILL = (24, 8, 8)  # RGB of the fill round a small place
+STEAM_PAD = 80
+STEAM_CUT = (12, 8, 40, 14)  # off the view's left, top, right and bottom (Steam's toasts)
+STEAM_SCORE, STEAM_MARGIN = 0.7, 0.1
+STEAM_NEAR = 48  # how far from the last view the quick search looks, in game pixels
+# Where Steam's view keeps the character's feet while it follows (the game's own view
+# shifted 24 left for the wider picture, 18 down for the shorter one). At a place's
+# edges it stops: across at the place's own sides, or centred on a place narrower than
+# it; down from the game's own top to STEAM_LOW below the game's own bottom.
+STEAM_FOLLOW = (152, 120)
+STEAM_LOW = 31
+STEAM_TAP = 0.1  # Steam misses a 60 ms tap; 100 ms is one step
+STEAM_LEAD = 0.2  # input lag and the look's own time: turns start this much early (s)
 # Things named in a place that are ways out: the survey's own ways out stand for them (a
 # spot is only where its name was put on the picture, and can't be walked through).
 WAY_OUT = re.compile(r"\b(exit|entrance|door|doorway|stairs?|staircase|way out|gate)\b", re.IGNORECASE)
@@ -83,6 +103,7 @@ class Here:
     y: float
     score: float
     sure: bool = True  # the character itself was found (not just where the view keeps it)
+    steam: bool = False  # seen in the Steam port's wide window (cam is its view's top left)
 
     @property
     def tile(self) -> tuple[int, int]:
@@ -101,6 +122,29 @@ def view(frame: Image.Image | np.ndarray) -> np.ndarray:
         x0 = (w - gw) // 2
         rgb = cv2.resize(rgb[:, x0:x0 + gw], NATIVE, interpolation=cv2.INTER_AREA)
     return np.ascontiguousarray(rgb[:, :, ::-1])
+
+
+def steam_view(rgb: np.ndarray) -> np.ndarray:
+    """The Steam port's whole window at the game's own pixels (STEAM_VIEW), BGR, its
+    fill round a small place painted black (as the pictures are where nothing was)."""
+    import cv2
+
+    fill = np.abs(rgb.astype(np.int16) - np.array(STEAM_FILL, np.int16)).sum(2) < 18
+    rgb = rgb.copy()
+    rgb[fill] = 0
+    return cv2.resize(rgb, STEAM_VIEW, interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
+
+
+def steam_range(room: Room) -> tuple[float, float, float, float]:
+    """Where Steam's view can be on a place's picture (its top left): least and most
+    across, then down. The survey's cams are the game's own (256 wide, 224 high)."""
+    x0, y0, x1, y1 = room.cam_range()
+    w = STEAM_VIEW[0]
+    lo_x, hi_x = x0, x1 + NATIVE[0] - w
+    if hi_x < lo_x:  # narrower than the view: in the middle of it
+        lo_x = hi_x = (x0 + x1 + NATIVE[0] - w) / 2
+    lo_y, hi_y = y0, y1 + STEAM_LOW
+    return lo_x, lo_y, hi_x, hi_y
 
 
 class Rooms:
@@ -139,6 +183,8 @@ class Rooms:
         self.sprites: list[tuple[np.ndarray, np.ndarray, tuple[float, float]]] = []
         self._colours: np.ndarray | None = None
         self.dark = False  # the last screen looked at was black (a fade between places)
+        self._steam_pics: dict[int, tuple[np.ndarray, np.ndarray]] | None = None
+        self._steam_sizes: set[tuple[int, int]] = set()  # window sizes seen as Steam's
         if (folder / "player.json").exists():
             anchors = json.loads((folder / "player.json").read_text()).get("anchor", {})
             for way, (ax, ay) in anchors.items():
@@ -202,7 +248,10 @@ class Rooms:
         None (the world map, a menu, a battle, a fade, a place not surveyed)."""
         import cv2
 
-        v = view(frame)
+        rgb = np.asarray(frame.convert("RGB")) if isinstance(frame, Image.Image) else frame
+        if self.is_steam(rgb):
+            return self._locate_steam(rgb, near)
+        v = view(rgb)
         self.dark = float(v.std()) < 6 or float(v.mean()) < 12
         if self.dark:  # a black or faded screen
             return None
@@ -318,6 +367,195 @@ class Rooms:
         k = q[..., 0] * 64 + q[..., 1] * 8 + q[..., 2]
         return mask & np.isin(k, self._colours)
 
+    # -- the Steam port ------------------------------------------------------------------
+    def is_steam(self, rgb: np.ndarray) -> bool:
+        """Whether a screen is the Steam port's (the window filled) rather than an
+        emulator's 4:3 picture with black bars (atlas.Atlas._boxed's test): the sides
+        show the place or Steam's fill. Sides all black (a dark place, a fade) say
+        nothing: as the last clear screen of that size said."""
+        h, w = rgb.shape[:2]
+        if (w, h) == NATIVE:
+            return False
+        x0 = (w - min(w, round(h * 4 / 3))) // 2
+        if x0 < 4:
+            return False
+        sides = np.concatenate([rgb[::4, :x0:4], rgb[::4, w - x0::4]], axis=1)
+        sides = sides.reshape(-1, 3).astype(np.int16)
+        fill = np.abs(sides - np.array(STEAM_FILL, np.int16)).sum(1) < 18
+        lit = (sides.max(1) >= 24) & ~fill
+        if float(fill.mean()) > 0.2 or float(lit.mean()) > 0.05:
+            self._steam_sizes.add((w, h))
+            return True
+        return (w, h) in self._steam_sizes
+
+    @staticmethod
+    def _steam_prep(bgr: np.ndarray) -> np.ndarray:
+        import cv2
+
+        return cv2.GaussianBlur(bgr.astype(np.float32), (0, 0), 1.0)
+
+    def _steam_pictures(self) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+        """Each place's picture padded with black and softened as Steam's view is
+        matched (full size and half), made on the first Steam screen."""
+        import cv2
+
+        if self._steam_pics is None:
+            pics = {}
+            for loc, room in self.rooms.items():
+                p = self._steam_prep(cv2.copyMakeBorder(
+                    room.image, STEAM_PAD, STEAM_PAD, STEAM_PAD, STEAM_PAD,
+                    cv2.BORDER_CONSTANT, value=0))
+                pics[loc] = (p, cv2.pyrDown(p))
+            self._steam_pics = pics
+        return self._steam_pics
+
+    def _locate_steam(self, rgb: np.ndarray, near: Here | None) -> Here | None:
+        """locate() for the Steam port: around the last view first, else every place at
+        half size, then exactly around the best three; the best is kept if it scores
+        STEAM_SCORE and beats anywhere else (that place further off, the other places)
+        by STEAM_MARGIN."""
+        import cv2
+
+        v = steam_view(rgb)
+        self.dark = float(v.std()) < 6
+        if self.dark:
+            return None
+        b, a, r_, d_ = STEAM_CUT
+        t = self._steam_prep(v)[a:STEAM_VIEW[1] - d_, b:STEAM_VIEW[0] - r_]
+        pics = self._steam_pictures()
+        th, tw = t.shape[:2]
+        if near is not None and near.steam and near.loc in pics:
+            P = pics[near.loc][0]
+            x0 = max(0, near.cam[0] + STEAM_PAD + b - STEAM_NEAR)
+            y0 = max(0, near.cam[1] + STEAM_PAD + a - STEAM_NEAR)
+            win = P[y0:y0 + th + 2 * STEAM_NEAR, x0:x0 + tw + 2 * STEAM_NEAR]
+            if win.shape[0] >= th and win.shape[1] >= tw:
+                _, score, _, (x, y) = cv2.minMaxLoc(
+                    cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED))
+                if score >= STEAM_SCORE:
+                    cam = (x0 + x - b - STEAM_PAD, y0 + y - a - STEAM_PAD)
+                    return self._player_steam(v, self.rooms[near.loc], cam, float(score), near)
+        half = cv2.pyrDown(t)
+        cands = []
+        for loc, (_, H) in pics.items():
+            if H.shape[0] < half.shape[0] or H.shape[1] < half.shape[1]:
+                continue
+            _, s, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(H, half, cv2.TM_CCOEFF_NORMED))
+            cands.append((float(s), loc, 2 * x, 2 * y))
+        cands.sort(reverse=True)
+        fine = []
+        for _s, loc, x, y in cands[:3]:
+            P = pics[loc][0]
+            x0, y0 = max(0, x - 6), max(0, y - 6)
+            win = P[y0:y0 + th + 12, x0:x0 + tw + 12]
+            if win.shape[0] < th or win.shape[1] < tw:
+                continue
+            _, s2, _, (dx, dy) = cv2.minMaxLoc(cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED))
+            fine.append((float(s2), loc, x0 + dx, y0 + dy))
+        if not fine:
+            return None
+        fine.sort(reverse=True)
+        score, loc, x, y = fine[0]
+        if score < STEAM_SCORE:
+            return None
+        r = cv2.matchTemplate(pics[loc][0], t, cv2.TM_CCOEFF_NORMED)
+        r[max(0, y - 24):y + 24, max(0, x - 24):x + 24] = -1
+        other = max([float(r.max())] + [f[0] for f in fine[1:] if f[1] != loc])
+        if score - other < STEAM_MARGIN:
+            return None
+        cam = (x - b - STEAM_PAD, y - a - STEAM_PAD)
+        return self._player_steam(v, self.rooms[loc], cam, score, near)
+
+    def _steam_sprites(self) -> list[tuple[np.ndarray, np.ndarray, tuple[int, int]]]:
+        """The player's cut-outs softened as Steam draws them, a step to the left
+        mirrored from one to the right when there's none of its own."""
+        import cv2
+
+        if getattr(self, "_ssprites", None) is None:
+            got: dict[str, tuple[np.ndarray, np.ndarray, tuple[float, float]]] = {}
+            if (self.folder / "player.json").exists():
+                anchors = json.loads((self.folder / "player.json").read_text()).get("anchor", {})
+                for way, (ax, ay) in anchors.items():
+                    p = self.folder / f"player-{way}.png"
+                    if p.exists():
+                        rgba = np.asarray(Image.open(p).convert("RGBA"))
+                        got[way] = (np.ascontiguousarray(rgba[:, :, 2::-1]),
+                                    np.ascontiguousarray((rgba[:, :, 3] > 0).astype(np.uint8)),
+                                    (ax, ay))
+            for way, (bgr, mask, (ax, ay)) in list(got.items()):
+                if way.startswith("right") and way.replace("right", "left") not in got:
+                    got[way.replace("right", "left")] = (
+                        np.ascontiguousarray(bgr[:, ::-1]), np.ascontiguousarray(mask[:, ::-1]),
+                        (bgr.shape[1] - ax, ay))
+            self._ssprites = [(cv2.GaussianBlur(b.astype(np.float32), (0, 0), 0.7), m,
+                               (round(ax), round(ay))) for b, m, (ax, ay) in got.values()]
+        return self._ssprites
+
+    def _steam_feet(self, v: np.ndarray, around: tuple[float, float] | None = None,
+                    n: int = 4) -> list[tuple[float, tuple[int, int]]]:
+        """Where the player's cut-outs fit Steam's view best, as (score, feet), the
+        best few at least a body apart; only within STEAM_NEAR of `around` (feet) when
+        given, which is quicker."""
+        import cv2
+
+        h, w = v.shape[:2]
+        ox = oy = 0
+        if around is not None:
+            ox = max(0, int(around[0]) - STEAM_NEAR - 24)
+            oy = max(0, int(around[1]) - STEAM_NEAR - 48)
+            v = v[oy:int(around[1]) + STEAM_NEAR + 8, ox:int(around[0]) + STEAM_NEAR + 24]
+        vh, vw = v.shape[:2]
+        vf = cv2.GaussianBlur(v.astype(np.float32), (0, 0), 0.7)
+        best = np.full((vh, vw), -1, np.float32)
+        for spr, mask, (ax, ay) in self._steam_sprites():
+            if spr.shape[0] > vh or spr.shape[1] > vw:
+                continue
+            r = cv2.matchTemplate(vf, spr, cv2.TM_CCOEFF_NORMED, mask=mask)
+            r = np.nan_to_num(r, nan=-1.0, posinf=-1.0, neginf=-1.0)
+            sub = best[ay:ay + r.shape[0], ax:ax + r.shape[1]]
+            np.maximum(sub, r[:sub.shape[0], :sub.shape[1]], out=sub)
+        # Steam's toasts, bottom right
+        best[max(0, h - STEAM_CUT[3] - oy):, max(0, w - STEAM_CUT[2] - ox):] = -1
+        out = []
+        for _ in range(n):
+            _, s, _, (x, y) = cv2.minMaxLoc(best)
+            if s <= 0:
+                break
+            out.append((float(s), (x + ox, y + oy)))
+            best[max(0, y - 20):y + 20, max(0, x - 12):x + 12] = -1
+        return out
+
+    def _player_steam(self, v: np.ndarray, room: Room, cam: tuple[int, int], score: float,
+                      near: Here | None = None) -> Here:
+        """_player() on Steam's view: Steam draws people as the game does, softened,
+        but not in the game's colours, so the player is found by its shape (the
+        cut-outs, softened alike): a clear match, or a weaker one where it was last."""
+        x0, y0, x1, y1 = steam_range(room)
+        fx, fy = cam[0] + STEAM_FOLLOW[0], cam[1] + STEAM_FOLLOW[1]
+        follows = (x0 + 1 < cam[0] < x1 - 1, y0 + 1 < cam[1] < y1 - 1)
+        same = near is not None and near.loc == room.loc
+        prior = (near.x - cam[0], near.y - cam[1]) if same else STEAM_FOLLOW
+        best = None
+        # Around where it was, when it was seen: quicker, and no one else is taken for it.
+        around = prior if same and near.sure and near.steam else None
+        for s, feet in self._steam_feet(v, around):
+            far = math.dist(feet, prior)
+            if s < 0.6 and not (s >= 0.4 and far <= 24):
+                continue
+            if (follows[0] and abs(feet[0] - STEAM_FOLLOW[0]) > 24) or (
+                    follows[1] and abs(feet[1] - STEAM_FOLLOW[1]) > 28):
+                continue  # not where the view keeps it
+            cost = far + 100 * (1 - s)
+            if best is None or cost < best[0]:
+                best = (cost, feet)
+        if best is not None:
+            return Here(room.loc, cam, cam[0] + best[1][0], cam[1] + best[1][1], score, True,
+                        True)
+        if same and not all(follows):
+            return Here(room.loc, cam, fx if follows[0] else near.x,
+                        fy if follows[1] else near.y, score, False, True)
+        return Here(room.loc, cam, fx, fy, score, all(follows), True)
+
     # -- the way ---------------------------------------------------------------------
     def hops(self, start: int, goal: int | set[int]) -> list[int] | None:
         """Places to go through, start to goal, by the ways out (fewest first)."""
@@ -411,6 +649,23 @@ def angle_to(dx: float, dy: float) -> float:
     return math.degrees(math.atan2(dx, -dy)) % 360
 
 
+def lead(here: Here, trail) -> tuple[float, float]:
+    """Where the character will be by the time a turn takes on Steam: walked on at
+    its speed over the last half second for STEAM_LEAD, at most a tile. Where it is
+    on the emulator (no lag to speak of). trail: (when, place, x, y), oldest first."""
+    if not here.steam:
+        return here.x, here.y
+    now = time.monotonic()
+    recent = [p for p in trail if p[1] == here.loc and now - p[0] <= 0.5]
+    if not recent or now - recent[0][0] < 0.1:
+        return here.x, here.y
+    dt = now - recent[0][0]
+    vx, vy = (here.x - recent[0][2]) / dt, (here.y - recent[0][3]) / dt
+    dx, dy = vx * STEAM_LEAD, vy * STEAM_LEAD
+    k = min(1.0, TILE / max(1e-6, math.hypot(dx, dy)))
+    return here.x + dx * k, here.y + dy * k
+
+
 async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                    limit: float = 90.0, start: Here | None = None, label: str = "",
                    spot: tuple[float, float] | None = None) -> str:
@@ -496,15 +751,19 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     return f"arrived: in {target} ({time.monotonic() - t0:.0f} s)"
             here = now
             room = rooms.rooms[here.loc]
+            # Where it will be when a turn starts: on Steam, input lags and the look
+            # takes a while, so it's walked on a little by then (turns start early).
+            px, py = lead(here, trail)
+            tap = STEAM_TAP if here.steam else 0.06
             if here.loc == goal and spot is not None:
                 # The last of it: to the walkable tile nearest the spot, facing it.
                 tile = here.tile
                 if tile not in room.walk:
                     tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
                 end = min(room.walk, key=lambda t: math.dist(centre(t), spot))
-                if math.dist((here.x, here.y), centre(end)) < 10 or tile == end:
+                if math.dist((px, py), centre(end)) < 10 or tile == end:
                     steer(angle_to(spot[0] - here.x, spot[1] - here.y))
-                    await asyncio.sleep(0.08)
+                    await asyncio.sleep(max(0.08, tap))
                     steer(None)
                     return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"
                 path = rooms.route(room, tile, {end})
@@ -513,10 +772,12 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     return f"blocked: no way to {target} from here"
                 aim = centre(path[1]) if len(path) > 1 else centre(end)
                 for t in path[1:4]:
-                    if math.dist((here.x, here.y), centre(t)) > 12:
+                    if math.dist((px, py), centre(t)) > 12:
                         aim = centre(t)
                         break
-                steer(angle_to(aim[0] - here.x, aim[1] - here.y))
+                steer(angle_to(aim[0] - px, aim[1] - py))
+                if here.steam:
+                    trail.append((time.monotonic(), here.loc, here.x, here.y))
                 await asyncio.sleep(0.02)
                 continue
             if here.loc == goal:
@@ -558,7 +819,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 return (f"blocked: no way through to {rooms.name(hops[1])} from here in "
                         f"{rooms.name(here.loc)}")
             at_end = len(path) == 1 or (len(path) == 2 and
-                                        math.dist((here.x, here.y), centre(path[-1])) < 10)
+                                        math.dist((px, py), centre(path[-1])) < 10)
             if at_end:
                 e = min((e for e in ways if e.frm == path[-1]),
                         key=lambda e: 0, default=ways[0])
@@ -568,8 +829,11 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 if abs(off) > 5:
                     a = angle_to(off, 0) if e.dir[1] else angle_to(0, off)
                     steer(a)
-                    await asyncio.sleep(0.06)
+                    await asyncio.sleep(tap)
                     steer(None)
+                    if here.steam:  # till the step shows
+                        await asyncio.sleep(STEAM_LEAD)
+                        trail.clear()
                     continue
                 gone_by, gone_t = e, time.monotonic()
                 log(f"rooms: through the way out to {rooms.name(e.to)} at {e.frm}")
@@ -579,10 +843,10 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             aim = centre(path[1])
             for t in path[1:4]:
                 c = centre(t)
-                if math.dist((here.x, here.y), c) > 12:
+                if math.dist((px, py), c) > 12:
                     aim = c
                     break
-            a = angle_to(aim[0] - here.x, aim[1] - here.y)
+            a = angle_to(aim[0] - px, aim[1] - py)
             steer(a)
             if time.monotonic() - said > 1.0:
                 said = time.monotonic()
