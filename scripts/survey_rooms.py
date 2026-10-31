@@ -708,13 +708,15 @@ class RoomSurvey:
                 "walk": sorted(self.walk),
                 "wall": sorted(t for t, n in self.wall.items() if n and t not in self.walk),
                 "exits": self.exits}
+        if MOVING:
+            data["moving"] = True  # rooms.py finds it by its edges
         if made is not None:
             pic, cams = made
             Image.fromarray(pic).save(out.with_suffix(".png"))
             data["size"] = [pic.shape[1], pic.shape[0]]
             data["cams"] = sorted(cams)
         old = json.loads(out.read_text()) if out.exists() else {}
-        for k in ("name", "spots", "size", "cams"):  # kept: names given since, the picture
+        for k in ("name", "spots", "size", "cams", "moving"):  # kept: names given since, the picture
             if old.get(k) and not data.get(k):
                 data[k] = old[k]
         out.write_text(json.dumps(data))
@@ -1090,12 +1092,20 @@ def main() -> None:
                 if f.exists() and all(t != e["to"] for t, _ in s.arrivals):
                     s.arrivals[(e["to"], tuple(e.get("at", (0, 0))))] = f
             log(f"carrying on from {len(s.walk)} walkable, {len(s.exits)} ways out")
-        tries = 0
+        tries = fights = 0
         while True:
             try:
                 s.explore(args.minutes)
                 s.views()
                 break
+            except Battle:
+                # A fight caught mid-walk (places full of monsters): run, and carry on.
+                fights += 1
+                g.hold([])
+                if fights > 40:
+                    break
+                g.flee(log)
+                time.sleep(secs(1.0))
             except RuntimeError as exc:
                 tries += 1
                 log(f"{type(exc).__name__} {exc}: loading the place again ({tries})")

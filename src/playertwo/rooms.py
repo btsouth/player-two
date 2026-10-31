@@ -91,6 +91,7 @@ class Room:
     learned: set[tuple[int, int]] = field(default_factory=set)  # found shut while walking
     small: np.ndarray | None = None
     spots: dict[str, tuple[float, float]] = field(default_factory=dict)  # things in it
+    moving: bool = False  # its ground never stands still (drifting mist): found by its edges
 
     def cam_range(self) -> tuple[int, int, int, int]:
         xs = [c[0] for c in self.cams] or [0]
@@ -233,7 +234,7 @@ class Rooms:
                         {tuple(t) for t in d["walk"]}, {tuple(t) for t in d.get("wall", [])},
                         exits, [tuple(c) for c in d.get("cams", [])],
                         spots={k: tuple(v) for k, v in d.get("spots", {}).items()
-                               if not WAY_OUT.search(k)})
+                               if not WAY_OUT.search(k)}, moving=bool(d.get("moving")))
             room.small = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2),
                                     interpolation=cv2.INTER_AREA)
             self.rooms[room.loc] = room
@@ -318,7 +319,13 @@ class Rooms:
         if self.dark:  # a black or faded screen
             return None
         t = v[EDGE:200, EDGE:NATIVE[0] - EDGE]
-        if near is not None and near.loc in self.rooms:
+        if any(r.moving for r in self.rooms.values()):
+            # Places whose ground drifts (the Mountain of Woe's mist) by their edges,
+            # first: in colour they'd match anywhere about as well.
+            here = self._locate_moving(v, near)
+            if here is not None:
+                return here
+        if near is not None and near.loc in self.rooms and not self.rooms[near.loc].moving:
             room = self.rooms[near.loc]
             x0, y0 = max(0, near.cam[0] - 40), max(0, near.cam[1] - 40)
             win = room.image[y0:y0 + t.shape[0] + 2 * EDGE + 80,
@@ -342,6 +349,8 @@ class Rooms:
         ts = cv2.resize(t, (t.shape[1] // 2, t.shape[0] // 2), interpolation=cv2.INTER_AREA)
         scores = []
         for room in self.rooms.values():
+            if room.moving:
+                continue
             s = room.small
             if s is None or s.shape[0] < ts.shape[0] or s.shape[1] < ts.shape[1]:
                 continue
@@ -365,6 +374,36 @@ class Rooms:
         if best is None or best[0] < 0.6:
             return None
         return self._player(v, self.rooms[best[1]], best[2], best[0], near)
+
+    def _locate_moving(self, v: np.ndarray, near: Here | None) -> Here | None:
+        """locate() on the places whose ground drifts, by the edges, only what the survey
+        saw counting: around the last view, else all of those places."""
+        import cv2
+
+        if getattr(self, "_moving_pics", None) is None:
+            self._moving_pics = {}
+            for loc, room in self.rooms.items():
+                if room.moving:
+                    seen = cv2.erode((room.image.max(2) > 0).astype(np.uint8),
+                                     np.ones((9, 9), np.uint8))
+                    e = steam_edges(room.image)
+                    self._moving_pics[loc] = (Seen(e, seen), Seen(cv2.pyrDown(e), seen[::2, ::2]))
+        t = steam_edges(v)[EDGE:200, EDGE:NATIVE[0] - EDGE]
+        low, margin = STEAM_EDGES
+        if near is not None and near.loc in self._moving_pics:
+            x0, y0 = max(0, near.cam[0] - 40), max(0, near.cam[1] - 40)
+            r = self._moving_pics[near.loc][0].match(t, x0 + EDGE, y0 + EDGE, 80, 80)
+            if r is not None:
+                _, score, _, (x, y) = cv2.minMaxLoc(r)
+                if score >= low:
+                    return self._player_steam(v[:200], self.rooms[near.loc], (x0 + x, y0 + y),
+                                              float(score), near, steam=False)
+        hit = self._steam_search(t, self._moving_pics, low, margin)
+        if hit is None:
+            return None
+        score, loc, x, y = hit
+        return self._player_steam(v[:200], self.rooms[loc], (x - EDGE, y - EDGE), score, near,
+                                  steam=False)
 
     def _player(self, v: np.ndarray, room: Room, cam: tuple[int, int], score: float,
                 near: Here | None = None) -> Here:
@@ -613,35 +652,38 @@ class Rooms:
         return out
 
     def _player_steam(self, v: np.ndarray, room: Room, cam: tuple[int, int], score: float,
-                      near: Here | None = None) -> Here:
+                      near: Here | None = None, steam: bool = True) -> Here:
         """_player() on Steam's view: Steam draws people as the game does, softened,
         but not in the game's colours, so the player is found by its shape (the
-        cut-outs, softened alike): a clear match, or a weaker one where it was last."""
-        x0, y0, x1, y1 = steam_range(room)
-        fx, fy = cam[0] + STEAM_FOLLOW[0], cam[1] + STEAM_FOLLOW[1]
+        cut-outs, softened alike): a clear match, or a weaker one where it was last.
+        steam=False: on the emulator's own view, for places whose ground drifts (what's
+        drawn over the bare place is everywhere there)."""
+        follow = STEAM_FOLLOW if steam else FOLLOW
+        x0, y0, x1, y1 = steam_range(room) if steam else room.cam_range()
+        fx, fy = cam[0] + follow[0], cam[1] + follow[1]
         moving = (x0 + 1 < cam[0] < x1 - 1, y0 + 1 < cam[1] < y1 - 1)
         # Surely following, well inside (where Steam's view stops is known only to a
         # tile or so): the player is looked for only near where it keeps it.
         follows = (x0 + TILE < cam[0] < x1 - TILE, y0 + TILE < cam[1] < y1 - TILE)
         same = near is not None and near.loc == room.loc
-        prior = (near.x - cam[0], near.y - cam[1]) if same else STEAM_FOLLOW
+        prior = (near.x - cam[0], near.y - cam[1]) if same else follow
         best = None
         # Around where it was when it was seen, or where the view keeps it while it
         # follows: quicker, and no one else is taken for it.
-        w, h = STEAM_VIEW
-        if same and near.sure and near.steam:
+        h, w = v.shape[:2]
+        if same and near.sure and near.steam == steam:
             box = (prior[0] - STEAM_NEAR, prior[1] - STEAM_NEAR,
                    prior[0] + STEAM_NEAR, prior[1] + STEAM_NEAR)
         else:
-            sx, sy = STEAM_FOLLOW
+            sx, sy = follow
             box = (sx - 24 if follows[0] else 0, sy - 28 if follows[1] else 0,
                    sx + 24 if follows[0] else w, sy + 28 if follows[1] else h)
         for s, feet in self._steam_feet(v, box):
             far = math.dist(feet, prior)
             if s < 0.6 and not (s >= 0.4 and far <= 24):
                 continue
-            if (follows[0] and abs(feet[0] - STEAM_FOLLOW[0]) > 24) or (
-                    follows[1] and abs(feet[1] - STEAM_FOLLOW[1]) > 28):
+            if (follows[0] and abs(feet[0] - follow[0]) > 24) or (
+                    follows[1] and abs(feet[1] - follow[1]) > 28):
                 continue  # not where the view keeps it
             # Feet on ground the survey walked, rather than off it.
             tile = (int(cam[1] + feet[1]) // TILE, int(cam[0] + feet[0]) // TILE)
@@ -650,11 +692,11 @@ class Rooms:
                 best = (cost, feet)
         if best is not None:
             return Here(room.loc, cam, cam[0] + best[1][0], cam[1] + best[1][1], score, True,
-                        True)
+                        steam)
         if same and not all(moving):
             return Here(room.loc, cam, fx if moving[0] else near.x,
-                        fy if moving[1] else near.y, score, False, True)
-        return Here(room.loc, cam, fx, fy, score, all(follows), True)
+                        fy if moving[1] else near.y, score, False, steam)
+        return Here(room.loc, cam, fx, fy, score, all(follows), steam)
 
     # -- the way ---------------------------------------------------------------------
     def hops(self, start: int, goal: int | set[int]) -> list[int] | None:

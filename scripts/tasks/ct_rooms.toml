@@ -41,6 +41,10 @@ worlds = ["0x1F0", "0x1F1", "0x1F2", "0x1F3", "0x1F4", "0x1F5", "0x1F6", "0x1F7"
 "0x14" = "a clearing off the forest's east side"
 "0x1B2" = "Norstein Bekkler's tent"
 "0x1B7" = "the fair, up the north stairs"
+"0x6" = "the fair's west garden, by the tent"
+"0x189" = "Mountain of Woe, the ledges round the chain bridge"
+"0x18B" = "Mountain of Woe, between two chain ladders"
+"0x18D" = "Mountain of Woe, the ledge at the top of the long ladder"
 "0x1F0" = "outside (the world map)"
 
 # Trips inside places. `to` is where scripts/rooms_bench.py walks (no model), `request`
@@ -141,3 +145,36 @@ request = "go back out to the square"
 to = "0x5"
 location = "0x5"
 limit_s = 180
+
+# The Mountain of Woe (12,000 B.C.), from the owner's Steam save point (room-mt-woe, a
+# ledge by the chain ladder; ctsave09-epoch slot 3 on the SNES). Its monsters start a fight
+# or two on the way. The way down and out of the mountain isn't surveyed yet.
+[[task]]
+id = "r-woe-up"
+category = "rooms"
+state = "room-mt-woe"
+request = "climb up the chain"
+to = "0x18B"
+location = "0x18B"
+walk_s = 180
+limit_s = 300
+
+[[task]]
+id = "r-woe-back"
+category = "rooms"
+state = "rooms/deep-18b"
+request = "go back down to the ledges below"
+to = "0x189"
+location = "0x189"
+walk_s = 240
+limit_s = 360
+
+[[task]]
+id = "r-woe-top"
+category = "rooms"
+state = "room-mt-woe"
+request = "go up to the top of the long ladder"
+to = "0x18D"
+location = "0x18D"
+walk_s = 300
+limit_s = 420
