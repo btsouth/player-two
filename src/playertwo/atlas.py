@@ -66,7 +66,7 @@ class WorldMap:
     entries: dict[str, dict] = field(default_factory=dict)
     world: int | None = None
     doors: dict[tuple[int, int], int] = field(default_factory=dict)  # tile -> location
-    names: dict[str, str] = field(default_factory=dict)  # exit -> the game's name
+    names: dict[str, str] = field(default_factory=dict)  # location -> the game's name
 
     def __post_init__(self) -> None:
         if self.blocked is None:
@@ -104,12 +104,7 @@ class WorldMap:
         for c, loc in self.doors.items():
             if loc != self.world:
                 by_loc.setdefault(loc, set()).add(c)
-        out = []
-        for cells in by_loc.values():
-            label = next((self.names[e] for e, ec in self.exits.items()
-                          if ec & cells and e in self.names), "")
-            out.append((cells, label))
-        return out
+        return [(cells, self.names.get(str(loc), "")) for loc, cells in by_loc.items()]
 
     def nearest(self, x: float, y: float) -> tuple[str, float, str]:
         """The named place nearest a point: its name, distance in map pixels, and the
@@ -188,15 +183,21 @@ class Atlas:
                         wm.places[label] = ((c + 0.5) * CELL, (r + 0.5) * CELL)
             self.maps.append(wm)
 
-    @classmethod
-    def for_game(cls, game: str, folder: Path = ATLASES) -> Atlas | None:
-        if not folder.is_dir():
+    @staticmethod
+    def folder_for(game: str, folder: Path = ATLASES) -> Path | None:
+        """The game's atlas folder, without loading it."""
+        if not game or not folder.is_dir():
             return None
         name = slug(game)
         for d in sorted(p for p in folder.iterdir() if (p / "atlas.json").exists()):
             if d.name == name or all(w in name.split("-") for w in d.name.split("-")):
-                return cls(d)
+                return d
         return None
+
+    @classmethod
+    def for_game(cls, game: str, folder: Path = ATLASES) -> Atlas | None:
+        d = cls.folder_for(game, folder)
+        return cls(d) if d is not None else None
 
     def view(self, frame: Image.Image) -> np.ndarray:
         """The game's picture at its own size, BGR: the screen cropped to the game (the
@@ -365,6 +366,8 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
 
     goal = m.places[name]
     spot = atlas.locate(await shoot())
+    if spot is not None and spot.margin < 0.05:
+        spot = None  # it matches a few places about as well: not really the map
     if spot is None:
         return ("not on a world map now (inside somewhere, a menu or a fade): go out "
                 "to the world map first")

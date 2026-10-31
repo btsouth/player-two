@@ -4,7 +4,8 @@ the character is. The atlas plans routes on the result instead of guessing groun
 the map picture's colours.
 
     python scripts/survey.py scripts/tasks/ct_snes.toml --state world-1000-home \\
-        --map "1000 A.D." [--box 0] [--minutes 60] [--entries]
+        --map "1000 A.D." [--box 0] [--minutes 60] [--exits --entries]
+    python scripts/survey.py scripts/tasks/ct_snes.toml --state x --map "1000 A.D." --names
 
 Runs in a hidden omabox desktop (scripts/emu_tasks.py's Box). The game's [game.ram] in
 the task file names the memory: x, y (the character on the world map, in map pixels),
@@ -13,7 +14,8 @@ location (which map or place it's in), exit (which place's icon it's standing on
 
     {"cell": 8, "walk": [[row, col], ...], "wall": [[row, col], ...],
      "exits": {"28": [[row, col], ...]},          # icon cells, by the game's exit number
-     "entries": {"28": {"location": 1, "at": [x, y]}}}   # what pressing A there enters
+     "doors": [[row, col, location], ...],        # icon cells that go in, and where
+     "names": {"1": "Crono's house"}}             # each place's name as the game shows it
 """
 
 from __future__ import annotations
@@ -55,7 +57,9 @@ class Game:
         self.held: list[str] = []
 
     def word(self, off: int, n: int = 2) -> int:
-        for _ in range(5):  # a UDP reply can get lost
+        for i in range(12):  # a UDP reply can get lost, or the emulator be busy
+            if i >= 5:
+                time.sleep(0.25)
             r = self.box.cmd(f"READ_CORE_RAM {off:x} {n}", wait=0.5).split()
             if len(r) == n + 2 and r[1].lower().lstrip("0") == f"{off:x}".lstrip("0"):
                 return sum(int(x, 16) << (8 * i) for i, x in enumerate(r[2:]))
@@ -110,13 +114,11 @@ class Survey:
         self.wall: set[tuple[int, int]] = set()
         self.tried: set[tuple[tuple[int, int], tuple[int, int]]] = set()
         self.exits: dict[int, set[tuple[int, int]]] = collections.defaultdict(set)
-        self.entries: dict[int, dict] = {}
         self.left = False  # walked into a place by accident
         self.shots: Path | None = None  # where to keep a picture of each icon
         self.doors: dict[tuple[int, int], int] = {}
         self.test_doors = False
-        self.names: dict[str, str] = {}  # icon -> the game's name for it  # icon tile -> location it opens
-        self.named: set[int] = set()
+        self.names: dict[str, str] = {}  # location number -> the game's name for it  # icon tile -> location it opens
 
     def inside(self, c: tuple[int, int]) -> bool:
         return 0 <= c[0] < self.rows and 0 <= c[1] < self.cols
@@ -148,13 +150,16 @@ class Survey:
         g = self.g
         g.box.cmd("SAVE_STATE", wait=0.2)
         time.sleep(0.4)
-        if self.shots is not None and e not in self.named:
-            g.box.shot(self.shots / f"exit-{e}.png")  # the game shows the name here
-            self.named.add(e)
+        shot = None
+        if self.shots is not None:  # the game shows the place's name here
+            shot = g.box.shot(self.shots / "icon.png")
         g.press("Return", 0.12)
         time.sleep(max(secs(2.5), 0.8))
         loc = g.location()
         self.doors[c] = loc
+        if shot is not None and loc != self.world:
+            # Named by where it goes: that number stays the same all through the game.
+            shot.replace(self.shots / f"loc-{loc:x}.png")
         g.box.cmd("LOAD_STATE", wait=0.2)
         time.sleep(0.6)
         if g.location() != self.world or cell_of(g.pos()) != c:
@@ -334,41 +339,11 @@ class Survey:
             u = came[u]
         return self.go(path[::-1])
 
-    def find_entries(self, reset) -> None:
-        """For each icon found, walk onto it, press A and read where that goes."""
-        for e, cells in sorted(self.exits.items()):
-            if e in self.entries:
-                continue
-            reset()
-            here = cell_of(self.g.pos())
-            came = self.bfs(here)
-            reach = [c for c in cells if c in came]
-            if not reach:
-                self.log(f"exit {e}: not reachable on the surveyed ground")
-                continue
-            for target in sorted(reach, key=lambda c: math.dist(c, here))[:4]:
-                self.walk_back(target)
-                time.sleep(secs(0.2))
-                if self.g.exit() == e:
-                    break
-            else:
-                self.log(f"exit {e}: got to {self.g.pos()} but not onto the icon")
-                continue
-            if self.shots is not None:  # the game shows the place's name on its icon
-                self.g.box.shot(self.shots / f"exit-{e}.png")
-            at = self.g.pos()
-            self.g.press("Return", 0.12)
-            time.sleep(max(secs(2.5), 1.0))
-            loc = self.g.location()
-            self.entries[e] = {"location": loc, "at": list(at)}
-            self.log(f"exit {e} at {at} goes to location {loc:#x}")
-
     def save(self, path: Path) -> None:
         path.write_text(json.dumps({
             "cell": CELL, "world": self.world,
             "walk": sorted(self.walk), "wall": sorted(self.wall),
             "exits": {str(k): sorted(v) for k, v in self.exits.items()},
-            "entries": {str(k): v for k, v in self.entries.items()},
             "doors": [[c[0], c[1], loc] for c, loc in sorted(self.doors.items())],
             "names": self.names}))
 
@@ -379,8 +354,8 @@ written? JSON: {"name": "..."} or {"name": null} if no name is shown."""
 
 
 def name_icons(folder: Path) -> dict[str, str]:
-    """The game's own name for each icon, read off the screen with Muse Spark (the
-    survey pictured each icon with its label showing)."""
+    """The game's own name for each place, by its location number, read off the screen
+    with Muse Spark (the survey pictured each door with its label showing)."""
     import asyncio
 
     from PIL import Image
@@ -401,10 +376,10 @@ def name_icons(folder: Path) -> dict[str, str]:
             r = await muse.json(msgs, effort="low", max_tokens=1500)
         except ValueError:
             return f.stem.split("-")[1], None
-        return f.stem.split("-")[1], r.get("name")
+        return str(int(f.stem.split("-")[1], 16)), r.get("name")
 
     async def run() -> list:
-        return await asyncio.gather(*(one(f) for f in sorted(folder.glob("exit-*.png"))))
+        return await asyncio.gather(*(one(f) for f in sorted(folder.glob("loc-*.png"))))
 
     return {e: n for e, n in asyncio.run(run()) if n}
 
@@ -469,32 +444,54 @@ def main() -> None:
         s.walk = {tuple(c) for c in old["walk"]}
         s.wall = {tuple(c) for c in old["wall"]}
         s.exits.update({int(k): {tuple(c) for c in v} for k, v in old["exits"].items()})
-        s.entries = {int(k): v for k, v in old.get("entries", {}).items()}
         s.doors = {(r, c): loc for r, c, loc in old.get("doors", [])}
         s.names = old.get("names", {})
+    def boot() -> None:
+        box.up(f"fastforward_ratio = {args.speed}\n")
+        if args.speed > 1:
+            box.cmd("FAST_FORWARD", wait=0.2)
+        game.held = []
+        box.load(state)
+
+    phase, restarts = "explore", 0
     try:
-        while True:
-            s.explore(args.minutes - (time.monotonic() - t0) / 60)
-            if not s.left or time.monotonic() - t0 > args.minutes * 60:
-                break
-            log("walked into a place: back to the start")
-            s.left = False
-            box.load(state)
-        s.save(out)
-        if args.exits:
-            s.exits.clear()
-            s.doors.clear()
-            s.test_doors = args.entries
-            s.shots = out.parent / f"survey-{slug(args.map)}"
-            s.shots.mkdir(exist_ok=True)
-            box.load(state)
-            s.scan_exits()
-            s.save(out)
+        while phase != "done":
+            try:
+                if phase == "explore":
+                    while True:
+                        s.explore(args.minutes - (time.monotonic() - t0) / 60)
+                        if not s.left or time.monotonic() - t0 > args.minutes * 60:
+                            break
+                        log("walked into a place: back to the start")
+                        s.left = False
+                        box.load(state)
+                    s.save(out)
+                    phase = "scan" if args.exits else "done"
+                    if phase == "scan":
+                        s.exits.clear()
+                        s.doors.clear()
+                        s.test_doors = args.entries
+                        s.shots = out.parent / f"survey-{slug(args.map)}"
+                        s.shots.mkdir(exist_ok=True)
+                if phase == "scan":
+                    box.load(state)
+                    s.scan_exits()  # doors already tried are skipped on a rerun
+                    s.save(out)
+                    phase = "done"
+            except RuntimeError as exc:
+                # The emulator stopped answering or the walk went somewhere: keep what
+                # was found, start the game again and carry on.
+                restarts += 1
+                s.save(out)
+                log(f"{exc}: starting the game again ({restarts})")
+                if restarts > 6:
+                    raise
+                boot()
     finally:
         game.hold([])
         s.save(out)
     log(f"done: {len(s.walk)} walkable, {len(s.wall)} shut, {len(s.exits)} exits, "
-        f"{len(s.entries)} entries -> {out}")
+        f"{len(s.doors)} doors -> {out}")
 
 
 if __name__ == "__main__":

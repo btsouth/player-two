@@ -105,6 +105,19 @@ class Box:
         self.cmd("LOAD_STATE", wait=0.5)
         time.sleep(2)
 
+    def location(self) -> int | None:
+        """Which map or place the game is in, from its memory ([game.ram] location)."""
+        ram = self.game.get("ram", {})
+        if "location" not in ram:
+            return None
+        off = int(str(ram["location"]), 16)
+        for _ in range(5):
+            r = self.cmd(f"READ_CORE_RAM {off:x} 2", wait=0.5).split()
+            if len(r) == 4:
+                return (int(r[2], 16) | int(r[3], 16) << 8) & int(ram.get("location_mask",
+                                                                           0xFFFF))
+        return None
+
     @property
     def log(self) -> Path:
         return self.home / "p2.jsonl"
@@ -201,7 +214,14 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
                  steps=len((run or {}).get("steps", [])))
         shot = box.shot(shots / f"{tid}.end.png")
         shutil.copy2(box.log, shots / f"{tid}.events.jsonl")
-        if task.get("expect"):  # a question with a known answer: in its words
+        if task.get("location") is not None:  # where it must end up, by the game's memory
+            got = box.location()
+            want = task["location"] if isinstance(task["location"], list) else \
+                [task["location"]]
+            want = [int(w, 16) if isinstance(w, str) else w for w in want]
+            r.update(done=got in want, location=None if got is None else hex(got),
+                     why=f"in location {got if got is None else hex(got)}")
+        elif task.get("expect"):  # a question with a known answer: in its words
             said = r["outcome"].lower()
             missing = [w for w in task["expect"] if w.lower() not in said]
             r.update(done=not missing, why=f"missing {missing}" if missing else "right answer")

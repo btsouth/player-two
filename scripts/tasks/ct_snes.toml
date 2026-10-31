@@ -183,3 +183,86 @@ state = "world-1000-home"
 request = "take me to Zenan Bridge"
 check = "Crono is at Zenan Bridge: on or right at a long bridge, either on the world map at its end or on the bridge itself"
 limit_s = 300
+
+# World-map trips judged exactly: the game's location number when it's done
+# (found by scripts/survey.py). Asked the way a player would.
+
+[[task]]
+id = "g-fair"
+category = "world trip"
+state = "world-1000-home"
+request = "take me to the fair"
+location = "0x5"
+limit_s = 180
+
+[[task]]
+id = "g-market"
+category = "world trip"
+state = "world-1000-home"
+request = "take me to the market"
+location = "0x11"
+limit_s = 180
+
+[[task]]
+id = "g-lucca"
+category = "world trip"
+state = "world-1000-home"
+request = "let's go see Lucca at her house"
+location = ["0x4", "0x3"]  # in the door, or on in to find her
+limit_s = 180
+
+[[task]]
+id = "g-inn"
+category = "world trip"
+state = "world-1000-home"
+request = "take me to the inn in Truce"
+location = "0xc"
+limit_s = 180
+
+[[task]]
+id = "g-mayor"
+category = "world trip"
+state = "world-1000-home"
+request = "go to the mayor's house"
+location = "0xd"
+limit_s = 180
+
+[[task]]
+id = "g-forest"
+category = "world trip"
+state = "world-1000-home"
+request = "head into Guardia Forest"
+location = "0x13"
+limit_s = 180
+
+[[task]]
+id = "g-home"
+category = "world trip"
+state = "world-1000-home"
+request = "take me home"
+location = "0x1"
+limit_s = 180
+
+[[task]]
+id = "g-ticket"
+category = "world trip"
+state = "world-1000-home"
+request = "go to the ticket office"
+location = "0x12"
+limit_s = 180
+
+[[task]]
+id = "g-porre-inn"
+category = "world trip"
+state = "world-1000-home"
+request = "take me to the inn in Porre"
+location = "0x37"
+limit_s = 180
+
+[[task]]
+id = "g-snail"
+category = "world trip"
+state = "world-1000-home"
+request = "go to the Snail Stop"
+location = "0x35"
+limit_s = 180

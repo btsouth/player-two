@@ -970,6 +970,12 @@ class Session:
 
     async def _handle(self, text: str) -> None:
         action = local_action(text)
+        if action == "describe" and re.sub(r"[^a-z ]", "", text.lower()).strip() in (
+                "where am i", "where are we"):
+            from .atlas import Atlas
+
+            if Atlas.folder_for(self.agent.game or ""):
+                action = None  # the agent answers from the game's map (where_am_i)
         if action is None and self.paused and local_action(f"{text} narration") == "resume":
             action = "resume"  # "resume" right after pausing narration means narration
         if self.answer is not None and not self.answer.done():
