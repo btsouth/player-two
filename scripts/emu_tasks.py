@@ -126,7 +126,11 @@ class Box:
         return self.ob("run", "--", P2, "ctl", *args, timeout=timeout)
 
     def start_p2(self) -> None:
-        self.ob("run", "--", "sh", "-c", "pkill -f '[b]in/player-two run'; true")
+        # The box has pgrep and kill but no pkill: an old session left running takes the
+        # control socket and plays on.
+        self.ob("run", "--", "sh", "-c",
+                "for p in $(pgrep -f '[b]in/player-two run'); do kill $p; done; sleep 2; "
+                "for p in $(pgrep -f '[b]in/player-two run'); do kill -9 $p; done; true")
         self.log.unlink(missing_ok=True)
         # Several boxes share the machine: each session's maths libraries get two
         # threads, not one per core each (dozens of sessions' worth of threads).
@@ -207,6 +211,12 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
     try:
         box.load(states / f"{task['state']}.state")
         box.start_p2()
+        watch = None
+        if task.get("ram_check"):  # judged by memory: a fight runs on while it starts
+            from battle_judge import Watch
+            box.load(states / f"{task['state']}.state")
+            watch = Watch(box, box.game.get("ram", {}).get("watch", "ct_ram"))
+            watch.start()
         t = time.monotonic()
         requests = task["request"] if isinstance(task["request"], list) else [task["request"]]
         answers = list(task.get("answers", []))
@@ -218,7 +228,11 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
                  steps=len((run or {}).get("steps", [])))
         shot = box.shot(shots / f"{tid}.end.png")
         shutil.copy2(box.log, shots / f"{tid}.events.jsonl")
-        if task.get("location") is not None:  # where it must end up, by the game's memory
+        if watch is not None:  # what happened, by the game's memory (battle_judge.py)
+            watch.stop()
+            watch.save(shots / f"{tid}.ram.jsonl")
+            r.update(watch.judge(task["ram_check"]))
+        elif task.get("location") is not None:  # where it must end up, by the game's memory
             got = box.location()
             want = task["location"] if isinstance(task["location"], list) else \
                 [task["location"]]

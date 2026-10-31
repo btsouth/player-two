@@ -507,8 +507,24 @@ class Pilot:
                 went = await self._walk_onto(m, at)
                 if went:
                     return f"couldn't reach the Epoch: {went}"
-                await asyncio.sleep(0.2)
-            self.press("a")
+            # Exactly on its tile and standing still, or a doesn't board it.
+            for _ in range(4):
+                await asyncio.sleep(0.4)
+                s = await self.where()
+                if s is None:
+                    break
+                dx, dy = at[0] - self.here(s)[0], at[1] - self.here(s)[1]
+                if abs(dx) <= 2 and abs(dy) <= 2:
+                    break
+                tx = (dx > 2) - (dx < -2)
+                ty = (dy > 2) - (dy < -2)
+                self.steer(math.degrees(math.atan2(tx, -ty)) % 360)
+                await asyncio.sleep(s.tap)
+                self.steer(None)
+            try:
+                self.press("a", 200)  # a firm press: a short one can go missing
+            except TypeError:
+                self.press("a")
             await asyncio.sleep(3.5)
             s = await self.where()
             if s is None:

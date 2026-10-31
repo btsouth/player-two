@@ -1,0 +1,142 @@
+# Battle tasks for scripts/emu_tasks.py in Chrono Trigger (SNES, in RetroArch), judged by
+# the game's memory: scripts/battle_judge.py reads the fight every half second while
+# Player Two plays it, and `ram_check` names what must have happened (see its docstring).
+# The state is loaded again once Player Two is up, since the fight runs on meanwhile.
+#
+# States (kept outside the repo; made with scripts/ct_battle.py hunt, Battle Mode Wait,
+# Battle Speed 5): each starts as a fight starts, the first menu up.
+#   battle-guardia-1000      1000 AD Guardia Forest: Crono alone (70 HP, no items) vs 3 Hetakes
+#                            (14 HP; slot 3 is the left one)
+#   battle-guardia-600       600 AD Guardia Forest: Crono, Marle, Lucca (lv 13) vs 2 Roly Riders
+#   battle-guardia-600-hurt  the same with Marle at 45 of 200 HP
+#   battle-ocean-palace      12,000 BC Ocean Palace: Crono, Marle, Lucca (lv 30-32) vs 2
+#                            Scouters (300 HP; slot 7 the left one, 8 the right)
+#   battle-magus-castle      600 AD Magus's Castle: Crono, Frog, Marle (lv 22-23) vs 3
+#                            Shadows (sparkles that only magic hurts)
+#
+# In Wait mode the fight still runs at the command menu and while picking a target; it
+# stops in the Tech and Item lists, and Start pauses it.
+
+[game]
+name = "Chrono Trigger (SNES)"
+core = "/usr/lib/libretro/snes9x_libretro.so"
+core_name = "Snes9x"
+rom = "/data/Emulation/Games/SNES/Chrono Trigger (NA).sfc"
+states = "~/.cache/player-two/emu/states/ct-snes"
+
+[game.ram]
+x = "0x283"
+y = "0x285"
+location = "0x100"
+location_mask = 0x1FF
+exit = "0x1B32"
+exit_none = 255
+watch = "ct_ram"    # battle memory for ram_check: scripts/ct_ram.py
+
+# --- 1000 AD, Crono alone ---------------------------------------------------------
+
+[[task]]
+id = "b-win-solo"
+category = "win"
+state = "battle-guardia-1000"
+request = "win this fight for me"
+answers = ["heal if you can, otherwise keep attacking"]
+ram_check = ["won", "alive"]
+limit_s = 420
+
+[[task]]
+id = "b-attack-left"
+category = "attack"
+state = "battle-guardia-1000"
+request = "attack the mushroom on the left"
+ram_check = ["hit:3", "acts<=2"]
+limit_s = 180
+
+[[task]]
+id = "b-run-solo"
+category = "run"
+state = "battle-guardia-1000"
+request = "run away"
+ram_check = ["fled", "alive"]
+limit_s = 180
+
+# --- 600 AD, Crono, Marle and Lucca ------------------------------------------------
+
+[[task]]
+id = "b-cyclone"
+category = "tech"
+state = "battle-guardia-600"
+request = "use Cyclone"
+ram_check = ["mp:Crono", "hit", "acts<=2"]
+limit_s = 180
+
+[[task]]
+id = "b-item"
+category = "item"
+state = "battle-guardia-600"
+request = "use an item"
+answers = ["a tonic on Crono"]
+ram_check = ["item", "acts<=2"]
+limit_s = 180
+
+[[task]]
+id = "b-run"
+category = "run"
+state = "battle-guardia-600"
+request = "run away"
+ram_check = ["fled", "alive"]
+limit_s = 180
+
+[[task]]
+id = "b-heal"
+category = "heal"
+state = "battle-guardia-600-hurt"
+request = "heal Marle"
+ram_check = ["healed:Marle", "acts<=2"]
+limit_s = 180
+
+[[task]]
+id = "b-fight-heal"
+category = "multi"
+state = "battle-guardia-600-hurt"
+request = "fight until it's over but heal anyone who gets low"
+ram_check = ["won", "alive", "healed:Marle"]
+limit_s = 480
+
+# --- 12,000 BC Ocean Palace, Crono, Marle and Lucca ---------------------------------
+
+[[task]]
+id = "b-win-palace"
+category = "win"
+state = "battle-ocean-palace"
+request = "win this fight for me"
+answers = ["heal them"]
+ram_check = ["won", "alive"]
+limit_s = 480
+
+[[task]]
+id = "b-attack-eye"
+category = "attack"
+state = "battle-ocean-palace"
+request = "attack the flying eyeball on the left"
+ram_check = ["hit:7", "acts<=2"]
+limit_s = 180
+
+[[task]]
+id = "b-fire"
+category = "tech"
+state = "battle-ocean-palace"
+request = "have Lucca use a fire tech on them"
+ram_check = ["mp:Lucca", "hit", "acts<=2"]
+limit_s = 180
+
+# --- 600 AD Magus's Castle, Crono, Frog and Marle -----------------------------------
+
+[[task]]
+id = "b-win-shadows"
+category = "win"
+state = "battle-magus-castle"
+request = "win this fight for me"
+answers = ["heal them"]
+ram_check = ["won", "alive"]
+limit_s = 480
