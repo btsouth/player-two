@@ -33,6 +33,7 @@ from PIL import Image
 from .config import CONFIG_DIR
 
 ATLASES = CONFIG_DIR / "atlas"
+PAD = 128  # map pixels of wrap-round matched beyond each edge of a map picture
 CELL = 8  # route planning grid, in map pixels (a world-map step is about this)
 
 
@@ -73,6 +74,9 @@ class WorldMap:
     # still): matched with the sky left out ("sky": true in atlas.json).
     sky: bool = False
     flat: np.ndarray | None = None
+    # The map with PAD pixels of itself wrapped round each side, to match views that
+    # run past the picture's edge (the game's map goes on: ocean, or round again).
+    padded: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.blocked is None:
@@ -182,6 +186,8 @@ class Atlas:
                           sky=bool(m.get("sky")))
             if wm.sky:
                 wm.flat = no_sky(img)
+            wm.padded = cv2.copyMakeBorder(wm.flat if wm.sky else img, PAD, PAD, PAD, PAD,
+                                           cv2.BORDER_WRAP)
             for x0, y0, x1, y1 in m.get("open", []):  # bridges, stairs: walkable
                 wm.blocked[int(y0) // CELL:int(y1) // CELL + 1,
                            int(x0) // CELL:int(x1) // CELL + 1] = False
@@ -255,16 +261,16 @@ class Atlas:
         t = v[16:nh - 24, 16:nw - 16]  # off the edges (the era box sits bottom left)
         if near is not None:  # a step from the last spot: search only around it
             m = self.map(near.map)
-            x0 = max(0, int(near.x - nw / 2 + 16 - 48))
-            y0 = max(0, int(near.y - nh / 2 + 16 - 48))
-            img, tm = (m.flat, no_sky(t)) if m.sky else (m.image, t)
-            win = img[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
+            x0 = max(0, int(near.x + PAD - nw / 2 + 16 - 48))
+            y0 = max(0, int(near.y + PAD - nh / 2 + 16 - 48))
+            tm = no_sky(t) if m.sky else t
+            win = m.padded[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
             if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
                 r = cv2.matchTemplate(win, tm, cv2.TM_CCOEFF_NORMED)
                 _, score, _, (x, y) = cv2.minMaxLoc(r)
                 if score > 0.65:
-                    return Spot(m.name, x0 + x - 16 + nw / 2, y0 + y - 16 + nh / 2,
-                                float(score), 1.0)
+                    return Spot(m.name, x0 + x - 16 + nw / 2 - PAD,
+                                y0 + y - 16 + nh / 2 - PAD, float(score), 1.0)
         best: Spot | None = None
         maps = self.maps
         if near is not None:
@@ -273,14 +279,15 @@ class Atlas:
         for m in maps:
             if m.sky:
                 sky_t = no_sky(t) if sky_t is None else sky_t
-                r = cv2.matchTemplate(m.flat, sky_t, cv2.TM_CCOEFF_NORMED)
+                r = cv2.matchTemplate(m.padded, sky_t, cv2.TM_CCOEFF_NORMED)
             else:
-                r = cv2.matchTemplate(m.image, t, cv2.TM_CCOEFF_NORMED)
+                r = cv2.matchTemplate(m.padded, t, cv2.TM_CCOEFF_NORMED)
             _, score, _, (x, y) = cv2.minMaxLoc(r)
             r2 = r.copy()
             r2[max(0, y - 24):y + 24, max(0, x - 24):x + 24] = -1
             margin = float(score - r2.max())
-            spot = Spot(m.name, x - 16 + nw / 2, y - 16 + nh / 2, float(score), margin)
+            spot = Spot(m.name, x - 16 + nw / 2 - PAD, y - 16 + nh / 2 - PAD, float(score),
+                        margin)
             if best is None or spot.score > best.score:
                 best = spot
             if near is not None and m.name == near.map and score > 0.7:
@@ -336,8 +343,8 @@ class Atlas:
         soft = self._full()["soft"]
         key = (m.name, half)
         if key not in soft:
-            g = cv2.GaussianBlur(cv2.cvtColor(m.flat if m.sky else m.image,
-                                              cv2.COLOR_BGR2GRAY), (0, 0), self.SOFT)
+            g = cv2.GaussianBlur(cv2.cvtColor(m.padded, cv2.COLOR_BGR2GRAY), (0, 0),
+                                 self.SOFT)
             soft[key] = cv2.pyrDown(g) if half else g
         return soft[key]
 
@@ -465,13 +472,13 @@ class Atlas:
         t_sky = self._cut(sky, size, self.SOFT)[0] if sky is not None else t
 
         def spot(m: WorldMap, x: float, y: float, score: float, margin: float) -> Spot:
-            return Spot(m.name, x - b + vw / 2, y - a + vh / 2 + self.FULL_DROP,
+            return Spot(m.name, x - b + vw / 2 - PAD, y - a + vh / 2 + self.FULL_DROP - PAD,
                         float(score), margin, self.FULL_TAP)
 
         if near is not None:
             m = self.map(near.map)
-            x0 = max(0, int(near.x - vw / 2 + b - 48))
-            y0 = max(0, int(near.y - self.FULL_DROP - vh / 2 + a - 48))
+            x0 = max(0, int(near.x + PAD - vw / 2 + b - 48))
+            y0 = max(0, int(near.y + PAD - self.FULL_DROP - vh / 2 + a - 48))
             win = self._soft(m)[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
             if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
                 r = cv2.matchTemplate(win, t_sky if m.sky else t, cv2.TM_CCOEFF_NORMED)
