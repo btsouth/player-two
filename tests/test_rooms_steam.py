@@ -162,3 +162,22 @@ def test_steam_lead():
     assert lead(h, []) == (124.0, 200.0)
     assert STEAM_TAP >= 0.1
     assert math.isclose(lead(h, [(now - 0.4, 6, 0.0, 0.0)])[0], 124.0)
+
+
+@pytest.mark.skipif(not (ROOMS / "loc-189.png").exists() or not (LIVE / "steam-2026-11-01/w0.png").exists(),
+                    reason="no Mountain of Woe survey or screens")
+def test_steam_mountain_of_woe():
+    """Steam tints the Mountain of Woe and draws its mist its own way: found by the edges.
+    w0 is the owner's save on the ledge by the chain ladder, where the same save on the
+    SNES stands at (440, 128); the rest crossing the chain bridge on the same ledges."""
+    r = Rooms(ROOMS)
+    h = r.locate(rgb(LIVE / "steam-2026-11-01/w0.png"))
+    assert h is not None and h.loc == 0x189
+    assert abs(h.cam[0] - 208) <= 3 and abs(h.cam[1] + 1) <= 3
+    assert h.sure and math.dist((h.x, h.y), (440, 128)) <= 8
+    crossing = [p for p in sorted(FRAMES.glob("*.jpg")) if "135812" <= p.name[:6] <= "135938"]
+    assert len(crossing) == 15
+    for p in crossing:
+        h = r.locate(rgb(p))
+        assert h is not None and h.loc == 0x189, p.name
+        assert h.tile in r.rooms[0x189].walk, p.name

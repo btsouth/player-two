@@ -53,6 +53,8 @@ STEAM_FILL = (24, 8, 8)  # RGB of the fill round a small place
 STEAM_PAD = 80
 STEAM_CUT = (12, 8, 40, 14)  # off the view's left, top, right and bottom (Steam's toasts)
 STEAM_SCORE, STEAM_MARGIN = 0.7, 0.1
+# By the edges: Steam's own screens of places not surveyed reach 0.35 at best.
+STEAM_EDGES = (0.55, 0.15)
 SEEN_LEAST = 0.6  # of a Steam view on what the survey saw, to count a match there
 STEAM_NEAR = 48  # how far from the last view the quick search looks, in game pixels
 # Where Steam's view keeps the character's feet while it follows (the game's own view
@@ -136,6 +138,14 @@ def steam_view(rgb: np.ndarray) -> np.ndarray:
     rgb = rgb.copy()
     rgb[fill] = 0
     return cv2.resize(rgb, STEAM_VIEW, interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
+
+
+def steam_edges(bgr: np.ndarray) -> np.ndarray:
+    """The shapes in a picture: how steeply its softened brightness changes."""
+    import cv2
+
+    g = cv2.GaussianBlur(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 1.5)
+    return cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
 
 
 def steam_range(room: Room) -> tuple[float, float, float, float]:
@@ -235,7 +245,7 @@ class Rooms:
         self.sprites: list[tuple[np.ndarray, np.ndarray, tuple[float, float]]] = []
         self._colours: np.ndarray | None = None
         self.dark = False  # the last screen looked at was black (a fade between places)
-        self._steam_pics: dict[int, tuple[Seen, Seen]] | None = None
+        self._steam_pics: dict[int, dict[str, tuple[Seen, Seen]]] | None = None
         self._steam_sizes: set[tuple[int, int]] = set()  # window sizes seen as Steam's
         if (folder / "player.json").exists():
             anchors = json.loads((folder / "player.json").read_text()).get("anchor", {})
@@ -446,9 +456,11 @@ class Rooms:
 
         return cv2.GaussianBlur(bgr.astype(np.float32), (0, 0), 1.0)
 
-    def _steam_pictures(self) -> dict[int, tuple[Seen, Seen]]:
-        """Each place's picture padded with black and softened as Steam's view is
-        matched (full size and half), made on the first Steam screen."""
+    def _steam_pictures(self) -> dict[int, dict[str, tuple[Seen, Seen]]]:
+        """Each place's picture padded with black, made ready to match Steam's view on
+        (full size and half): softened colour, and its edges (the shapes: places whose
+        look Steam changed, the Mountain of Woe's mist and tint). Made on the first
+        Steam screen."""
         import cv2
 
         if self._steam_pics is None:
@@ -456,18 +468,20 @@ class Rooms:
             for loc, room in self.rooms.items():
                 img = cv2.copyMakeBorder(room.image, STEAM_PAD, STEAM_PAD, STEAM_PAD,
                                          STEAM_PAD, cv2.BORDER_CONSTANT, value=0)
-                seen = cv2.erode((img.max(2) > 0).astype(np.uint8), np.ones((5, 5), np.uint8))
-                p = self._steam_prep(img)
-                pics[loc] = (Seen(p, seen), Seen(cv2.pyrDown(p), seen[::2, ::2]))
+                lit = (img.max(2) > 0).astype(np.uint8)
+                seen = cv2.erode(lit, np.ones((5, 5), np.uint8))
+                inner = cv2.erode(lit, np.ones((9, 9), np.uint8))  # off the seen's edge
+                p, e = self._steam_prep(img), steam_edges(img)
+                pics[loc] = {"colour": (Seen(p, seen), Seen(cv2.pyrDown(p), seen[::2, ::2])),
+                             "edges": (Seen(e, inner), Seen(cv2.pyrDown(e), inner[::2, ::2]))}
             self._steam_pics = pics
         return self._steam_pics
 
     def _locate_steam(self, rgb: np.ndarray, near: Here | None) -> Here | None:
-        """locate() for the Steam port: around the last view first, else every place at
-        half size, then exactly around the best three; the best is kept if it scores
-        STEAM_SCORE and beats anywhere else (that place further off, the other places)
-        by STEAM_MARGIN. Only what the survey saw counts (Steam's view can go further
-        than the game's own: off a place's sides, past where the game's view stops)."""
+        """locate() for the Steam port: around the last view first, else every place;
+        in colour, else by the edges (the shapes) when Steam changed a place's look.
+        Only what the survey saw counts (Steam's view can go further than the game's
+        own: off a place's sides, past where the game's view stops)."""
         import cv2
 
         v = steam_view(rgb)
@@ -475,17 +489,37 @@ class Rooms:
         if self.dark:
             return None
         b, a, r_, d_ = STEAM_CUT
-        t = self._steam_prep(v)[a:STEAM_VIEW[1] - d_, b:STEAM_VIEW[0] - r_]
+        ts = {"colour": self._steam_prep(v)[a:STEAM_VIEW[1] - d_, b:STEAM_VIEW[0] - r_],
+              "edges": steam_edges(v)[a:STEAM_VIEW[1] - d_, b:STEAM_VIEW[0] - r_]}
+        least = {"colour": (STEAM_SCORE, STEAM_MARGIN), "edges": STEAM_EDGES}
         pics = self._steam_pictures()
         if near is not None and near.steam and near.loc in pics:
             x0 = max(0, near.cam[0] + STEAM_PAD + b - STEAM_NEAR)
             y0 = max(0, near.cam[1] + STEAM_PAD + a - STEAM_NEAR)
-            r = pics[near.loc][0].match(t, x0, y0, 2 * STEAM_NEAR, 2 * STEAM_NEAR)
-            if r is not None:
+            for kind, t in ts.items():
+                r = pics[near.loc][kind][0].match(t, x0, y0, 2 * STEAM_NEAR, 2 * STEAM_NEAR)
+                if r is None:
+                    continue
                 _, score, _, (x, y) = cv2.minMaxLoc(r)
-                if score >= STEAM_SCORE:
+                if score >= least[kind][0]:
                     cam = (x0 + x - b - STEAM_PAD, y0 + y - a - STEAM_PAD)
                     return self._player_steam(v, self.rooms[near.loc], cam, float(score), near)
+        for kind, t in ts.items():
+            hit = self._steam_search(t, {loc: p[kind] for loc, p in pics.items()}, *least[kind])
+            if hit is not None:
+                score, loc, x, y = hit
+                cam = (x - b - STEAM_PAD, y - a - STEAM_PAD)
+                return self._player_steam(v, self.rooms[loc], cam, score, near)
+        return None
+
+    @staticmethod
+    def _steam_search(t: np.ndarray, pics: dict[int, tuple[Seen, Seen]], low: float,
+                      margin: float) -> tuple[float, int, int, int] | None:
+        """Every place at half size, then exactly around the best three: the best (score,
+        place, x, y on its padded picture) if it scores `low` and beats anywhere else
+        (that place further off, the other places) by `margin`."""
+        import cv2
+
         half = cv2.pyrDown(t)
         cands = []
         maps = {}
@@ -509,17 +543,16 @@ class Rooms:
             return None
         fine.sort(reverse=True)
         score, loc, x, y = fine[0]
-        if score < STEAM_SCORE:
+        if score < low:
             return None
         # Anywhere else in that place: at half size (as good or better than exactly,
         # being softer), off the best by more than 24 pixels.
         r = maps[loc]
         r[max(0, y // 2 - 12):y // 2 + 12, max(0, x // 2 - 12):x // 2 + 12] = -1
         other = max([float(r.max())] + [f[0] for f in fine[1:] if f[1] != loc])
-        if score - other < STEAM_MARGIN:
+        if score - other < margin:
             return None
-        cam = (x - b - STEAM_PAD, y - a - STEAM_PAD)
-        return self._player_steam(v, self.rooms[loc], cam, score, near)
+        return score, loc, x, y
 
     def _steam_sprites(self) -> list[tuple[np.ndarray, np.ndarray, tuple[int, int]]]:
         """The player's cut-outs softened as Steam draws them, a step to the left
@@ -586,7 +619,10 @@ class Rooms:
         cut-outs, softened alike): a clear match, or a weaker one where it was last."""
         x0, y0, x1, y1 = steam_range(room)
         fx, fy = cam[0] + STEAM_FOLLOW[0], cam[1] + STEAM_FOLLOW[1]
-        follows = (x0 + 1 < cam[0] < x1 - 1, y0 + 1 < cam[1] < y1 - 1)
+        moving = (x0 + 1 < cam[0] < x1 - 1, y0 + 1 < cam[1] < y1 - 1)
+        # Surely following, well inside (where Steam's view stops is known only to a
+        # tile or so): the player is looked for only near where it keeps it.
+        follows = (x0 + TILE < cam[0] < x1 - TILE, y0 + TILE < cam[1] < y1 - TILE)
         same = near is not None and near.loc == room.loc
         prior = (near.x - cam[0], near.y - cam[1]) if same else STEAM_FOLLOW
         best = None
@@ -607,15 +643,17 @@ class Rooms:
             if (follows[0] and abs(feet[0] - STEAM_FOLLOW[0]) > 24) or (
                     follows[1] and abs(feet[1] - STEAM_FOLLOW[1]) > 28):
                 continue  # not where the view keeps it
-            cost = far + 100 * (1 - s)
+            # Feet on ground the survey walked, rather than off it.
+            tile = (int(cam[1] + feet[1]) // TILE, int(cam[0] + feet[0]) // TILE)
+            cost = far + 100 * (1 - s) + (0 if tile in room.walk else 40)
             if best is None or cost < best[0]:
                 best = (cost, feet)
         if best is not None:
             return Here(room.loc, cam, cam[0] + best[1][0], cam[1] + best[1][1], score, True,
                         True)
-        if same and not all(follows):
-            return Here(room.loc, cam, fx if follows[0] else near.x,
-                        fy if follows[1] else near.y, score, False, True)
+        if same and not all(moving):
+            return Here(room.loc, cam, fx if moving[0] else near.x,
+                        fy if moving[1] else near.y, score, False, True)
         return Here(room.loc, cam, fx, fy, score, all(follows), True)
 
     # -- the way ---------------------------------------------------------------------
