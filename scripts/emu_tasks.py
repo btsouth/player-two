@@ -132,7 +132,7 @@ class Box:
                f"--companion off --game {shlex.quote(self.game['name'])} --log $HOME/p2.jsonl")
         self.ob("run", "-d", "--pass", "MODEL_API_KEY", "--pass", "PLAYER_TWO_KEYMAP",
                 "--pass", "PLAYER_TWO_KEYS", "--", "sh", "-c", cmd)
-        if not wait_for(lambda: any(e["kind"] == "ready" for e in self.events()), 60):
+        if not wait_for(lambda: any(e["kind"] == "ready" for e in self.events()), 150):
             raise RuntimeError(f"{self.name}: Player Two didn't start")
 
     def events(self) -> list[dict]:
