@@ -660,7 +660,11 @@ class Executor:
                 break
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()
-        return st, changes(before, st, msgs)
+        seen = changes(before, st, msgs)
+        if not seen_name:
+            seen += (f" {intent.name} is chosen but hadn't gone off yet (it waits its turn "
+                     "behind what's playing); it goes off once the fight runs again.")
+        return st, seen
 
     # -- whole fights ----------------------------------------------------------------------
 
