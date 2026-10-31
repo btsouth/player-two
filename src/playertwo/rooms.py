@@ -430,6 +430,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     faded = False  # the screen went black since the place was last seen
     dud: set = set()  # ways out walked into that didn't go through
     trail: deque = deque()  # (when, place, x, y) over the last seconds
+    best: tuple[int, int, float] = (-1, 10**6, 0.0)  # place, fewest tiles to go, since when
 
     async def look() -> Here | None:
         return await asyncio.to_thread(rooms.locate, await shoot(), here)
@@ -590,6 +591,24 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             # Stuck: not off this spot for a while: the tile it's pushing into is shut
             # after all (walls aren't all on tile edges; people stand about).
             now_t = time.monotonic()
+            if here.loc != best[0] or len(path) - 1 < best[1]:
+                best = (here.loc, len(path) - 1, now_t)
+            elif now_t - best[2] > 6.0 and len(path) > 1:
+                # No nearer in a while, though it wobbles about (pushing into a corner
+                # the survey thought open, or round someone): that way is shut.
+                stalls += 1
+                if path[1] not in goals:
+                    room.learned.add(path[1])
+                log(f"rooms: no nearer for 6 s at {tile} in {rooms.name(here.loc)}, shut "
+                    f"{path[1]} ({stalls})")
+                steer((a + (90 if stalls % 2 else -90)) % 360)
+                await asyncio.sleep(0.3)
+                steer(None)
+                best = (here.loc, 10**6, now_t)
+                if stalls > 12:
+                    return (f"blocked: can't get through to {rooms.name(hops[1])} from "
+                            f"{tile} in {rooms.name(here.loc)}")
+                continue
             trail.append((now_t, here.loc, here.x, here.y))
             while trail and now_t - trail[0][0] > 2.0:
                 trail.popleft()
