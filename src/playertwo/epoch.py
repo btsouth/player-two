@@ -54,6 +54,7 @@ ERA_WORDS = {
 FLY = 0.35  # seconds of a hold that tells flying (48 px or more) from walking (24 to 32)
 FLY_PX = 40
 PLAIN = 10.5  # a view this flat (blurred grey's spread) can't be placed: open sea
+BLIND = 2.5  # seconds at most flown by reckoning before stopping to look
 
 
 def era_of(map_name: str) -> str | None:
@@ -344,8 +345,8 @@ class Pilot:
         self._dr_t = now
 
     def estimate(self) -> Spot | None:
-        """Where it should be by reckoning since the last fix (a few seconds at most)."""
-        if self.spot is None or self._dr is None or time.monotonic() - self._fix > 8:
+        """Where it should be by reckoning since the last fix (half a minute at most)."""
+        if self.spot is None or self._dr is None or time.monotonic() - self._fix > 30:
             return None
         self._integrate(time.monotonic())
         return dataclasses.replace(self.spot, x=self._dr[0], y=self._dr[1], score=0.0)
@@ -497,33 +498,30 @@ class Pilot:
             return ("no Epoch on screen here (it's parked where it was last landed): "
                     "go to it first, or walk")
         self.log(f"epoch: parked at {at[0]:.0f},{at[1]:.0f}")
-        p = self.here(s)
-        if math.dist(p, at) > 4:
-            went = await self._walk_onto(m, at)
-            if went:
-                return f"couldn't reach the Epoch: {went}"
-        for _ in range(2):
+        for _ in range(3):
+            s = await self.where() or await self.where(near=False)
+            if s is None:
+                return "something came up while boarding the Epoch (the screen isn't the map)"
+            if math.dist(self.here(s), at) > 4:
+                # Off its tile (not there yet, or the last try's hold moved us).
+                went = await self._walk_onto(m, at)
+                if went:
+                    return f"couldn't reach the Epoch: {went}"
+                await asyncio.sleep(0.2)
             self.press("a")
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(3.5)
             s = await self.where()
             if s is None:
                 await asyncio.sleep(1.0)
                 s = await self.where()
             if s is None:
                 return "something came up while boarding the Epoch (the screen isn't the map)"
-            angle = _angle(self.here(s), toward)
-            up = await self.flying(angle)
+            up = await self.flying(_angle(self.here(s), toward))
             if up:
                 park(self.notes, self.game, None)
                 return ""
             if up is None:
                 return "lost the map while boarding the Epoch"
-            # Not flying: off its tile by a step (the hold moved us), or it didn't see a.
-            s = await self.where()
-            if s is not None and math.dist(self.here(s), at) > 4:
-                went = await self._walk_onto(m, at)
-                if went:
-                    return f"couldn't reach the Epoch: {went}"
         return "pressed a on the Epoch's spot but it didn't take off"
 
     async def _walk_onto(self, m: WorldMap, at: tuple[float, float]) -> str:
@@ -558,8 +556,14 @@ class Pilot:
                 now = time.monotonic()
                 if s is None:
                     est = self.estimate()
-                    if est is not None and self._dir != (0, 0) and now - self._fix < 8:
-                        s = est  # holding a way over the sea: on by reckoning
+                    if est is not None and blind and now - blind >= BLIND:
+                        # Long enough by reckoning (it drifts, more so when the game
+                        # runs slow): stop and look, then on in another short hop.
+                        await self.settle(0.35)
+                        blind = 0.0
+                        continue
+                    if est is not None:
+                        s = est  # over the sea: on by reckoning
                         blind = blind or now
                     else:
                         misses += 1
