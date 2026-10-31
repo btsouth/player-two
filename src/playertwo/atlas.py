@@ -613,19 +613,20 @@ def heading(dx: float, dy: float, dead: float = 2.0) -> float | None:
 
 
 async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, keep_going,
-                  log, limit: float = 90.0) -> str:
+                  log, limit: float = 90.0, near: Spot | None = None) -> str:
     """Walk to a named place on a world map: where the view is on the map (image
     matching, several times a second), a route over walkable ground (A*) and steering
     along it; a spot that stops the character is marked shut and the route planned
     again. Arrived when the screen stops being the map at the place.
 
     shoot: async, the game's picture. steer(angle or None), press(button): the
-    controls. keep_going: async, False when the player stopped it. log(text)."""
+    controls. keep_going: async, False when the player stopped it. log(text). near: where
+    the player was a moment ago, if known (a quicker first look)."""
     import asyncio
     import time
 
     goal = m.places[name]
-    spot = atlas.locate(await shoot())
+    spot = await asyncio.to_thread(atlas.locate, await shoot(), near)
     if spot is not None and spot.margin < 0.05:
         spot = None  # it matches a few places about as well: not really the map
     if spot is None:
