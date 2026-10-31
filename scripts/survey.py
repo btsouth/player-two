@@ -304,7 +304,7 @@ class Survey:
         start = cell_of(self.g.pos())
         seen = {start}
         stack = [start]
-        self.note_exit(self.g.pos())
+        self.note_exit(self.g.pos(), test=self.test_doors)
         steps = 0
         while stack:
             u = stack[-1]
