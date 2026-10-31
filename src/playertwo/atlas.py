@@ -18,6 +18,7 @@ atlas.json:
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import json
 import math
@@ -47,6 +48,7 @@ class Spot:
     y: float
     score: float  # how well the screen matched there, 0 to 1
     margin: float  # over the best match elsewhere on that map
+    tap: float = 0.06  # seconds a d-pad tap needs to take a step (the Steam port: longer)
 
 
 @dataclass
@@ -151,6 +153,7 @@ class Atlas:
         import cv2
 
         spec = json.loads((folder / "atlas.json").read_text())
+        self.folder = folder
         self.native = tuple(spec.get("native", [256, 224]))
         self.maps: list[WorldMap] = []
         for m in spec["maps"]:
@@ -201,11 +204,18 @@ class Atlas:
 
     def view(self, frame: Image.Image) -> np.ndarray:
         """The game's picture at its own size, BGR: the screen cropped to the game (the
-        middle 4:3 of a wide window) and scaled down."""
+        middle 4:3 of a wide window) and scaled down. A window filled with redrawn art
+        (the Steam port) is scaled to the map's pixels instead, once that's known."""
+        return self._view(np.asarray(frame.convert("RGB")))
+
+    def _view(self, rgb: np.ndarray) -> np.ndarray:
         import cv2
 
-        rgb = np.asarray(frame.convert("RGB"))
         h, w = rgb.shape[:2]
+        if not self._boxed(rgb):
+            size = self._scales().get((w, h))
+            if size is not None:
+                return cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)[:, :, ::-1].copy()
         gw = min(w, round(h * 4 / 3))  # RetroArch keeps the 4:3 picture in the middle
         x0 = (w - gw) // 2
         game = rgb[:, x0:x0 + gw]
@@ -218,7 +228,10 @@ class Atlas:
         searches around it first, which is quicker."""
         import cv2
 
-        v = self.view(frame)
+        rgb = np.asarray(frame.convert("RGB"))
+        if not self._boxed(rgb):
+            return self._locate_full(rgb, near)
+        v = self._view(rgb)
         nw, nh = self.native
         t = v[16:nh - 24, 16:nw - 16]  # off the edges (the era box sits bottom left)
         if near is not None:  # a step from the last spot: search only around it
@@ -251,20 +264,230 @@ class Atlas:
             return None
         return best
 
+    # Redrawn art filling the window (the Steam port of Chrono Trigger) rather than the
+    # game's own picture in a 4:3 box: shapes match the map rip but pixels don't, the
+    # scale is the port's own (and not the same across and down), so the view is matched
+    # grey and blurred, at a scale found once per window size.
+    SOFT = 1.5  # blur, in map pixels
+    # The Steam port centres its view 16.5 map pixels above the character (the game's
+    # own picture: 1); this is added, so a spot means the same on both (the character
+    # is RISE above it). Measured on the 1000 A.D. map: standing on the Market icon
+    # (its name shows) and on the tiles walked through, against the survey.
+    FULL_DROP = 17.5
+    FULL_TAP = 0.1  # it misses a 60 ms tap; 100 ms is one step
+
+    @staticmethod
+    def _boxed(rgb: np.ndarray) -> bool:
+        """Whether the game sits in a 4:3 box (an emulator, black bars at the sides)."""
+        h, w = rgb.shape[:2]
+        x0 = (w - min(w, round(h * 4 / 3))) // 2
+        if x0 < 4:
+            return True
+        sides = np.concatenate([rgb[::4, :x0:4], rgb[::4, w - x0::4]], axis=1)
+        return float(np.percentile(sides, 98)) < 24
+
+    def _full(self) -> dict:
+        st = self.__dict__.get("_full_state")
+        if st is None:
+            scales = {}
+            folder = getattr(self, "folder", None)
+            try:
+                saved = json.loads((folder / "view-scales.json").read_text())
+                for k, v in saved.items():
+                    w, h = k.split("x")
+                    scales[(int(w), int(h))] = (int(v[0]), int(v[1]))
+            except (OSError, TypeError, ValueError, AttributeError):
+                pass
+            st = self.__dict__["_full_state"] = {"scales": scales, "soft": {}, "tried": {}}
+        return st
+
+    def _scales(self) -> dict[tuple[int, int], tuple[int, int]]:
+        """Window size -> the map pixels it shows, across and down."""
+        return self._full()["scales"]
+
+    def _soft(self, m: WorldMap, half: bool = False) -> np.ndarray:
+        import cv2
+
+        soft = self._full()["soft"]
+        key = (m.name, half)
+        if key not in soft:
+            g = cv2.GaussianBlur(cv2.cvtColor(m.image, cv2.COLOR_BGR2GRAY), (0, 0),
+                                 self.SOFT)
+            soft[key] = cv2.pyrDown(g) if half else g
+        return soft[key]
+
+    def _cut(self, gray: np.ndarray, size: tuple[int, int],
+             blur: float) -> tuple[np.ndarray, int, int]:
+        """The window scaled to `size` map pixels, blurred, off the edges (the era box
+        bottom left, the menu hint top right): the template and its offset."""
+        import cv2
+
+        v = cv2.GaussianBlur(cv2.resize(gray, size, interpolation=cv2.INTER_AREA), (0, 0),
+                             blur)
+        vw, vh = size
+        b, a = round(vw * 0.1), round(vh * 0.1)
+        return v[a:vh - round(vh * 0.16), b:vw - b], b, a
+
+    def _calibrate(self, gray: np.ndarray) -> tuple[int, int] | None:
+        """The map pixels a full window shows (across, down): the scale that matches a
+        map best, coarse at half size over every map, then fine around that spot."""
+        import cv2
+
+        h, w = gray.shape
+        nh = self.native[1]
+        if h > 2.5 * nh:  # every scale tried is a shrink of this: quicker
+            gray = cv2.resize(gray, (round(w * 2.5 * nh / h), round(2.5 * nh)),
+                              interpolation=cv2.INTER_AREA)
+        best = None  # score, (vw, vh), map, x, y (full-size map pixels)
+        vh = 0.65 * nh
+        while vh <= 1.15 * nh:
+            for par in (1.0, 8 / 7):  # square pixels, or the console's wide ones
+                size = (round(vh * w / h / par), round(vh))
+                t, b, a = self._cut(gray, (size[0] // 2, size[1] // 2), self.SOFT / 2)
+                for m in self.maps:
+                    M = self._soft(m, half=True)
+                    if M.shape[0] < t.shape[0] or M.shape[1] < t.shape[1]:
+                        continue
+                    _, score, _, (x, y) = cv2.minMaxLoc(
+                        cv2.matchTemplate(M, t, cv2.TM_CCOEFF_NORMED))
+                    if best is None or score > best[0]:
+                        best = (score, size, m, (x - b) * 2, (y - a) * 2)
+            vh *= 1.04
+        if best is None or best[0] < 0.45:
+            return None
+        _, (vw0, vh0), m, x0, y0 = best
+        M = self._soft(m)
+
+        def fit(vws, vhs):
+            top = None
+            for vw in vws:
+                for vh in vhs:
+                    t, b, a = self._cut(gray, (vw, vh), self.SOFT)
+                    wx, wy = max(0, x0 + b - 24), max(0, y0 + a - 24)
+                    win = M[wy:wy + t.shape[0] + 48, wx:wx + t.shape[1] + 48]
+                    if win.shape[0] < t.shape[0] or win.shape[1] < t.shape[1]:
+                        continue
+                    _, score, _, _ = cv2.minMaxLoc(
+                        cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED))
+                    if top is None or score > top[0]:
+                        top = (score, vw, vh)
+            return top
+
+        dw, dh = max(2, round(vw0 * 0.08)), max(2, round(vh0 * 0.05))
+        top = fit(range(vw0 - dw, vw0 + dw + 1, 3), range(vh0 - dh, vh0 + dh + 1, 3))
+        if top is None:
+            return None
+        top = fit(range(top[1] - 2, top[1] + 3), range(top[2] - 2, top[2] + 3))
+        size = (top[1], top[2])
+        t, _, _ = self._cut(gray, size, self.SOFT)
+        r = cv2.matchTemplate(M, t, cv2.TM_CCOEFF_NORMED)
+        _, score, _, (x, y) = cv2.minMaxLoc(r)
+        r[max(0, y - 24):y + 24, max(0, x - 24):x + 24] = -1
+        if score < 0.6 or score - float(r.max()) < 0.1:
+            return None
+        return size
+
+    def _locate_full(self, rgb: np.ndarray, near: Spot | None) -> Spot | None:
+        import time
+
+        import cv2
+
+        h, w = rgb.shape[:2]
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        st = self._full()
+        size = st["scales"].get((w, h))
+        if size is not None:
+            return self._match(gray, size, near)
+        # A new window size. The same shape shows the same map pixels at any size, so
+        # one known already is tried first.
+        for (sw, sh), known in list(st["scales"].items()):
+            if abs(sw / sh - w / h) < 0.01:
+                s = self._match(gray, known, None)
+                if s is not None and s.margin >= 0.1:
+                    self._keep((w, h), known)
+                    return s
+        # Else measured, once it's a map; at most every few seconds till then, as it
+        # takes about a second.
+        if time.monotonic() - st["tried"].get((w, h), -1e9) < 5:
+            return None
+        st["tried"][(w, h)] = time.monotonic()
+        size = self._calibrate(gray)
+        if size is None:
+            return None
+        self._keep((w, h), size)
+        return self._match(gray, size, near)
+
+    def _keep(self, window: tuple[int, int], size: tuple[int, int]) -> None:
+        """Remember a window size's scale, here and in the atlas folder."""
+        st = self._full()
+        st["scales"][window] = size
+        folder = getattr(self, "folder", None)
+        if folder is not None:
+            with contextlib.suppress(OSError):
+                (folder / "view-scales.json").write_text(json.dumps(
+                    {f"{w}x{h}": list(v) for (w, h), v in st["scales"].items()}, indent=1))
+
+    def _match(self, gray: np.ndarray, size: tuple[int, int],
+               near: Spot | None) -> Spot | None:
+        import cv2
+
+        vw, vh = size
+        t, b, a = self._cut(gray, size, self.SOFT)
+
+        def spot(m: WorldMap, x: float, y: float, score: float, margin: float) -> Spot:
+            return Spot(m.name, x - b + vw / 2, y - a + vh / 2 + self.FULL_DROP,
+                        float(score), margin, self.FULL_TAP)
+
+        if near is not None:
+            m = self.map(near.map)
+            x0 = max(0, int(near.x - vw / 2 + b - 48))
+            y0 = max(0, int(near.y - self.FULL_DROP - vh / 2 + a - 48))
+            win = self._soft(m)[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
+            if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
+                r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+                _, score, _, (x, y) = cv2.minMaxLoc(r)
+                if score > 0.65:
+                    return spot(m, x0 + x, y0 + y, score, 1.0)
+        best: Spot | None = None
+        maps = self.maps
+        if near is not None:
+            maps = sorted(self.maps, key=lambda m: m.name != near.map)
+        for m in maps:
+            M = self._soft(m)
+            if M.shape[0] < t.shape[0] or M.shape[1] < t.shape[1]:
+                continue
+            r = cv2.matchTemplate(M, t, cv2.TM_CCOEFF_NORMED)
+            _, score, _, (x, y) = cv2.minMaxLoc(r)
+            r[max(0, y - 24):y + 24, max(0, x - 24):x + 24] = -1
+            s = spot(m, x, y, score, float(score - r.max()))
+            if best is None or s.score > best.score:
+                best = s
+            if near is not None and m.name == near.map and score > 0.7:
+                break
+        # Blurred grey, a dark room can look like a dark map about as well anywhere on
+        # it; the map itself stands out (0.25 or more on real frames).
+        if best is None or best.score < 0.6 or best.margin < 0.1:
+            return None
+        return best
+
     def map(self, name: str) -> WorldMap:
         return next(m for m in self.maps if m.name == name)
 
     def find_place(self, query: str) -> tuple[WorldMap, str] | None:
         """The place a request means: exact names first, then most shared words."""
-        q = set(re.findall(r"[a-z0-9]+", query.lower().replace("'s", "")))
-        best, score = None, 0.0
+        q = words(query)
+        best, score = None, (0.0, 0.0)
         for m in self.maps:
             for name in m.places:
-                n = set(re.findall(r"[a-z0-9]+", name.lower().replace("'s", "")))
-                s = len(q & n) / len(n) if n else 0
+                n = words(name)
+                if n == q:
+                    return m, name
+                # Most of the place's words, then the fewest left over on either side
+                # ("Last Village Hut (west)" over "Last Village").
+                s = (len(q & n) / len(n) if n else 0, len(q & n) / len(q | n) if n else 0)
                 if s > score:
                     best, score = (m, name), s
-        return best if score >= 0.5 else None
+        return best if score[0] >= 0.5 else None
 
     def route(self, m: WorldMap, start: tuple[float, float], goal: tuple[float, float],
               goals: set[tuple[int, int]] | None = None) -> list[tuple[float, float]] | None:
@@ -499,7 +722,7 @@ async def walk_to(atlas: Atlas, m: WorldMap, name: str, shoot, steer, press, kee
                         if now is not None and resting(here(now)) and \
                                 cell((here(now)[0] + 2, here(now)[1] + 2)) == c:
                             steer(angle)  # standing short of it: one step
-                            await asyncio.sleep(0.06)
+                            await asyncio.sleep(now.tap)
                             steer(None)
                             await asyncio.sleep(0.12)
                     last, last_t = p, time.monotonic()
