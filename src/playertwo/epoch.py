@@ -271,7 +271,7 @@ class Sprites:
             v = float(r[y, x])
             if best is None or v < best[2]:
                 best = (x + dx, y + dy, v)
-        if best is None or best[2] > 900:  # about 30 levels off per channel
+        if best is None or best[2] > 2600:  # nothing like it (no Epoch: 3000 and up)
             return None
         return best
 
@@ -439,18 +439,27 @@ class Pilot:
     async def find_epoch(self, m: WorldMap, s: Spot) -> tuple[float, float] | None:
         """Where the parked Epoch's tile is on this map (map pixels), or None."""
         p = self.here(s)
-        img = await self.shoot()
-        view = self.atlas.view(img)
         nw, nh = self.atlas.native
-        if self.sprites.items and view.shape[1] == nw:
+        for i in range(4):  # a cloud drifting over it hides it for a moment
+            img = await self.shoot()
+            view = self.atlas.view(img)
+            if not (self.sprites.items and view.shape[1] == nw):
+                break
             hit = await asyncio.to_thread(self.sprites.find, view)
             if hit is not None:
-                x = p[0] + hit[0] - nw / 2
-                y = p[1] + hit[1] - (nh / 2 - RISE)
-                return round(x / CELL) * CELL, round(y / CELL) * CELL
+                x = round((p[0] + hit[0] - nw / 2) / CELL) * CELL
+                y = round((p[1] + hit[1] - (nh / 2 - RISE)) / CELL) * CELL
+                # Clear: 0 to about 450; the party standing on it: about 2000.
+                if hit[2] <= 1500 or math.dist((x, y), p) <= CELL:
+                    return x, y
+            if i < 3:
+                await asyncio.sleep(0.5)
         mem = parked(self.notes, self.game)
         if mem is not None and mem[0] == m.name and not left_flying(self.notes, self.game):
-            return mem[1], mem[2]
+            seen = self.sprites.items and view.shape[1] == nw
+            in_view = abs(mem[1] - p[0]) < nw / 2 - 16 and abs(mem[2] - p[1]) < nh / 2 - 16
+            if not (seen and in_view and math.dist(mem[1:], p) > CELL):
+                return mem[1], mem[2]  # (in view, not under the party, no sprite: moved)
         if self.find is not None:
             hit = await self.find(img)  # where on the picture, as fractions of it
             if hit is not None:
