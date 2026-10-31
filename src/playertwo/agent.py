@@ -105,6 +105,18 @@ TOOLS = [
                       "player said it."},
         }, "required": ["place"]}}},
     {"type": "function", "function": {
+        "name": "go_to_era",
+        "description": "Chrono Trigger, once the party has the Epoch (the winged time "
+                       "machine): go to another era by its time gauge: it walks to the "
+                       "parked Epoch, boards, sets the gauge, and lands near where it "
+                       "arrives. For 'take me to 600 AD', 'go to the future', 'the End of "
+                       "Time'. A place in another era or on another continent: go_to_place "
+                       "flies there by itself.",
+        "parameters": {"type": "object", "properties": {
+            "era": {"type": "string", "description": "The era as the player said it "
+                    "('600 AD', 'the middle ages', 'prehistoric')."},
+        }, "required": ["era"]}}},
+    {"type": "function", "function": {
         "name": "go_to_exit",
         "description": "Inside a place (a house, a shop, a town, a castle, a forest) the "
                        "game's room survey knows: go through the way out to where the player "
@@ -295,6 +307,11 @@ def split_before_confirm(buttons: list[str]) -> tuple[list[str], str]:
         if b == "a" and i > 0:
             return buttons[:i], "a"
     return buttons, ""
+
+
+SEE_EPOCH = """This is Chrono Trigger's world map. Is the Epoch on it: a silver time \
+machine with wings, parked on the ground (not the party walking)? JSON: {"epoch": [x, y]} \
+with its middle in thousandths of the picture's width and height, or {"epoch": null}."""
 
 
 # A plain request to go somewhere: on a world map the atlas knows, it's walked at once.
@@ -741,6 +758,15 @@ class Agent:
                 # It can't help here: the other ways of walking are open for a while.
                 self._map_free_until = time.monotonic() + 180
             return went
+        if name == "go_to_era":
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            try:
+                return await self._go_to_era(str(a.get("era") or ""))
+            except WALK_ERRORS as exc:
+                self.controls.steer(None)
+                return f"flying failed ({exc})"
         if name == "go_to_exit":
             await self.go.wait()
             if self.cancelled:
@@ -837,8 +863,13 @@ class Agent:
         """Where the screen is on the atlas's maps, or None (off the world map). A match
         no better than the next best spot is a flat patch of map matching a scene that
         isn't the map (a cutscene of sky and hills): not on it."""
-        spot = await asyncio.to_thread(atlas.locate, image) if atlas is not None else None
-        return spot if spot is not None and spot.margin >= 0.02 else None
+        if atlas is None:
+            return None
+        # Around the last spot first (a hundredth of a second, not a second or more).
+        spot = await asyncio.to_thread(atlas.locate, image, getattr(self, "_last_spot", None))
+        spot = spot if spot is not None and spot.margin >= 0.02 else None
+        self._last_spot = spot
+        return spot
 
     async def _where_am_i(self) -> str:
         """Where the player is on a world map, said from the places around them."""
@@ -907,6 +938,7 @@ class Agent:
         Which place the player means is Muse's pick from the map's names and the other
         names the walkthrough uses for them, not shared words ("Truce" isn't Truce Inn)."""
         from .atlas import walk_to
+        from .epoch import epoch_ok, era_named, era_of, era_only, left_flying, needs_epoch
         from .quests import Quests, atlas_aliases, pick_place
 
         atlas = await self._the_atlas()
@@ -914,12 +946,27 @@ class Agent:
             return "no atlas for this game: use travel and the guide instead"
         spot = await self._spot(atlas, (await self.grab()).image)
         maps = [atlas.map(spot.map)] if spot is not None else atlas.maps
+        era = era_named(place) if epoch_ok(atlas) else None
+        if era is not None and era_only(place):
+            return await self._go_to_era(place)
+        if era is not None:  # "Truce Inn in 600 AD": that era's maps
+            maps = sorted((m for m in atlas.maps if era_of(m.name) == era),
+                          key=lambda m: spot is None or m.name != spot.map) or maps
         quests = Quests.for_game(self.game or "")
         near = maps[0].nearest(spot.x, spot.y)[0] if spot is not None and maps[0].places \
             else ""
         found = await pick_place(self.muse, self.game or "", place, maps,
                                  atlas_aliases(self.game or ""), near,
                                  quests.aliases() if quests else None)
+        if isinstance(found, str) and epoch_ok(atlas):
+            if era is not None:  # an era, and no place in it fits: the era itself
+                return await self._go_to_era(place)
+            if len(maps) < len(atlas.maps):
+                # Not on this map: another era's, by the Epoch (this one first).
+                maps = maps + [m for m in atlas.maps if m not in maps]
+                found = await pick_place(self.muse, self.game or "", place, maps,
+                                         atlas_aliases(self.game or ""), near,
+                                         quests.aliases() if quests else None)
         if isinstance(found, str):
             names = "; ".join(f"{m.name}: {', '.join(m.places)}" for m in maps if m.places)
             return (f"no single place on the map for {place!r} ({found}). Places: {names}. "
@@ -937,9 +984,20 @@ class Agent:
 
         # Said at once, while it starts walking: the player can't see it set off.
         told = asyncio.create_task(self._speak(f"Going to {name}."))
-        result = await walk_to(atlas, m, name, shoot, self.controls.steer,
-                               self.controls.press, keep_going, walker.log, limit)
+        if spot is not None and (m.name != spot.map or
+                                 left_flying(self.notes.folder, self.game or "")):
+            result = await self._pilot(atlas).travel(m, name)  # another era, or in the air
+        else:
+            result = await walk_to(atlas, m, name, shoot, self.controls.steer,
+                                   self.controls.press, keep_going, walker.log, limit,
+                                   spot)
+            if needs_epoch(result) and epoch_ok(atlas):
+                # Another continent: fly the Epoch, when the party has it.
+                flew = await self._pilot(atlas).travel(m, name)
+                result = flew if not flew.startswith("no Epoch") else \
+                    f"{result}. Flying there: {flew}"
         await told
+        self._last_spot = None  # moved on
         if result.startswith("arrived"):
             progress = self._progress()
             progress.went(name)
@@ -948,6 +1006,46 @@ class Agent:
             result += (f'. The player has heard "Going to {name}." and "We\'re at {name}." '
                        "Add one short line only if something on screen needs them (someone "
                        "talking, a choice); otherwise finish.")
+        return result
+
+    def _pilot(self, atlas):
+        """The Epoch's pilot (epoch.Pilot), with this agent's eyes and hands."""
+        from .epoch import Pilot
+
+        async def shoot():
+            return (await self.grab()).image
+
+        async def keep_going():
+            return await self.walker_keep_going()
+
+        return Pilot(atlas, self.game or "", shoot, self.controls.steer, self.controls.press,
+                     keep_going, self.walker().log, self.notes.folder, find=self._see_epoch)
+
+    async def _see_epoch(self, image):
+        """Where the parked Epoch is on a picture (fractions of it), by Muse: for art
+        the atlas has no sprite for (the Steam port)."""
+        try:
+            data = await self.muse.json([{"role": "user", "content": [
+                image_part(image, 1280), {"type": "text", "text": SEE_EPOCH}]}],
+                effort="low", max_tokens=600)
+            x, y = (float(v) for v in data.get("epoch") or ())
+        except (ValueError, TypeError, OSError, openai.APIError):
+            return None
+        return (x / 1000, y / 1000) if 0 <= x <= 1000 and 0 <= y <= 1000 else None
+
+    async def _go_to_era(self, said: str) -> str:
+        """Go to another era by the Epoch's time gauge (see epoch.Pilot.go_to_era)."""
+        from .epoch import GAUGE, epoch_ok, era_named
+
+        era = era_named(said)
+        if era is None:
+            return f"no era called {said!r}: the time gauge has {', '.join(GAUGE)}"
+        atlas = await self._the_atlas()
+        if atlas is None or not epoch_ok(atlas):
+            return "this game's atlas has no Epoch (time machine) to fly"
+        told = asyncio.create_task(self._speak(f"Off to {era}."))
+        result = await self._pilot(atlas).go_to_era(era)
+        await told
         return result
 
     async def _inside(self, image):
