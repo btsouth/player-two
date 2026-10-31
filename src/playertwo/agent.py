@@ -1118,7 +1118,7 @@ class Agent:
         atlas = await self._the_atlas()
         if atlas is None or not epoch_ok(atlas):
             return "this game's atlas has no Epoch (time machine) to fly"
-        told = asyncio.create_task(self._speak(f"Off to {era}."))
+        told = asyncio.create_task(self._speak(f"Off to {era.rstrip('.')}."))
         result = await self._pilot(atlas).go_to_era(era)
         await told
         return result
