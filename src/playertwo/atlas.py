@@ -510,11 +510,12 @@ class Atlas:
     def map(self, name: str) -> WorldMap:
         return next(m for m in self.maps if m.name == name)
 
-    def find_place(self, query: str) -> tuple[WorldMap, str] | None:
-        """The place a request means: exact names first, then most shared words."""
+    def find_place(self, query: str, on: str = "") -> tuple[WorldMap, str] | None:
+        """The place a request means: exact names first, then most shared words. Names on
+        the map the player is `on` win a tie (Truce Inn is in 600 and 1000 A.D.)."""
         q = words(query)
         best, score = None, (0.0, 0.0)
-        for m in self.maps:
+        for m in sorted(self.maps, key=lambda m: m.name != on):
             for name in m.places:
                 n = words(name)
                 if n == q:

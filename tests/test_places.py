@@ -26,3 +26,17 @@ def test_find_place_prefers_the_exact_name(tmp_path):
                                                 "Last Village Hut (west)": (8, 8)})]
     assert a.find_place("Last Village Hut (west)")[1] == "Last Village Hut (west)"
     assert a.find_place("last village")[1] == "Last Village"
+
+
+def test_find_place_prefers_the_map_the_player_is_on():
+    from playertwo.atlas import Atlas
+
+    a = Atlas.__new__(Atlas)
+
+    class M:
+        def __init__(self, name):
+            self.name, self.places = name, {"Truce Inn": (1, 1)}
+
+    a.maps = [M("1000 A.D."), M("600 A.D.")]
+    assert a.find_place("Truce Inn")[0].name == "1000 A.D."
+    assert a.find_place("the Truce Inn", "600 A.D.")[0].name == "600 A.D."

@@ -26,12 +26,13 @@ async def main() -> int:
     if atlas is None:
         print("no atlas")
         return 2
-    found = atlas.find_place(args.place)
+    cap = HyprlandCapture("RetroArch")
+    here = atlas.locate((await asyncio.to_thread(cap.grab)).image)
+    found = atlas.find_place(args.place, here.map if here else "")
     if found is None:
         print("no such place")
         return 2
     m, name = found
-    cap = HyprlandCapture("RetroArch")
     keys = keyboard(focus=cap.focus)
     t0 = time.monotonic()
 
