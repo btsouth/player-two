@@ -377,17 +377,19 @@ def nearest_of_kind(m, name: str, said: str, at: tuple[float, float]) -> str:
     one in this town."""
     import math
 
-    from .atlas import words
+    def tokens(n: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+", n.lower().replace("'s", ""))
 
     def kind(n: str) -> set[str]:
-        w = [x for x in re.findall(r"[a-z0-9]+", n.lower().replace("'s", ""))]
+        w = tokens(n)
         return set(w[1:]) if len(w) > 1 else set(w)
 
     same = [n for n in m.places if n != name and kind(n) == kind(name) and kind(n)]
     if not same:
         return name
-    asked = words(said)
-    named = [n for n in [name, *same] if (words(n) - kind(n)) & asked]
+    # The same tokens on both sides: "mayor's" in the request isn't a town's name.
+    asked = set(tokens(said))
+    named = [n for n in [name, *same] if (set(tokens(n)) - kind(n)) & asked]
     if named:
         return name if name in named else named[0]  # they said which town
     return min([name, *same], key=lambda n: math.dist(m.places[n], at))
@@ -973,6 +975,9 @@ class Agent:
         if atlas is None:
             return "no atlas for this game: use travel and the guide instead"
         spot = await self._spot(atlas, (await self.grab()).image)
+        if spot is None:  # a blink or a cloud: one more look before going without it
+            await asyncio.sleep(0.4)
+            spot = await self._spot(atlas, (await self.grab()).image)
         maps = [atlas.map(spot.map)] if spot is not None else atlas.maps
         era = era_named(place) if epoch_ok(atlas) else None
         if era is not None and era_only(place):

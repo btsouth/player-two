@@ -525,7 +525,8 @@ Which one do they mean? Only one that clearly is it, by its name or another name
 or by what you know of the game for sure (the fair is at Leene Square). "The inn" or "the \
 shop" with several on the list: the one in the town they're at or nearest. A word in \
 common isn't enough: a whole town isn't one building in it. If it's a town or area with \
-several places on the list, or none fits, give "" and say why in a few words.
+several places on the list, or none fits, give "" and say why in a few words. A place \
+marked [doesn't open now] only when they name it: "the hut" is one that opens.
 Answer JSON: {{"map": "<map name>", "place": "<exact name from the list, or empty>", \
 "why": "<a few words>"}}"""
 
@@ -552,11 +553,20 @@ async def pick_place(muse, game: str, said: str, maps: list, aliases: dict[str, 
     known = {k: set(v) for k, v in aliases.items()}
     for k, v in (hints or {}).items():
         known.setdefault(k, set()).update(h for h in v if not town(h))
+    def shut(m, n: str) -> bool:
+        """On a map whose doors were all tried: no door of this place went anywhere (it
+        doesn't open yet in the story, or it's scenery)."""
+        if not getattr(m, "doors", None):
+            return False
+        cells = m.entrance(n)
+        return not cells or not any(c in m.doors for c in cells)
+
     lines = []
     for m in maps:
         if m.places:
             lines.append(f"{m.name}: " + "; ".join(
                 n + (f" ({', '.join(sorted(known[n]))})" if known.get(n) else "")
+                + (" [doesn't open now]" if shut(m, n) else "")
                 for n in m.places))
     if not lines:
         return "no places are named on these maps yet"
