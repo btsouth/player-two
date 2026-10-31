@@ -926,12 +926,19 @@ class Agent:
         async def keep_going():
             return await self.walker_keep_going()
 
+        # Said at once, while it starts walking: the player can't see it set off.
+        told = asyncio.create_task(self._speak(f"Going to {name}."))
         result = await walk_to(atlas, m, name, shoot, self.controls.steer,
                                self.controls.press, keep_going, walker.log, limit)
+        await told
         if result.startswith("arrived"):
             progress = self._progress()
             progress.went(name)
             progress.save(self.notes.folder, self.game or "")
+            await self._speak(f"We're at {name}.")
+            result += (f'. The player has heard "Going to {name}." and "We\'re at {name}." '
+                       "Add one short line only if something on screen needs them (someone "
+                       "talking, a choice); otherwise finish.")
         return result
 
     async def _inside(self, image):
