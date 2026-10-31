@@ -17,12 +17,16 @@ import numpy as np
 import openai
 from PIL import Image
 
+from . import ctsteam
+from .ack import FIGHT, RUN
 from .areamap import AreaMap
+from .battle import Executor, Intent, Stop, parse_intent
 from .controls import BUTTONS, DIRECTIONS, Controls
+from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
 from .muse import Muse, image_part
 from .notes import GameNotes
-from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
+from .prompts import AGENT, BATTLE_CT, BATTLE_DECIDE, CONFIRM, GAME_CONTEXT, LANGUAGE, WHO_GLOVE
 from .screen import Frame, thumb
 from .walk import Walker, small
 
@@ -253,10 +257,54 @@ TOOLS = [
 ]
 
 
+# Chrono Trigger on Steam: battles are played by the executor (battle.py), one command a
+# call, and field menus by menu.py; in a fight they're the only way to act.
+CT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "battle",
+        "description": "Chrono Trigger battle: one command for one character, done for you "
+                       "(cursor moves, checks, confirm), watched until it lands. Says what "
+                       "changed, or why it stopped.",
+        "parameters": {"type": "object", "properties": {
+            "actor": {"type": "string", "description": "Who acts: Crono, Marle, Frog... "
+                      "Empty for whoever's command is up."},
+            "command": {"type": "string", "enum": ["attack", "tech", "item"]},
+            "name": {"type": "string", "description": "The tech or item, as the game "
+                     "spells it (Cure, Cyclone, Mid-Potion, Athenian Water)."},
+            "target": {"type": "string", "description": "An ally's name; left, right, top "
+                       "or bottom for an enemy by where it stands; an enemy's name; or "
+                       "empty for the game's own pick."},
+        }, "required": ["command"]}}},
+    {"type": "function", "function": {
+        "name": "fight",
+        "description": "Chrono Trigger battle: win plays the whole fight until it's won "
+                       "(attacking, healing the low, reviving the knocked out); run tries "
+                       "to run away.",
+        "parameters": {"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["win", "run"]},
+        }, "required": ["mode"]}}},
+    {"type": "function", "function": {
+        "name": "field_menu",
+        "description": "Chrono Trigger, outside battle: use a tech or an item on someone "
+                       "through the menu ('Marle uses Cure on Crono', 'a Potion on Frog'), "
+                       "or change a battle setting (Battle Mode, Battle Speed). It opens the "
+                       "menu, does it, checks it and closes the menu.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["tech", "item", "setting"]},
+            "user": {"type": "string", "description": "For a tech: who casts it."},
+            "name": {"type": "string", "description": "The tech, the item or the setting "
+                     "(as the game spells it)."},
+            "target": {"type": "string", "description": "Who it's used on; for a setting, "
+                       "the value wanted (Wait, Active, slowest, fastest)."},
+        }, "required": ["action", "name"]}}},
+]
+FIELD_MENU = False  # the field_menu tool is offered (menu.py)
+BATTLE_TOOLS = [*CT_TOOLS[:2], *(t for t in TOOLS if t["function"]["name"] in (
+    "say", "ask_player", "remember", "wait", "finish"))]
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
 # Out of steps but not done: the player can say to keep going (that adds steps).
 FINISH_OR_ASK = [t for t in TOOLS if t["function"]["name"] in ("finish", "ask_player")]
-TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS + CT_TOOLS}
 MOVES = {"up", "down", "left", "right", "lb", "rb"}
 # Something broke while walking (not the model's arguments): the model hears it failed.
 WALK_ERRORS = (ValueError, TypeError, IndexError, OSError, RuntimeError, openai.APIError)
@@ -452,6 +500,11 @@ class Agent:
         # known whether they said stop, asked something else, or just wanted a repeat.
         self.go = asyncio.Event()
         self.go.set()
+        # Chrono Trigger on Steam: the battle executor, and the fight on screen (the
+        # reader's state) while there is one.
+        self._executor: Executor | None = None
+        self._battle: State | None = None
+        self._battle_seen = 0.0
 
     def hold(self) -> None:
         self.go.clear()
@@ -582,6 +635,9 @@ class Agent:
         return changed
 
     async def _act(self, name: str, a: dict) -> str:
+        if name in ("press", "hold") and self._battle is not None:
+            return ("not pressed: in this Chrono Trigger fight, act with battle (one "
+                    "command) or fight (win or run); they do the presses")
         if name == "press":
             asked = a.get("buttons") or []
             if isinstance(asked, str):
@@ -711,6 +767,12 @@ class Agent:
                         "press a once and look")
             await asyncio.to_thread(self.controls.press, inp, ms)
             return f"held {inp} for {ms} ms"
+        if name in ("battle", "fight"):
+            return await self._battle_tool(name, a)
+        if name == "field_menu":
+            if not FIELD_MENU:
+                return "no field_menu yet: use press"
+            return await self._field_menu(a)
         if name not in TOOL_NAMES:
             return f"no tool called {name}; use one of {', '.join(sorted(TOOL_NAMES))}"
         if name in ("walk_to", "talk_to", "travel", "walk_to_map", "keep_walking") and \
@@ -902,6 +964,159 @@ class Agent:
                 self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
             return went.text(direction.replace("_", " and "))
         return "ok"
+
+    # -- Chrono Trigger (Steam): battles and field menus by the local executor ------------
+
+    def _ct_steam(self, frame: Frame | None) -> bool:
+        return frame is not None and "chrono trigger" in (self.game or "").lower() \
+            and ctsteam.fits(frame.image)
+
+    async def _battle_on(self, frame: Frame | None) -> State | None:
+        """The fight on screen, read from pixels, or None (another game, no fight)."""
+        if not self._ct_steam(frame):
+            return None
+        st = await asyncio.to_thread(ctsteam.read, frame.image)
+        if not (st.in_battle or st.paused):
+            return None
+        now = time.monotonic()
+        if now - self._battle_seen > 30 and self._executor is not None:
+            self._executor.ally_at.clear()  # a new fight: everyone stands elsewhere
+        self._battle_seen = now
+        return st
+
+    def executor(self) -> Executor:
+        if self._executor is None:
+            async def press(button: str, ms: int) -> None:
+                await self.go.wait()
+                await asyncio.to_thread(self.controls.press, button, ms)
+
+            async def chord(buttons: list[str], ms: int) -> None:
+                await self.go.wait()
+                await asyncio.to_thread(self.controls.chord, buttons, ms)
+
+            async def grab():
+                return (await self.grab()).image
+
+            def log(text: str) -> None:
+                if self.on_action:
+                    self.on_action("battle_note", {"text": text})
+
+            self._executor = Executor(press, grab, identify=self._who_glove,
+                                      cancelled=lambda: self.cancelled, chord=chord, log=log)
+        return self._executor
+
+    async def _who_glove(self, image, glove, names: list[str]) -> str | None:
+        """Ask the model which ally the target glove is on (only when the executor can't
+        tell from where each stood on their turn)."""
+        try:
+            img = image if isinstance(image, Image.Image) else Image.fromarray(
+                np.ascontiguousarray(np.asarray(image)[..., ::-1]))
+            d = await asyncio.wait_for(self.muse.json([{"role": "user", "content": [
+                image_part(img, self.muse.s.image_max_side),
+                {"type": "text", "text": WHO_GLOVE.format(names=", ".join(names))}]}],
+                effort="low", max_tokens=1500), 20)
+        except (openai.APIError, TimeoutError, ValueError, TypeError) as exc:
+            if self.on_action:
+                self.on_action("battle_note", {"text": f"who_glove failed: {exc}"})
+            return None
+        return str(d.get("name") or "") or None
+
+    async def _decide(self, st: State, why: str) -> Intent | None:
+        """One "win this fight" turn on a surprise: the model picks, from the state in
+        words (no picture: quick), while the game is paused."""
+        techs = ", ".join(ctsteam.TECHS.get(st.actor, ())) or "unknown"
+        prompt = BATTLE_DECIDE.format(request=getattr(self, "_request", "win this fight"),
+                                      state=ctsteam.describe(st), why=why or "your call",
+                                      actor=st.actor, techs=techs)
+        try:
+            d = await asyncio.wait_for(self.muse.json(
+                [{"role": "user", "content": prompt}], effort="low", max_tokens=1500), 20)
+        except (openai.APIError, TimeoutError, ValueError, TypeError) as exc:
+            if self.on_action:
+                self.on_action("battle_note", {"text": f"decide failed: {exc}"})
+            return None
+        intent = parse_intent(d, st.actor)
+        if intent is not None and intent.command != "attack":
+            line = f"{st.actor}: {intent.name or intent.command}" + (
+                f" on {intent.target}" if intent.target else "") + "."
+            asyncio.get_running_loop().create_task(self._speak(line))
+        return intent
+
+    async def _hold_fight(self, st: State) -> State:
+        """Pause the fight while the model thinks (Start), if it isn't already."""
+        if st.paused:
+            return st
+        try:
+            return await self.executor().pause()
+        except Stop:
+            return st
+
+    def _battle_note(self, lead: str = "") -> str:
+        st = self._battle
+        if st is None:
+            return ""
+        return f"{lead}{BATTLE_CT}\nThe fight now: {ctsteam.describe(st)}\n\n"
+
+    def _tools(self, frame: Frame | None) -> list[dict]:
+        if self._battle is not None:
+            return BATTLE_TOOLS
+        if self._ct_steam(frame) and FIELD_MENU:
+            return [*TOOLS[:-1], CT_TOOLS[2], TOOLS[-1]]  # field_menu, finish still last
+        return TOOLS
+
+    async def _battle_tool(self, name: str, a: dict) -> str:
+        await self.go.wait()
+        if self.cancelled:
+            return "stopped by the player"
+        frame = await self.grab()
+        if not self._ct_steam(frame):
+            return "no battle tool here: it's for Chrono Trigger on Steam; use press"
+        ex = self.executor()
+        if name == "fight":
+            mode = str(a.get("mode") or "win").lower()
+            if mode.startswith(("run", "flee", "escape")):
+                out = await ex.run_away()
+            else:
+                out = await ex.win(self._decide)
+        else:
+            intent = Intent(str(a.get("actor") or ""), str(a.get("command") or "attack"),
+                            str(a.get("name") or ""), str(a.get("target") or ""))
+            out = await ex.act(intent)
+        st = out.state
+        now = ctsteam.describe(st) if st is not None else "the screen can't be read"
+        held = (" The fight is paused until the player's next request." if st is not None
+                and st.paused else "")
+        if out.ok:
+            return f"done: {out.text}. Now: {now}{held}"
+        return (f"stopped, nothing more pressed: {out.text}. Now: {now}{held} Fix it once "
+                "if the fix is plain, or tell the player.")
+
+    async def _field_menu(self, a: dict) -> str:
+        await self.go.wait()
+        if self.cancelled:
+            return "stopped by the player"
+        frame = await self.grab()
+        if not self._ct_steam(frame):
+            return "no field_menu here: it's for Chrono Trigger on Steam; use press"
+        if self._battle is not None:
+            return "in a fight: use battle"
+        from .menu import FieldMenu
+
+        async def press(button: str, ms: int) -> None:
+            await self.go.wait()
+            await asyncio.to_thread(self.controls.press, button, ms)
+
+        async def grab():
+            return (await self.grab()).image
+
+        fm = FieldMenu(press, grab, cancelled=lambda: self.cancelled)
+        action = str(a.get("action") or "")
+        if action == "setting":
+            out = await fm.setting(str(a.get("name") or ""), str(a.get("target") or ""))
+        else:
+            out = await fm.use(action, str(a.get("name") or ""), str(a.get("user") or ""),
+                               str(a.get("target") or ""))
+        return out
 
     def _progress(self):
         from .quests import Progress
@@ -1445,6 +1660,25 @@ class Agent:
                 return run
             frame = await self.grab()
             tried = f"go_to_place({trip.group('place')!r}) was tried already: {result}\n\n"
+        # Chrono Trigger on Steam in a fight: pause it while the model thinks.
+        self._battle = await self._battle_on(frame)
+        if self._battle is not None:
+            self._battle = await self._hold_fight(self._battle)
+            said = " ".join(request.lower().split())
+            mode = "win" if FIGHT.search(said) else "run" if RUN.search(said) else ""
+            if mode:
+                # "Win this fight", "run": no model turn needed to start it.
+                result = await self._act("fight", {"mode": mode})
+                run.steps.append(Step("fight", {"mode": mode}, time.monotonic() - t0, result))
+                if self.cancelled:
+                    run.outcome = "cancelled"
+                    run.seconds = time.monotonic() - t0
+                    self.history.append(f"{request} -> {run.outcome}")
+                    return run
+                frame = await self.grab()
+                self._battle = await self._battle_on(frame)
+                tried += (f"fight({mode}) was done already: {result}\nTell the player how "
+                          "it went in a sentence, from that result, and finish.\n\n")
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
         trail = self.trail.notes()
         msgs: list[dict] = [
@@ -1452,7 +1686,7 @@ class Agent:
             {"role": "user", "content": [
                 image_part(frame.image, self.muse.s.image_max_side),
                 {"type": "text", "text": (f"Earlier requests:\n{recent}\n\n" if recent else "")
-                 + (f"{trail}\n\n" if trail else "") + tried
+                 + (f"{trail}\n\n" if trail else "") + tried + self._battle_note()
                  + f'The player says: "{request}"'},
             ]},
         ]
@@ -1466,8 +1700,8 @@ class Agent:
                 break
             t_model = time.monotonic()
             last_turn = _turn == budget - 1
-            msg = await self.muse.tools(trim_images(msgs), TOOLS if not last_turn else
-                                        FINISH_OR_ASK if self.ask else FINISH_ONLY)
+            msg = await self.muse.tools(trim_images(msgs), self._tools(frame) if not last_turn
+                                        else FINISH_OR_ASK if self.ask else FINISH_ONLY)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
@@ -1595,7 +1829,16 @@ class Agent:
             turn["act_s"] = round(time.monotonic() - t_act, 2)
             t_look = time.monotonic()
             # After a say too: the model may be waiting for text still typing out.
-            frame = await self._settled(noise)
+            if self._battle is not None:
+                # A fight never sits still; the executor has already waited for what
+                # it needed, and left it paused.
+                frame = await self.grab()
+            else:
+                frame = await self._settled(noise)
+            fought = self._battle is not None
+            self._battle = await self._battle_on(frame)
+            if self._battle is not None and not fought:
+                self._battle = await self._hold_fight(self._battle)  # one just started
             turn["look_s"] = round(time.monotonic() - t_look, 2)
             if os.environ.get("PLAYER_TWO_FRAMES"):  # what it saw, turn by turn (debugging)
                 with contextlib.suppress(OSError, AttributeError):
@@ -1615,7 +1858,7 @@ class Agent:
             msgs.append({"role": "user", "content": [
                 *shown,
                 image_part(frame.image, self.muse.s.image_max_side),
-                {"type": "text", "text": "The screen now." + (
+                {"type": "text", "text": "The screen now." + self._battle_note(" ") + (
                     " You're out of steps. Done: finish. Not done: "
                     + ("ask_player, saying in a sentence how far you got and asking whether "
                        "to keep going (a yes gives you more steps); if it can't be done, "

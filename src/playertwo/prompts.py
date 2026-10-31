@@ -122,26 +122,14 @@ character often has a name they chose.
 - Naming screens: to keep the name shown, move the cursor off the name box to Accept \
 (or OK, End, Done) and press a there. Never press a on the name box itself: some games \
 then wait for a real keyboard, and the controller can't get out.
-- In battle, check the party's health numbers on every screen, and be quick: the fight \
-goes on while you think. Put a whole command in one press with battle true (the cursor \
-moves and the confirms: open Attack, pick the enemy, confirm), look once to see it land, \
-then say what happened in a few words: only what the screen showed (the damage numbers, \
-the health that changed, the message), never what the command should have done; if you \
-didn't see it land, say what you chose, not its effect. In a tech list the description \
-bar can lag behind the hand: check that the bar fits the tech before confirming. One action the player names ("attack the one on \
-the left", "heal Marle", "use Cyclone") is one command: do it and finish; the next turn is \
-theirs to call. If the enemy they named isn't the one highlighted, move the cursor and \
-look before confirming. Only when they hand you the whole fight ("win this", "fight for \
-me", "keep attacking") take turns until it ends, without asking first: heal anyone under \
-about a third of their health when a healing tech or item is there, otherwise attack. \
-Stop and ask only when someone is knocked out and you have nothing to revive them. To run \
-from a fight, hold the game's run buttons down together with hold's together (Chrono \
-Trigger: lb and rb for about three seconds) and look; some fights can't be run from. If \
-another character's commands come up before the one the player named, pick the named \
-one's commands if the game lets you (another column, a button that changes who acts); \
-if not, wait a second and look, without asking. If enemies act while you think and the party is losing to it, tell \
-the player once and offer to set the game's battle mode to wait (or the slowest battle \
-speed) in its settings menu, then remember it.
+- In battle (when there's no battle tool), check the party's health on every screen \
+and be quick: the fight goes on while you think. Put a whole command in one press with \
+battle true (cursor moves and confirms together), look once, then say in a few words only \
+what the screen showed (damage, health that changed, the message), never what it should \
+have done. One action the player names is one command: do it and finish. Only when they \
+hand you the whole fight ("win this", "fight for me") take turns until it ends, without \
+asking: heal anyone under about a third of their health when you can, otherwise attack. To \
+run, hold the game's run buttons with hold's together; some fights can't be run from.
 - When you learn something about this game that will help next time (a control, how \
 its menus or battles work, where a place or person is), remember it, in a few words.
 - Prefer the controller: a confirms, b goes back, the d-pad moves menu cursors. The main \
@@ -252,3 +240,43 @@ CONFIRM = {
 }
 
 GAME_CONTEXT = "The game is {game}."
+
+# Chrono Trigger on Steam, in a battle: the executor does the presses (battle.py).
+BATTLE_CT = """\
+This is a Chrono Trigger battle. It is paused while you think. Play it only with these \
+tools; buttons are off:
+- battle: one command for one character: actor (who acts; empty for whoever is up), \
+command (attack, tech or item), name (the tech or item as the game spells it) and target \
+(an ally's name; left, right, top or bottom for an enemy by where it stands; an enemy's \
+name; or empty for the game's own pick). It presses, checks each press, watches it land and \
+tells you what changed. A command the player names is one battle call, then finish with \
+what the result saw, only that (no damage it didn't report).
+- fight: win plays the whole fight to the end; run tries to run away.
+Go by the state below, read from the screen: names, HP and MP are exact. "Heal X": a \
+healing tech of whoever is up (Marle: Cure, Aura; Frog: Slurp, Heal for everyone; Robo: \
+Cure Beam), else Mid-Potion, Hi-Potion or Potion. "Revive X": Athenian Water (or Crono's \
+Raise). Items: Potion, Mid-Potion, Hi-Potion, Ether, Mid-Ether, Hi-Ether, Elixir, Panacea, \
+Athenian Water, Lapis (heals everyone), Shelter, Barrier Sphere, Shield Sphere. Techs: \
+Crono: Cyclone, Wind Slash, Lightning, Cleave, Lightning II, Raise, Frenzy. Marle: Aura, \
+Allure, Ice, Cure, Haste, Ice II. Frog: Slurp, Slurp Slash, Water, Heal, Aerial Strike, \
+Water II, Cure II. Robo: Rocket Punch, Cure Beam, Laser Spin, Robo Tackle, Heal Beam. \
+If a call stops with a problem, try the plain fix once (the named one isn't ready: \
+whoever is; no Hi-Potion: a Mid-Potion), else tell the player in a sentence. Don't ask \
+before a command the player named."""
+
+# One turn of "win this fight": the next command, from the state in words.
+BATTLE_DECIDE = """\
+You are playing a Chrono Trigger battle for a player who can't see the screen. They \
+asked: "{request}". Now: {state} Why you're asked: {why}. {actor} is choosing a command.
+Pick one command for {actor}. JSON: {{"command": "attack"|"tech"|"item", "name": "the tech \
+or item, Steam spelling", "target": "an ally's name, or left/right for an enemy, or empty"}}.
+Revive someone knocked out (Athenian Water, or Crono's Raise with 10 MP), heal anyone \
+under a third of their HP (Marle: Cure 2 MP or Aura 1 MP; Frog: Slurp 1 MP or Heal 2 MP \
+for all; Robo: Cure Beam; items Mid-Potion, Hi-Potion, Potion), otherwise attack. Only \
+techs {actor} has: {techs}."""
+
+# Who the target glove points at, when the executor can't tell.
+WHO_GLOVE = """\
+This is a Chrono Trigger battle. A big white pointing glove (a cursor) points at one of the \
+player's party: {names}. Which one is it pointing at? JSON: {{"name": "..."}}, or \
+{{"name": null}} if you can't tell."""
