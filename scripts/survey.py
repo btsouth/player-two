@@ -468,8 +468,14 @@ def main() -> None:
                     s.save(out)
                     phase = "scan" if args.exits else "done"
                     if phase == "scan":
-                        s.exits.clear()
-                        s.doors.clear()
+                        # Scan again only the ground reachable from here: other parts
+                        # of the map (surveyed from other saves) keep their doors.
+                        here = s.bfs(cell_of(game.pos()))
+                        for e in list(s.exits):
+                            s.exits[e] -= set(here)
+                            if not s.exits[e]:
+                                del s.exits[e]
+                        s.doors = {c: v for c, v in s.doors.items() if c not in here}
                         s.test_doors = args.entries
                         s.shots = out.parent / f"survey-{slug(args.map)}"
                         s.shots.mkdir(exist_ok=True)

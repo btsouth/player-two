@@ -266,3 +266,85 @@ state = "world-1000-home"
 request = "go to the Snail Stop"
 location = "0x35"
 limit_s = 180
+
+# The same in other eras, from their own saves.
+
+[[task]]
+id = "g600-cathedral"
+category = "world trip"
+state = "world-600"
+request = "take me to the cathedral"
+location = "0x81"
+limit_s = 180
+
+[[task]]
+id = "g600-canyon"
+category = "world trip"
+state = "world-600"
+request = "go to Truce Canyon"
+location = "0x70"
+limit_s = 180
+
+[[task]]
+id = "g600-inn"
+category = "world trip"
+state = "world-600"
+request = "let's rest at the inn"
+location = "0x74"
+limit_s = 180
+
+[[task]]
+id = "g600-cafe"
+category = "world trip"
+state = "world-600-epoch"
+request = "take me to the cafe in Choras"
+location = "0xbc"
+limit_s = 180
+
+[[task]]
+id = "g600-grave"
+category = "world trip"
+state = "world-600-epoch"
+request = "go to the Hero's Grave"
+location = "0x41"
+limit_s = 180
+
+[[task]]
+id = "g2300-trann"
+category = "world trip"
+state = "world-2300-bangor"
+request = "take me to Trann Dome"
+location = "0xd2"
+limit_s = 180
+
+[[task]]
+id = "g2300-bangor"
+category = "world trip"
+state = "world-2300-bangor"
+request = "go back into Bangor Dome"
+location = "0xd0"
+limit_s = 180
+
+[[task]]
+id = "g65m-maze"
+category = "world trip"
+state = "world-65m"
+request = "take me to the Forest Maze"
+location = "0x11a"
+limit_s = 180
+
+[[task]]
+id = "g12k-commons"
+category = "world trip"
+state = "world-12000-late"
+request = "go to the Commons"
+location = "0x1a8"
+limit_s = 180
+
+[[task]]
+id = "g12k-hut"
+category = "world trip"
+state = "world-12000-late"
+request = "go to the hut on the west side of the Last Village"
+location = "0x1a9"
+limit_s = 180
