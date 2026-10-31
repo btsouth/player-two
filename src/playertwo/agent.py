@@ -289,7 +289,8 @@ CT_TOOLS = [
                        "through the menu ('Marle uses Cure on Crono', 'a Potion on Frog'), "
                        "or change a battle setting (Battle Mode: Wait is best; Battle Speed: "
                        "1 fastest to 8 slowest, 8 gives the player the most time). It opens "
-                       "the menu, does it, checks it and closes the menu.",
+                       "the menu, does it, checks it and closes the menu: call it straight away, "
+                       "without pressing anything first.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["tech", "item", "setting"]},
             "user": {"type": "string", "description": "For a tech: who casts it."},

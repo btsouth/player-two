@@ -267,10 +267,13 @@ def read(image, full: bool = True) -> State:
         # Not a battle list (a text box with a choice, a field menu): no known names.
         st.kind, st.entries, st.usable_rows, st.entry, st.entry_rc = "none", [], [], "", None
         st.usable = None
-    if st.kind == "command" and not st.actor and st.actor_col is not None \
-            and st.actor_col < len(st.party):
-        st.actor = st.party[st.actor_col].name  # a critical-HP actor is drawn grey
-    if st.gloves:
+    if st.kind == "command" and st.actor_col is not None and st.actor_col < len(st.party):
+        # The column the hand is in says whose command it is. The yellow name can't be
+        # trusted alone: a critical-HP actor is drawn grey, and pausing dims every name.
+        st.actor = st.party[st.actor_col].name
+    if st.gloves and not (st.kind == "list" and st.entry):
+        # Gloves over the field while the hand is still in a list: a preview of who a
+        # combo or group tech would hit, not the target picker.
         st.kind = "target"
     if st.kind == "command":
         br = find_template(img, tp["bracket"], CANVAS, thresh=0.6, roi=(0, 0, 2560, 1260),

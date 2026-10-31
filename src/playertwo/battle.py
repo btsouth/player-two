@@ -21,14 +21,19 @@ What isn't settled live is in TUNING, so it can be flipped without code changes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import difflib
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import ctsteam
 from .ctsteam import COMMANDS, SPOILS, State
+
+TRACE = os.environ.get("PLAYER_TWO_BATTLE_TRACE", "")
 
 
 @dataclass
@@ -174,7 +179,24 @@ class Executor:
 
     # -- seeing and pressing ---------------------------------------------------------------
 
+    def _trace(self, st: State) -> None:
+        """PLAYER_TWO_BATTLE_TRACE=<dir>: every look, as a small picture and a line."""
+        d = Path(TRACE)
+        d.mkdir(parents=True, exist_ok=True)
+        n = len(list(d.glob("*.jpg")))
+        name = f"{time.strftime('%H%M%S')}-{n:04d}"
+        with contextlib.suppress(Exception):
+            self.frame.convert("RGB").resize((960, 540)).save(d / f"{name}.jpg", quality=80)
+        line = (f"{name} kind={st.kind} paused={st.paused} actor={st.actor} "
+                f"cmd={getattr(st, 'command', None)} entry={getattr(st, 'entry', None)} "
+                f"presses={self.presses[-6:]}\n")
+        with open(d / "trace.txt", "a", encoding="utf-8") as f:
+            f.write(line)
+
     def log(self, text: str) -> None:
+        if TRACE:
+            with open(Path(TRACE) / "trace.txt", "a", encoding="utf-8") as f:
+                f.write(f"LOG {text}\n")
         self.notes.append(text)
         if self._log:
             self._log(text)
@@ -182,6 +204,8 @@ class Executor:
     async def look(self, full: bool = True) -> State:
         self.frame = await self._grab()
         st = await asyncio.to_thread(self._read, self.frame, full)
+        if TRACE:
+            self._trace(st)
         if st.kind == "command" and st.actor and st.bracket:
             self.ally_at[st.actor] = st.bracket
         return st
@@ -270,9 +294,25 @@ class Executor:
 
     # -- one command -----------------------------------------------------------------------
 
+    # Stops that mean the fight moved under the hand (a hit closed the list, the windows
+    # changed), not that the command can't be done: worth one more go.
+    RETRY = ("the list closed", "the command windows changed", "the command windows went away",
+             "the target hand went away", "didn't open")
+
     async def act(self, intent: Intent, watch: bool = True, pause_after: bool = True,
                   st: State | None = None) -> Outcome:
-        """Do one command. Never raises: a stop comes back as Outcome(ok=False)."""
+        """Do one command. Never raises: a stop comes back as Outcome(ok=False). A command
+        knocked off course by the fight itself is tried once more."""
+        out = await self._act(intent, watch, pause_after, st)
+        if out.ok or self.cancelled() or not any(r in (out.stopped or "") for r in self.RETRY):
+            return out
+        self.log(f"again after: {out.stopped}")
+        again = await self._act(intent, watch, pause_after, None)
+        again.presses = out.presses + again.presses
+        return again
+
+    async def _act(self, intent: Intent, watch: bool, pause_after: bool,
+                   st: State | None) -> Outcome:
         start = len(self.presses)
         before: State | None = None
         self._unpause_first = False
@@ -410,6 +450,14 @@ class Executor:
         if hit is not None and first:
             here = next((i for i, r in enumerate(order) if r == first), None)
             if here is not None and hit < here:
+                way = "up"
+        own = ctsteam.TECHS.get(actor, ()) if key.startswith("tech:") else ()
+        if hit is None and any(same_name(t, name) for t in own) and st.entry:
+            # The list opens where the last pick was (cursor memory): the character's own
+            # techs come first, then the combos, so a combo or a later tech means up.
+            mine = [i for i, t in enumerate(own) if same_name(t, name)]
+            at = [i for i, t in enumerate(own) if same_name(t, st.entry)]
+            if not at or (mine and mine[0] < at[0]):
                 way = "up"
         turned = 0
         for _ in range(48):
@@ -588,10 +636,16 @@ class Executor:
         hp = _hp(st) or (_hp(before) if before else {})
         target = next((m.name for m in (before.party if before else [])
                        if _norm(m.name) in _norm(intent.target).split()), None)
-        while time.monotonic() - t0 < self.t.playout_max_s:
-            if st.top and st.top not in msgs and st.kind != "target":
-                msgs.append(st.top)
+        stale = before.top if before else ""  # a message from before the command
+        named = intent.name.strip()
+        seen_name = not named  # a tech or item shows its name in the bar as it goes off
+        while time.monotonic() - t0 < self.t.playout_max_s + (0 if seen_name else 2.5):
+            top = st.top if st.top and st.top != stale else ""
+            if top and top not in msgs and st.kind != "target":
+                msgs.append(top)
                 last_change = time.monotonic()
+            if top and named and same_name(top.split(":")[0], named):
+                seen_name = True
             now = _hp(st)
             if now and now != hp:
                 if target and before and now.get(target) != _hp(before).get(target):
@@ -601,8 +655,8 @@ class Executor:
             if victory(st):
                 break
             el = time.monotonic() - t0
-            if el >= self.t.playout_min_s and time.monotonic() - last_change \
-                    >= self.t.playout_quiet_s and not st.top:
+            if el >= self.t.playout_min_s and seen_name and time.monotonic() - last_change \
+                    >= self.t.playout_quiet_s and not top:
                 break
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()
@@ -670,7 +724,8 @@ class Executor:
                 if victory(st):
                     st, said = await self.spoils(st)
                     return Outcome(True, f"won after {len(turns)} commands. "
-                                   + " ".join(said), st, presses=self.presses[start:])
+                                   + " ".join(x.rstrip(".") + "." for x in said), st,
+                                   presses=self.presses[start:])
                 if not st.in_battle:
                     gone = gone or time.monotonic()
                     if time.monotonic() - gone > 1.5:

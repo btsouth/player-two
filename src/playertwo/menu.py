@@ -176,6 +176,13 @@ class FieldMenu:
 
     async def open(self) -> None:
         tips, lines = await self.look()
+        # Already somewhere inside the menu (a sub-screen): back out to its main list.
+        for _ in range(4):
+            if not tips or self.on(lines, tips[0], MAIN):
+                break
+            await self.tap("b")
+            await asyncio.sleep(0.2)
+            tips, lines = await self.look()
         if not (tips and self.on(lines, tips[0], MAIN)):
             await self.tap("y")
             tips, lines = await self.until(lambda t, ls: bool(t) and bool(
