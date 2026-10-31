@@ -25,6 +25,7 @@ import contextlib
 import dataclasses
 import json
 import math
+import os
 import re
 import time
 from collections import deque
@@ -52,6 +53,7 @@ ERA_WORDS = {
 }
 FLY = 0.35  # seconds of a hold that tells flying (48 px or more) from walking (24 to 32)
 FLY_PX = 40
+PLAIN = 10.5  # a view this flat (blurred grey's spread) can't be placed: open sea
 
 
 def era_of(map_name: str) -> str | None:
@@ -303,39 +305,83 @@ class Pilot:
         folder = getattr(self.atlas, "folder", None)
         self.hangar = Hangar(folder)
         self.sprites = Sprites(folder)
-        self._vel = (0.0, 0.0)  # map pixels a second, from the last fixes
         self._fix = 0.0  # when the last spot was seen
+        self._axis = 120.0  # flying speed on each axis held, map pixels a second
+        self._dir: tuple[int, int] = (0, 0)  # the way held now
+        self._dir_t = 0.0  # since when
+        self._dr: tuple[float, float] | None = None  # where by reckoning (a spot's x, y)
+        self._dr_t = 0.0
 
     # eyes
+    def go(self, angle: float | None) -> None:
+        """Steer, keeping count of where that takes it (to fly on by reckoning over
+        ground too plain to match, like the open sea): about a constant speed on each
+        axis held, and on to the next tile when let go."""
+        now = time.monotonic()
+        self._integrate(now)
+        if angle is None:
+            if self._dir != (0, 0) and self._dr is not None:
+                x, y = self._dr
+                sx, sy = self._dir
+                x = math.ceil(x / CELL) * CELL if sx > 0 else math.floor(x / CELL) * CELL \
+                    if sx < 0 else x
+                y = math.ceil(y / CELL) * CELL if sy > 0 else math.floor(y / CELL) * CELL \
+                    if sy < 0 else y
+                self._dr = (x, y)
+            new = (0, 0)
+        else:
+            r = math.radians(angle)
+            new = (round(math.sin(r)), round(-math.cos(r)))
+        if new != self._dir:
+            self._dir, self._dir_t = new, now
+        self.steer(angle)
+
+    def _integrate(self, now: float) -> None:
+        if self._dr is not None and self._dir != (0, 0):
+            dt = now - self._dr_t
+            self._dr = (self._dr[0] + self._dir[0] * self._axis * dt,
+                        self._dr[1] + self._dir[1] * self._axis * dt)
+        self._dr_t = now
+
+    def estimate(self) -> Spot | None:
+        """Where it should be by reckoning since the last fix (a few seconds at most)."""
+        if self.spot is None or self._dr is None or time.monotonic() - self._fix > 8:
+            return None
+        self._integrate(time.monotonic())
+        return dataclasses.replace(self.spot, x=self._dr[0], y=self._dr[1], score=0.0)
+
     async def where(self, near: bool = True) -> Spot | None:
         img = await self.shoot()
         t = time.monotonic()
         guess = None
         if near and self.spot is not None:
-            # Where it should be by now, at the speed it was going (a slow frame in
-            # flight is 50 px or more).
-            vx, vy = self._vel if t - self._fix < 1.0 else (0.0, 0.0)
-            dt = min(1.0, t - self._fix)
-            guess = dataclasses.replace(self.spot, x=self.spot.x + vx * dt,
-                                        y=self.spot.y + vy * dt)
+            guess = self.estimate() or self.spot
         s = await asyncio.to_thread(self._locate, img, guess)
         if s is not None and s.margin < 0.05:
             s = None
+        if s is None and os.environ.get("PLAYER_TWO_EPOCH_DEBUG"):  # frames it lost
+            with contextlib.suppress(OSError):
+                d = Path(os.environ["PLAYER_TWO_EPOCH_DEBUG"]).expanduser()
+                d.mkdir(parents=True, exist_ok=True)
+                img.save(d / f"miss-{t:.2f}-{guess.x if guess else 0:.0f}-"
+                         f"{guess.y if guess else 0:.0f}.png")
         if s is not None:
-            if self.spot is not None and s.map == self.spot.map and 0.02 < t - self._fix < 1:
-                dt = t - self._fix
-                vx, vy = (s.x - self.spot.x) / dt, (s.y - self.spot.y) / dt
-                if math.hypot(vx, vy) < 400:
-                    self._vel = (0.5 * self._vel[0] + 0.5 * vx, 0.5 * self._vel[1] + 0.5 * vy)
-            else:
-                self._vel = (0.0, 0.0)
+            # The speed on an axis held since the last fix.
+            if self.spot is not None and s.map == self.spot.map and self._dir != (0, 0) \
+                    and self._dir_t < self._fix and 0.05 < t - self._fix < 1:
+                v = max(abs(s.x - self.spot.x), abs(s.y - self.spot.y)) / (t - self._fix)
+                if 60 < v < 300:
+                    self._axis = 0.7 * self._axis + 0.3 * v
             self.spot, self._fix = s, t
+            self._dr, self._dr_t = (s.x, s.y), t
         return s
 
     def _locate(self, img, near: Spot | None) -> Spot | None:
         """Atlas.locate, but around the last spot it takes a weaker match that still
         stands out: over the sea, with clouds and the Epoch over the middle, the match
-        drops under locate's bar and every miss would cost a search of every map."""
+        drops under locate's bar and every miss would cost a search of every map. A view
+        too plain to place (open sea) is no match at all near a known spot: reckoning
+        does better there than a match anywhere on a sea of noise."""
         import cv2
 
         if near is not None:
@@ -344,6 +390,9 @@ class Pilot:
                 v = self.atlas._view(rgb)
                 nw, nh = self.atlas.native
                 t = v[16:nh - 24, 16:nw - 16]
+                g = cv2.GaussianBlur(cv2.cvtColor(t, cv2.COLOR_BGR2GRAY), (0, 0), 2)
+                if float(g.std()) < PLAIN:
+                    return None
                 m = self.atlas.map(near.map)
                 x0 = max(0, int(near.x - nw / 2 + 16 - 64))
                 y0 = max(0, int(near.y - nh / 2 + 16 - 64))
@@ -363,23 +412,23 @@ class Pilot:
         return s.x, s.y - RISE
 
     async def settle(self, secs: float = 0.3) -> Spot | None:
-        self.steer(None)
+        self.go(None)
         await asyncio.sleep(secs)
         return await self.where()
 
     async def tap(self, angle: float, secs: float) -> None:
-        self.steer(angle)
+        self.go(angle)
         await asyncio.sleep(secs)
-        self.steer(None)
+        self.go(None)
 
     async def moved(self, angle: float, secs: float = FLY) -> tuple[float, Spot | None]:
         """How far one hold goes (flying goes about twice as far as walking)."""
         a = await self.where()
         if a is None:
             return 0.0, None
-        self.steer(angle)
+        self.go(angle)
         await asyncio.sleep(secs)
-        self.steer(None)
+        self.go(None)
         await asyncio.sleep(0.35)
         b = await self.where()
         if b is None or b.map != a.map:
@@ -488,10 +537,10 @@ class Pilot:
 
     async def fly_to(self, goal: tuple[float, float], limit: float = 45.0) -> bool:
         """Fly to a tile (map pixels): hold the way, let go a little before it (it
-        stops on the next tile), then step onto it."""
+        stops on the next tile), then step onto it. Over ground too plain to place
+        (open sea) it flies on by reckoning, and looks again once there's land."""
         t0 = time.monotonic()
-        last: tuple[float, tuple[float, float]] | None = None
-        speed, misses, fixes, said = 120.0, 0, 0, t0
+        misses, fixes, said, blind = 0, 0, t0, 0.0
         try:
             while time.monotonic() - t0 < limit:
                 if not await self.keep_going():
@@ -499,53 +548,56 @@ class Pilot:
                 s = await self.where()
                 now = time.monotonic()
                 if s is None:
-                    misses += 1
-                    if misses > 12:  # the view lost for long: stop and look again
-                        self.steer(None)
-                        await asyncio.sleep(0.4)
-                        s = await self.where(near=False)
-                        if s is None:
-                            return False
-                        misses = 0
+                    est = self.estimate()
+                    if est is not None and self._dir != (0, 0) and now - self._fix < 8:
+                        s = est  # holding a way over the sea: on by reckoning
+                        blind = blind or now
                     else:
-                        await asyncio.sleep(0.03)
-                        continue
-                misses = 0
+                        misses += 1
+                        if misses > 8:  # lost while still: stop and look everywhere
+                            self.go(None)
+                            await asyncio.sleep(0.4)
+                            s = await self.where(near=False)
+                            if s is None:
+                                self.log("epoch: lost the view while flying")
+                                return False
+                            misses = 0
+                        else:
+                            await asyncio.sleep(0.05)
+                            continue
+                else:
+                    misses, blind = 0, 0.0
                 p = self.here(s)
                 if now - said > 2:
                     said = now
-                    self.log(f"epoch: flying at {p[0]:.0f},{p[1]:.0f} ({s.score:.2f}) to "
+                    self.log(f"epoch: flying at {p[0]:.0f},{p[1]:.0f} "
+                             f"({'by reckoning' if blind else f'{s.score:.2f}'}) to "
                              f"{goal[0]:.0f},{goal[1]:.0f}")
-                if last is not None and now - last[0] > 0.02:
-                    v = math.dist(p, last[1]) / (now - last[0])
-                    if v > 40:
-                        speed = 0.7 * speed + 0.3 * v
-                last = (now, p)
                 dx, dy = goal[0] - p[0], goal[1] - p[1]
-                if abs(dx) <= 2 and abs(dy) <= 2:
-                    s = await self.settle(0.3)
-                    if s is not None:
-                        p = self.here(s)
-                        if abs(goal[0] - p[0]) <= 2 and abs(goal[1] - p[1]) <= 2:
-                            return True
-                    last = None
-                    continue
-                lead = CELL + speed * 0.12  # it runs on to the next tile, and we see late
+                lead = CELL + self._axis * 0.12  # it runs on to the next tile; we see late
                 sx = (dx > lead) - (dx < -lead)
                 sy = (dy > lead) - (dy < -lead)
                 if sx or sy:
-                    self.steer(math.degrees(math.atan2(sx, -sy)) % 360)
+                    self.go(math.degrees(math.atan2(sx, -sy)) % 360)
                     await asyncio.sleep(0.02)
                     continue
                 # Close on both: let it stop on a tile, then a step at a time.
                 s = await self.settle(0.35)
-                last = None
                 if s is None:
-                    continue
+                    s = self.estimate()
+                    if s is None:
+                        continue
                 p = self.here(s)
                 dx, dy = goal[0] - p[0], goal[1] - p[1]
                 if abs(dx) <= 2 and abs(dy) <= 2:
-                    return True
+                    if s.score > 0:  # seen there, not only reckoned
+                        return True
+                    await asyncio.sleep(0.3)
+                    s = await self.where()
+                    if s is not None and math.dist(self.here(s), goal) <= 2:
+                        return True
+                    fixes += 1
+                    continue
                 fixes += 1
                 if fixes > 12:
                     self.log(f"epoch: couldn't settle on {goal}, at {p}")
@@ -558,7 +610,7 @@ class Pilot:
                                one if far <= CELL + 2 else 2 * one)
                 await asyncio.sleep(0.25)
         finally:
-            self.steer(None)
+            self.go(None)
         return False
 
     async def land(self, m: WorldMap, door: set[tuple[int, int]], name: str,
@@ -643,6 +695,12 @@ class Pilot:
                 return f"the time gauge stayed on {shown}, not {era}"
         self.press("a")
         await asyncio.sleep(6.0)
+        if era == "End of Time":  # no world map there: arrived once off the map
+            for _ in range(20):
+                if await self.where(near=False) is None:
+                    await asyncio.sleep(2.0)
+                    return ""
+                await asyncio.sleep(0.5)
         # It comes out at the same spot on that era's map: look there first.
         before = s
         for _ in range(30):
@@ -726,6 +784,9 @@ class Pilot:
         here = self.atlas.map(s.map)
         if era_of(here.name) == era:
             return f"already in {era} (the {here.name} map)"
+        if era == "1999 A.D.":
+            return ("1999 A.D. in the Epoch goes straight to the fight with Lavos (the end "
+                    "of the game): not going there by the gauge; ask the player first")
         if not await self._flying_now(here, None):
             why = await self.board(here, (s.x, s.y - 64))
             if why:
@@ -733,6 +794,9 @@ class Pilot:
         why = await self.set_era(era, check)
         if why:
             return why
+        if era == "End of Time":
+            park(self.notes, self.game, None)  # it's docked there now
+            return f"arrived: at the End of Time ({time.monotonic() - t0:.0f} s)"
         s = await self.where() or await self.where(near=False)
         m = self.atlas.map(s.map) if s is not None else None
         if m is None:
