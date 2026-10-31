@@ -128,7 +128,11 @@ class Box:
     def start_p2(self) -> None:
         self.ob("run", "--", "sh", "-c", "pkill -f '[b]in/player-two run'; true")
         self.log.unlink(missing_ok=True)
-        cmd = (f"exec {shlex.quote(P2)} run --controls keyboard --window RetroArch "
+        # Several boxes share the machine: each session's maths libraries get two
+        # threads, not one per core each (dozens of sessions' worth of threads).
+        cmd = ("exec env OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 "
+               "OPENCV_FOR_THREADS_NUM=2 "
+               f"{shlex.quote(P2)} run --controls keyboard --window RetroArch "
                f"--companion off --game {shlex.quote(self.game['name'])} --log $HOME/p2.jsonl")
         self.ob("run", "-d", "--pass", "MODEL_API_KEY", "--pass", "PLAYER_TWO_KEYMAP",
                 "--pass", "PLAYER_TWO_KEYS", "--", "sh", "-c", cmd)
