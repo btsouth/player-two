@@ -303,15 +303,33 @@ class Pilot:
         folder = getattr(self.atlas, "folder", None)
         self.hangar = Hangar(folder)
         self.sprites = Sprites(folder)
+        self._vel = (0.0, 0.0)  # map pixels a second, from the last fixes
+        self._fix = 0.0  # when the last spot was seen
 
     # eyes
     async def where(self, near: bool = True) -> Spot | None:
         img = await self.shoot()
-        s = await asyncio.to_thread(self._locate, img, self.spot if near else None)
+        t = time.monotonic()
+        guess = None
+        if near and self.spot is not None:
+            # Where it should be by now, at the speed it was going (a slow frame in
+            # flight is 50 px or more).
+            vx, vy = self._vel if t - self._fix < 1.0 else (0.0, 0.0)
+            dt = min(1.0, t - self._fix)
+            guess = dataclasses.replace(self.spot, x=self.spot.x + vx * dt,
+                                        y=self.spot.y + vy * dt)
+        s = await asyncio.to_thread(self._locate, img, guess)
         if s is not None and s.margin < 0.05:
             s = None
         if s is not None:
-            self.spot = s
+            if self.spot is not None and s.map == self.spot.map and 0.02 < t - self._fix < 1:
+                dt = t - self._fix
+                vx, vy = (s.x - self.spot.x) / dt, (s.y - self.spot.y) / dt
+                if math.hypot(vx, vy) < 400:
+                    self._vel = (0.5 * self._vel[0] + 0.5 * vx, 0.5 * self._vel[1] + 0.5 * vy)
+            else:
+                self._vel = (0.0, 0.0)
+            self.spot, self._fix = s, t
         return s
 
     def _locate(self, img, near: Spot | None) -> Spot | None:
@@ -327,9 +345,9 @@ class Pilot:
                 nw, nh = self.atlas.native
                 t = v[16:nh - 24, 16:nw - 16]
                 m = self.atlas.map(near.map)
-                x0 = max(0, int(near.x - nw / 2 + 16 - 48))
-                y0 = max(0, int(near.y - nh / 2 + 16 - 48))
-                win = m.image[y0:y0 + t.shape[0] + 96, x0:x0 + t.shape[1] + 96]
+                x0 = max(0, int(near.x - nw / 2 + 16 - 64))
+                y0 = max(0, int(near.y - nh / 2 + 16 - 64))
+                win = m.image[y0:y0 + t.shape[0] + 128, x0:x0 + t.shape[1] + 128]
                 if win.shape[0] >= t.shape[0] and win.shape[1] >= t.shape[1]:
                     r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
                     _, score, _, (x, y) = cv2.minMaxLoc(r)
@@ -473,7 +491,7 @@ class Pilot:
         stops on the next tile), then step onto it."""
         t0 = time.monotonic()
         last: tuple[float, tuple[float, float]] | None = None
-        speed, misses, fixes = 120.0, 0, 0
+        speed, misses, fixes, said = 120.0, 0, 0, t0
         try:
             while time.monotonic() - t0 < limit:
                 if not await self.keep_going():
@@ -494,6 +512,10 @@ class Pilot:
                         continue
                 misses = 0
                 p = self.here(s)
+                if now - said > 2:
+                    said = now
+                    self.log(f"epoch: flying at {p[0]:.0f},{p[1]:.0f} ({s.score:.2f}) to "
+                             f"{goal[0]:.0f},{goal[1]:.0f}")
                 if last is not None and now - last[0] > 0.02:
                     v = math.dist(p, last[1]) / (now - last[0])
                     if v > 40:
@@ -539,9 +561,10 @@ class Pilot:
             self.steer(None)
         return False
 
-    async def land(self, m: WorldMap, door: set[tuple[int, int]], name: str) -> str:
+    async def land(self, m: WorldMap, door: set[tuple[int, int]], name: str,
+                   limit: int = 12) -> str:
         """Land as near the door as the ground lets: "" when down, else why not."""
-        spots = landing_spots(m, door, self.hangar)
+        spots = landing_spots(m, door, self.hangar, limit=limit)
         if not spots:
             return f"no surveyed ground near {name} to land on"
         for c in spots:
@@ -620,11 +643,17 @@ class Pilot:
                 return f"the time gauge stayed on {shown}, not {era}"
         self.press("a")
         await asyncio.sleep(6.0)
+        # It comes out at the same spot on that era's map: look there first.
+        before = s
         for _ in range(30):
-            s = await self.where(near=False)
-            if s is not None and era_of(s.map) == era:
-                self.spot = s
-                return ""
+            img = await self.shoot()
+            for m in self.atlas.maps:
+                if era_of(m.name) == era:
+                    near = Spot(m.name, before.x, before.y, 0.0, 0.0, before.tap)
+                    hit = await asyncio.to_thread(self._locate, img, near)
+                    if hit is not None and era_of(hit.map) == era and hit.margin >= 0.05:
+                        self.spot = hit
+                        return ""
             await asyncio.sleep(0.5)
         s = await self.where(near=False)
         return (f"after the time gauge, the screen is {'the ' + s.map + ' map' if s else 'not a map'}"
@@ -653,7 +682,7 @@ class Pilot:
             why = await self.set_era(era)
             if why:
                 return why
-            s = await self.where(near=False)
+            s = await self.where()
             if s is None or s.map != m.name:
                 return (f"arrived in {era}, on the {s.map if s else '?'} map, not "
                         f"{m.name}: {name} isn't on this one now")
@@ -669,42 +698,22 @@ class Pilot:
                     f"({time.monotonic() - t0:.0f} s)")
         return f"landed the Epoch near {name}, then: {out}"
 
-    async def land_here(self, m: WorldMap, limit: int = 8) -> str:
-        """Land on surveyed ground near where it's flying: "" when down."""
-        s = await self.where(near=False)
+    async def land_here(self, m: WorldMap) -> str:
+        """Land by the nearest places: on ground known to take it first."""
+        s = await self.where() or await self.where(near=False)
         if s is None:
             return "not on a world map"
         p = self.here(s)
-        good, bad = self.hangar.land(m.name), self.hangar.noland(m.name)
-        icons = {(r + dr, c + dc) for (r, c) in m.doors for dr in (-1, 0, 1)
-                 for dc in (-1, 0, 1)}
-        here = (round(p[1] / CELL), round(p[0] / CELL))
-        cells = [c for c in (m.walk | good) if c not in bad and c not in icons
-                 and max(abs(c[0] - here[0]), abs(c[1] - here[1])) <= 24]
-        cells.sort(key=lambda c: (math.dist(c, here) - (3 if c in good else 0)))
-        tried = 0
-        for c in cells:
-            if tried >= limit:
+        groups = sorted(((cells, label) for cells, label in m.door_groups()),
+                        key=lambda g: math.dist(_middle(g[0]), p))
+        for cells, label in groups[:3]:
+            if math.dist(_middle(cells), p) > 600:
                 break
-            goal = (c[1] * CELL, c[0] * CELL)
-            tried += 1
-            if not await self.fly_to(goal, 25.0):
-                continue
-            self.press("a")
-            await asyncio.sleep(3.0)
-            s = await self.where()
-            if s is None:
-                await asyncio.sleep(1.0)
-                s = await self.where(near=False)
-                if s is None:
-                    return "the screen stopped being the map after landing"
-            up = await self.flying(_angle(goal, (goal[0], goal[1] + 8)))
-            if up is None:
-                return "lost the map after landing"
-            self.hangar.learn(m.name, c, not up)
-            if not up:
-                park(self.notes, self.game, m.name, *goal)
+            why = await self.land(m, cells, label or "a place", limit=4)
+            if not why:
                 return ""
+            if why.startswith(("lost", "the screen")):
+                return why
         return "found nowhere to land near here"
 
     async def go_to_era(self, era: str, check=None) -> str:
@@ -724,7 +733,7 @@ class Pilot:
         why = await self.set_era(era, check)
         if why:
             return why
-        s = await self.where(near=False)
+        s = await self.where() or await self.where(near=False)
         m = self.atlas.map(s.map) if s is not None else None
         if m is None:
             return f"went to {era}, but the screen isn't a map now"

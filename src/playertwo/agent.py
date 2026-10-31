@@ -959,8 +959,12 @@ class Agent:
                                  atlas_aliases(self.game or ""), near,
                                  quests.aliases() if quests else None)
         if isinstance(found, str) and epoch_ok(atlas):
-            if era is not None:  # an era, and no place in it fits: the era itself
-                return await self._go_to_era(place)
+            if era is not None:  # no place in that era fits: go to it, then ask
+                went = await self._go_to_era(place)
+                names = "; ".join(f"{m.name}: {', '.join(m.places)}" for m in maps if m.places)
+                return (f"no single place in {era} for {place!r} ({found}); "
+                        f"{went.removeprefix('arrived: ')}. Places there: {names}. Call "
+                        "go_to_place with the exact name, or ask the player which")
             if len(maps) < len(atlas.maps):
                 # Not on this map: another era's, by the Epoch (this one first).
                 maps = maps + [m for m in atlas.maps if m not in maps]
