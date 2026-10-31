@@ -49,3 +49,32 @@ def test_pick_words():
     assert pick_words("take me outside", choices) == "outside (the world map)"
     assert pick_words("the house, upstairs", choices) == "the house, upstairs"
     assert pick_words("go find mom", choices) is None
+
+
+def test_world_exits_named_by_their_end(tmp_path):
+    # A forest with ways out at both ends: each named by the nearest place but itself.
+    walk = [[r, c] for r in range(1, 13) for c in range(2, 14)]
+    make(tmp_path, 19, (256, 224), walk,
+         [{"from": [1, 5], "dir": [0, -1], "to": 496, "at": [280, 240]},
+          {"from": [12, 5], "dir": [0, 1], "to": 496, "at": [280, 280]}], 3)
+    (tmp_path / "names.json").write_text(json.dumps({"names": {"19": "Guardia Forest"},
+                                                     "worlds": [496]}))
+
+    class World:
+        def __init__(self):
+            self.world = 496
+            self.places = {"Guardia Forest": (280, 268), "Guardia Castle": (300, 205),
+                           "Truce Market": (250, 340)}
+
+        def nearest(self, x, y):
+            import math
+            n = min(self.places, key=lambda k: math.dist(self.places[k], (x, y)))
+            return n, 0.0, ""
+
+    class Atlas:
+        def __init__(self):
+            self.maps = [World()]
+
+    rooms = Rooms(tmp_path, Atlas())
+    assert set(rooms.reachable(19)) == {"outside, toward Guardia Castle",
+                                        "outside, toward Truce Market"}

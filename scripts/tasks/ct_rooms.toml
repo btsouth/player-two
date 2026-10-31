@@ -24,6 +24,8 @@ field_y = "0x1880"  # bytes an object): the middle of its feet; high byte, 16-pi
 player = "0x197"    # which object the player walks, times two
 cam_x = "0x1D09"    # the view's top left inside a place, 1/32 pixels
 cam_y = "0x1D0D"
+scroll_x = "0x1D87"  # the background's scroll (low byte): its low 3 bits are the
+scroll_y = "0x1D89"  # pixels the view is past cam_x, cam_y (rounded down to 8)
 battle = "0x117"    # 1 in a fight
 
 [rooms]
@@ -36,6 +38,7 @@ worlds = ["0x1F0", "0x1F1", "0x1F2", "0x1F3", "0x1F4", "0x1F5", "0x1F6", "0x1F7"
 "0x1" = "Crono's house, downstairs"
 "0x2" = "Crono's house, upstairs"
 "0x3" = "Lucca's house, upstairs"
+"0x14" = "a clearing off the forest's east side"
 "0x1B2" = "Norstein Bekkler's tent"
 "0x1B7" = "the fair, up the north stairs"
 "0x1F0" = "outside (the world map)"
@@ -117,6 +120,18 @@ request = "get me out of the forest"
 to = "0x1F0"
 location = "0x1F0"
 limit_s = 240
+
+[[task]]
+id = "r-forest-castle"
+category = "rooms"
+state = "rooms/deep-13"
+request = "go through the forest to the castle"
+to = "0x1F0"
+exit = "outside, toward Guardia Castle"
+near = [280, 240]      # the forest's north end on the world map (the south is [280, 280])
+location = "0x1F0"
+walk_s = 180           # its monsters: a fight or two on the way
+limit_s = 300
 
 [[task]]
 id = "r-fair-back"

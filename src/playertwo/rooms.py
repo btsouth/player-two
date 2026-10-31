@@ -42,6 +42,9 @@ NATIVE = (256, 224)  # the game's screen, in its own pixels
 # view follows it; at a place's edges the view stops and the character walks on.
 FOLLOW = (128, 138)
 EDGE = 8  # a margin off the screen's edges, for matching
+# Things named in a place that are ways out: the survey's own ways out stand for them (a
+# spot is only where its name was put on the picture, and can't be walked through).
+WAY_OUT = re.compile(r"\b(exit|entrance|door|doorway|stairs?|staircase|way out|gate)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -123,7 +126,8 @@ class Rooms:
             room = Room(d["loc"], d.get("name") or self.names.get(d["loc"], ""), img,
                         {tuple(t) for t in d["walk"]}, {tuple(t) for t in d.get("wall", [])},
                         exits, [tuple(c) for c in d.get("cams", [])],
-                        spots={k: tuple(v) for k, v in d.get("spots", {}).items()})
+                        spots={k: tuple(v) for k, v in d.get("spots", {}).items()
+                               if not WAY_OUT.search(k)})
             room.small = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2),
                                     interpolation=cv2.INTER_AREA)
             self.rooms[room.loc] = room
@@ -131,9 +135,9 @@ class Rooms:
                 self.names[room.loc] = room.name
         for room in self.rooms.values():
             for e in room.exits:
-                e.label = self._label(e, atlas)
+                e.label = self._label(room, e, atlas)
         self.sprites: list[tuple[np.ndarray, np.ndarray, tuple[float, float]]] = []
-        self._colours: set[int] | None = None
+        self._colours: np.ndarray | None = None
         self.dark = False  # the last screen looked at was black (a fade between places)
         if (folder / "player.json").exists():
             anchors = json.loads((folder / "player.json").read_text()).get("anchor", {})
@@ -145,11 +149,21 @@ class Rooms:
                     mask = np.ascontiguousarray((rgba[:, :, 3] > 0).astype(np.uint8) * 255)
                     self.sprites.append((bgr, mask, (ax, ay)))
 
-    def _label(self, e: Exit, atlas) -> str:
+    def _label(self, room: Room, e: Exit, atlas) -> str:
+        """A way out onto a world map is named by the place it comes out by; when a
+        place has ways out at more than one spot (a forest's two ends), by the nearest
+        place other than itself, so each end has a name of its own."""
         if e.to in self.worlds and atlas is not None:
             m = next((m for m in atlas.maps if getattr(m, "world", None) == e.to), None)
             if m is not None and m.places and any(e.at):
-                return f"outside, by {m.nearest(*e.at)[0]}"
+                spots = {o.at for o in room.exits if o.to == e.to and any(o.at)}
+                if all(math.dist(o, e.at) < 16 for o in spots):
+                    return f"outside, by {m.nearest(*e.at)[0]}"
+                own = room.name.lower()
+                others = [(math.dist(p, e.at), n) for n, p in m.places.items()
+                          if not own or (n.lower() not in own and own not in n.lower())]
+                if others:
+                    return f"outside, toward {min(others)[1]}"
         return self.name(e.to)
 
     @staticmethod
@@ -250,7 +264,7 @@ class Rooms:
         drawn[200:] = False  # the field ends there; a notice may be drawn below
         drawn = cv2.morphologyEx(drawn.astype(np.uint8), cv2.MORPH_CLOSE,
                                  np.ones((5, 3), np.uint8))
-        n, _, stats, _ = cv2.connectedComponentsWithStats(drawn)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(drawn)
         if near is not None and near.loc == room.loc:
             prior = (near.x - cam[0], near.y - cam[1])
         else:
@@ -258,14 +272,20 @@ class Rooms:
         best = None
         for i in range(1, n):
             bx, by, bw, bh, area = stats[i]
-            if not (6 <= bw <= 40 and 12 <= bh <= 56 and area >= 40):
+            if not (6 <= bw <= 48 and 12 <= bh <= 56 and area >= 40):
                 continue
-            feet = (bx + bw / 2, by + bh + 1)
-            look = self._looks(v[by:by + bh, bx:bx + bw], drawn[by:by + bh, bx:bx + bw])
-            cost = math.dist(feet, prior) + 80 * (1 - look)
+            mask = labels[by:by + bh, bx:bx + bw] == i
+            mine = self._mine(v[by:by + bh, bx:bx + bw], mask)
+            k = int(mine.sum())
+            if k < 25:
+                continue
+            ys, xs = np.nonzero(mine)
+            # The feet: under the player's own colours (someone may stand beside it).
+            feet = (bx + float(xs.mean()), by + int(ys.max()) + 1)
+            cost = math.dist(feet, prior) + 80 * (1 - min(1.0, k / 150))
             if best is None or cost < best[0]:
-                best = (cost, feet, look)
-        if best is not None and best[2] > 0.3:
+                best = (cost, feet)
+        if best is not None:
             return Here(room.loc, cam, cam[0] + best[1][0], cam[1] + best[1][1], score, True)
         if near is not None and near.loc == room.loc and not all(follows):
             # Not seen (behind something drawn in front): where it was, where the view
@@ -274,21 +294,19 @@ class Rooms:
                         fy if follows[1] else near.y, score, False)
         return Here(room.loc, cam, fx, fy, score, all(follows))
 
-    def _looks(self, patch: np.ndarray, mask: np.ndarray) -> float:
-        """How much a drawn patch has the player's colours, 0 to 1 (1 with no cut-outs)."""
+    def _mine(self, patch: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Which drawn pixels of a patch have the player's colours (the colours of the
+        cut-outs in player-*.png); all of them with no cut-outs."""
         if not self.sprites:
-            return 1.0
+            return mask
         if self._colours is None:
             px = np.concatenate([b[m > 0] for b, m, _ in self.sprites]).astype(np.int32)
-            q = (px // 32)
+            q = px // 32
             keys, counts = np.unique(q[:, 0] * 64 + q[:, 1] * 8 + q[:, 2], return_counts=True)
-            self._colours = set(keys[counts >= max(3, len(px) // 400)].tolist())
-        px = patch[mask > 0].astype(np.int32)
-        if len(px) == 0:
-            return 0.0
-        q = px // 32
-        k = q[:, 0] * 64 + q[:, 1] * 8 + q[:, 2]
-        return float(np.isin(k, list(self._colours)).mean())
+            self._colours = np.array(sorted(keys[counts >= max(3, len(px) // 400)]))
+        q = patch.astype(np.int32) // 32
+        k = q[..., 0] * 64 + q[..., 1] * 8 + q[..., 2]
+        return mask & np.isin(k, self._colours)
 
     # -- the way ---------------------------------------------------------------------
     def hops(self, start: int, goal: int | set[int]) -> list[int] | None:
@@ -392,10 +410,12 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     here = start
     misses = 0
     gone_by: Exit | None = None  # the way out last walked into
+    heading: Exit | None = None  # the way out being walked to
     target = label or rooms.name(goal)
     stalls = 0
     gone_t = said = stuck_t = 0.0
     faded = False  # the screen went black since the place was last seen
+    dud: set = set()  # ways out walked into that didn't go through
     trail: deque = deque()  # (when, place, x, y) over the last seconds
 
     async def look() -> Here | None:
@@ -418,6 +438,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                         e = min(exits, key=lambda e: math.dist(centre(e.frm), (here.x, here.y)))
                         if math.dist(centre(e.frm), (here.x, here.y)) <= 2.5 * TILE:
                             way = e
+                    if way is None and faded and heading is not None:
+                        way = heading  # a fade: through the way it was going, seen late
                 if misses >= 3 and not faded:
                     # Not a fade: something over the place (a text box, a scene).
                     steer(None)
@@ -490,13 +512,17 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             ways = [e for e in room.exits if e.to == hops[1]]
             if len(hops) == 2 and label and any(e.label == label for e in ways):
                 ways = [e for e in ways if e.label == label]
+            if all((e.frm, e.dir) in dud for e in ways):
+                dud.clear()
+            ways = [e for e in ways if (e.frm, e.dir) not in dud]
             if gone_by is not None:
                 # Stepping through a way out: keep walking it until the screen changes.
                 steer(angle_to(*gone_by.dir))
                 await asyncio.sleep(0.05)
                 if time.monotonic() - gone_t > 2.5:
-                    room.learned.add((gone_by.frm[0] + gone_by.dir[1],
-                                      gone_by.frm[1] + gone_by.dir[0]))
+                    # Didn't go through from here: another tile of it, or another way.
+                    dud.add((gone_by.frm, gone_by.dir))
+                    log(f"rooms: the way out at {gone_by.frm} didn't open")
                     gone_by = None
                 continue
             tile = here.tile
@@ -505,6 +531,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
             goals = {e.frm for e in ways}
             path = rooms.route(room, tile, goals)
+            if path is not None:
+                heading = next((e for e in ways if e.frm == path[-1]), None)
             if path is None and room.learned:
                 # Shut off by what was found shut on the way (people move): try again.
                 room.learned.clear()

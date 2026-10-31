@@ -32,6 +32,7 @@ import argparse
 import collections
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -118,6 +119,18 @@ class Field(Game):
         n = self.ram["cam_y"] - self.ram["cam_x"]
         return (b[0] | b[1] << 8) // 32, (b[n] | b[n + 1] << 8) // 32
 
+    def scroll(self) -> tuple[int, int]:
+        """Where the view really is, to the pixel: cam() is the view rounded down to 8
+        pixels (or held at a map's edge), and the picture glides up to 7 pixels past it.
+        The background's own scroll registers say by how much: their low 3 bits (each
+        place adds its own multiple of 8 to them, so only those bits agree)."""
+        c = self.cam()
+        if "scroll_x" not in self.ram:
+            return c
+        sx = self.read(self.ram["scroll_x"], 1)[0]
+        sy = self.read(self.ram["scroll_y"], 1)[0]
+        return c[0] // 8 * 8 + sx % 8, c[1] // 8 * 8 + sy % 8
+
 
 def tile_of(p: tuple[float, float]) -> tuple[int, int]:
     return int(p[1]) // TILE, int(p[0]) // TILE
@@ -131,12 +144,24 @@ def middle(t: tuple[int, int]) -> tuple[float, float]:
 
 class Shots:
     """The game's raw frames (RetroArch's SCREENSHOT: the emulator's own pixels), each
-    at a known view position, pasted into one picture of the whole place."""
+    at a known view position, pasted into one picture of the whole place. Kept on disk
+    too (`keep`), so the picture can be made again without walking the place."""
 
-    def __init__(self, box: Box):
+    def __init__(self, box: Box | None, keep: Path | None = None):
         self.box = box
-        self.dir = box.home / ".config/retroarch/screenshots"
+        self.keep = keep
+        self.dir = box.home / ".config/retroarch/screenshots" if box else None
         self.frames: dict[tuple[int, int], list[np.ndarray]] = collections.defaultdict(list)
+
+    @classmethod
+    def load(cls, keep: Path) -> Shots:
+        from PIL import Image
+
+        shots = cls(None, keep)
+        for f in sorted(keep.glob("*.png")):
+            cx, cy, _ = (int(v) for v in f.stem.split("_"))
+            shots.frames[(cx, cy)].append(np.asarray(Image.open(f).convert("RGB")))
+        return shots
 
     def grab(self) -> np.ndarray | None:
         from PIL import Image
@@ -148,46 +173,116 @@ class Shots:
             new = set(self.dir.glob("*.png")) - before
             if new:
                 f = new.pop()
-                time.sleep(0.05)
-                try:
-                    with Image.open(f) as im:
-                        a = np.asarray(im.convert("RGB")).copy()
-                finally:
-                    f.unlink(missing_ok=True)
+                a = None
+                for _ in range(10):  # until it's all written
+                    time.sleep(0.05)
+                    try:
+                        with Image.open(f) as im:
+                            a = np.asarray(im.convert("RGB")).copy()
+                        break
+                    except (OSError, ValueError):
+                        continue
+                f.unlink(missing_ok=True)
                 return a
             time.sleep(0.02)
         return None
 
-    def take(self, cam: tuple[int, int]) -> None:
-        if len(self.frames[cam]) >= 2:
+    def take(self, cam) -> None:
+        """A frame of the view, if it's standing still: `cam` reads where the view is,
+        before and after (the view glides on a little after the character stops)."""
+        from PIL import Image
+
+        c = cam()
+        if len(self.frames.get(c, [])) >= 2:
+            return
+        time.sleep(secs(0.3))
+        if cam() != c:
             return
         a = self.grab()
-        if a is None or a.shape[0] < TOP + 224:
+        for _ in range(4):  # the picture still gliding: two frames the same, or none
+            b = self.grab()
+            if a is None or b is None or a.shape != b.shape:
+                return
+            if float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()) < 1.5:
+                break
+            a = b
+        else:
             return
-        self.frames[cam].append(a[TOP:TOP + HIGH])
+        if a.shape[0] < TOP + 224 or cam() != c:
+            return
+        f = b[TOP:TOP + HIGH]
+        self.frames[c].append(f)
+        if self.keep is not None:
+            self.keep.mkdir(parents=True, exist_ok=True)
+            Image.fromarray(f).save(self.keep / f"{c[0]}_{c[1]}_{len(self.frames[c])}.png")
 
-    def picture(self) -> tuple[np.ndarray, list[tuple[int, int]]] | None:
-        """The place's picture: each pixel the middle value over the frames that saw it
-        (water and torches move; a frame caught mid-fade is outvoted)."""
-        if not self.frames:
-            return None
-        cams = list(self.frames)
-        w = max(c[0] for c in cams) + 256
-        h = max(c[1] for c in cams) + 224  # as high as a screen: the bottom stays black
+    def _median(self, frames: list[tuple[tuple[int, int], np.ndarray]], size) -> np.ndarray:
+        w, h = size
         layers = 5
         stack = np.full((layers, h, w, 3), np.nan, np.float32)
         count = np.zeros((h, w), np.int16)
-        for (cx, cy), frames in sorted(self.frames.items()):
-            for f in frames:
-                region = count[cy:cy + HIGH, cx:cx + 256]
-                for k in range(layers):
-                    m = region == k
-                    if m.any():
-                        stack[k, cy:cy + HIGH, cx:cx + 256][m] = f[m]
-                count[cy:cy + HIGH, cx:cx + 256] += 1
-        pic = np.nanmedian(stack, axis=0)
-        pic = np.nan_to_num(pic, nan=0.0)
-        return pic.astype(np.uint8), cams
+        for (cx, cy), f in frames:
+            region = count[cy:cy + HIGH, cx:cx + 256]
+            for k in range(layers):
+                m = region == k
+                if m.any():
+                    stack[k, cy:cy + HIGH, cx:cx + 256][m] = f[m]
+            count[cy:cy + HIGH, cx:cx + 256] += 1
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # pixels no frame saw
+            pic = np.nanmedian(stack, axis=0)
+        return np.nan_to_num(pic, nan=0.0)
+
+    @staticmethod
+    def _register(frames, pic: np.ndarray, reach: int = 8):
+        """Each frame where it best fits the picture of all of them, within `reach`
+        pixels of where the game's memory put it (the view can still be gliding when
+        the memory has settled)."""
+        import cv2
+
+        out = []
+        h, w = pic.shape[:2]
+        p32 = pic.astype(np.float32)
+        for (cx, cy), f in frames:
+            t = f[16:HIGH - 16, 16:240].astype(np.float32)
+            x0, y0 = max(0, cx + 16 - reach), max(0, cy + 16 - reach)
+            win = p32[y0:min(h, cy + HIGH - 16 + reach), x0:min(w, cx + 240 + reach)]
+            if win.shape[0] < t.shape[0] or win.shape[1] < t.shape[1]:
+                out.append(((cx, cy), f))
+                continue
+            r = cv2.matchTemplate(win, t, cv2.TM_SQDIFF)
+            _, _, (dx, dy), _ = cv2.minMaxLoc(r)
+            out.append(((x0 + dx - 16, y0 + dy - 16), f))
+        # Where the frames agree with the memory most often is where the memory is
+        # right: the picture keeps the game's own coordinates.
+        shifts = collections.Counter((a[0] - c[0], a[1] - c[1])
+                                     for (c, _), (a, _) in zip(frames, out, strict=True))
+        sx, sy = shifts.most_common(1)[0][0]
+        return [((max(0, x - sx), max(0, y - sy)), f) for (x, y), f in out]
+
+    def picture(self) -> tuple[np.ndarray, list[tuple[int, int]]] | None:
+        """The place's picture: each pixel the middle value over the frames that saw it
+        (water and torches move; a frame caught mid-fade is outvoted), made twice: the
+        second time without frames that disagree with the first (put in the wrong place)."""
+        if not self.frames:
+            return None
+        frames = [(c, f) for c, fs in sorted(self.frames.items()) for f in fs]
+        if not frames:
+            return None
+        size = (max(c[0] for c, _ in frames) + 256 + 8, max(c[1] for c, _ in frames) + 224 + 8)
+        pic = self._median(frames, size)
+        if os.environ.get("ROOMS_REGISTER") == "1":
+            frames = self._register(frames, pic)
+            pic = self._median(frames, size)
+        errs = [float(np.abs(f.astype(np.float32) - pic[cy:cy + HIGH, cx:cx + 256]).mean())
+                for (cx, cy), f in frames]
+        limit = max(10.0, 2.5 * float(np.median(errs)))
+        good = [fr for fr, e in zip(frames, errs, strict=True) if e <= limit]
+        if len(good) < len(frames):
+            pic = self._median(good, size)
+        return pic.astype(np.uint8), sorted({c for c, _ in good})
 
 
 class RoomSurvey:
@@ -203,7 +298,7 @@ class RoomSurvey:
         # (where a way out leads, where it comes out) -> a state there
         self.arrivals: dict[tuple[int, tuple], Path] = {}
         self.worlds: set[int] = set()  # world maps' location numbers
-        self.shots = Shots(g.box)
+        self.shots = Shots(g.box, Path(str(state.parent)) / "frames" / f"{loc:03x}")
         self.last_cam: tuple[int, int] | None = None
         self.out: Path | None = None  # saved to as it goes
         self.ram_battle = g.ram.get("battle", 0)
@@ -211,10 +306,10 @@ class RoomSurvey:
     # -- moving --------------------------------------------------------------------
     def snap(self) -> None:
         """A frame of the view here, once it has stopped moving."""
-        c = self.g.cam()
+        c = self.g.scroll()
         time.sleep(secs(0.12))
-        if self.g.cam() == c and self.g.location() == self.loc and c != self.last_cam:
-            self.shots.take(c)
+        if self.g.scroll() == c and self.g.location() == self.loc and c != self.last_cam:
+            self.shots.take(self.g.scroll)
             self.last_cam = c
 
     def ray(self, d: tuple[int, int], tiles: int = 12) -> str:
@@ -547,26 +642,52 @@ class RoomSurvey:
             self.log(f"couldn't reach {goal}, stopped at {tile_of(self.g.pos())}")
         return rays, jumps
 
-    def views(self) -> None:
-        """Make sure the picture covers the whole place: from any tile whose view hasn't
-        been seen (the view follows the character), stand there and take one."""
-        cams = set(self.shots.frames)
-        todo = sorted(self.walk)
+    def views(self, minutes: float = 6.0) -> None:
+        """Make sure the picture covers the whole place: go to the nearest tile whose
+        view hasn't been pictured yet (the view follows the character), picture it, and
+        so on, from wherever it gets to."""
+        end = time.monotonic() + minutes * 60
+        skip: set[tuple[int, int]] = set()
         self.reload()
-        for t in todo:
-            if self.g.location() != self.loc:
-                self.reload()
+
+        def covered(t) -> bool:
             x, y = middle(t)
-            near = any(abs(cx + 128 - x) < 72 and abs(cy + 138 - y) < 64 for cx, cy in cams)
-            if near:
-                continue
+            return any(abs(cx + 128 - x) < 72 and abs(cy + 138 - y) < 64
+                       for cx, cy in [c for c, f in self.shots.frames.items() if f])
+
+        while time.monotonic() < end:
             try:
-                if self.walk_to(t):
-                    self.snap()
-                    cams = set(self.shots.frames)
+                if self.g.location() != self.loc:
+                    self.reload()
+                here = tile_of(self.g.pos())
+                came = self.bfs(here)
+                todo = [t for t in came if t not in skip and not covered(t)]
+                if not todo:
+                    break
+                dist = {}
+                for t in todo:
+                    n, u = 0, t
+                    while came[u] is not None:
+                        u, n = came[u], n + 1
+                    dist[t] = n
+                goal = min(todo, key=dist.get)
+                path, u = [], goal
+                while u is not None:
+                    path.append(u)
+                    u = came[u]
+                self.go(path[::-1])
+                self.last_cam = None
+                self.snap()
+                if not covered(goal):
+                    skip.add(goal)
             except Battle:
                 self.g.hold([])
                 self.g.flee(self.log)
+            except Between:
+                self.g.hold([])
+                time.sleep(secs(1.5))
+                self.reload()
+        self.log(f"pictured {sum(1 for f in self.shots.frames.values() if f)} views")
 
     def save(self, out: Path, name: str = "", keep: bool = False) -> None:
         """keep: as it goes (the picture only at the end: it takes a while)."""
@@ -818,6 +939,10 @@ def main() -> None:
                     help="cut the player's sprite from the --state's place")
     ap.add_argument("--deep", action="store_true",
                     help="only save a state far from the ways out of the --state's place")
+    ap.add_argument("--repaint", action="store_true",
+                    help="only make the pictures again from the frames kept (no box)")
+    ap.add_argument("--new-frames", action="store_true",
+                    help="with --resume: picture the place again from scratch")
     ap.add_argument("--resume", action="store_true",
                     help="carry on from what an earlier survey of a place found")
     ap.add_argument("--keep-up", action="store_true")
@@ -828,6 +953,26 @@ def main() -> None:
     folder = ATLASES / slug(gspec["name"]) / "rooms"
     folder.mkdir(parents=True, exist_ok=True)
     known = {str(int(k, 16)): v for k, v in rspec.get("names", {}).items()}
+    if args.repaint:
+        frames = Path(gspec["states"]).expanduser() / "rooms" / "frames"
+        for d in sorted(frames.iterdir()):
+            out = folder / f"loc-{d.name}.json"
+            if not out.exists():
+                continue
+            shots = Shots.load(d)
+            made = shots.picture()
+            if made is None:
+                continue
+            from PIL import Image
+
+            pic, cams = made
+            Image.fromarray(pic).save(out.with_suffix(".png"))
+            data = json.loads(out.read_text())
+            data.update(size=[pic.shape[1], pic.shape[0]], cams=cams)
+            out.write_text(json.dumps(data))
+            n = sum(len(v) for v in shots.frames.values())
+            print(f"{d.name}: {len(cams)} views kept of {len(shots.frames)} ({n} frames)")
+        return
     if args.names:
         world = ATLASES / slug(gspec["name"]) / rspec["world_survey"]
         known = {**json.loads(world.read_text()).get("names", {}), **known}
@@ -911,6 +1056,11 @@ def main() -> None:
         s.worlds = world
         out = folder / f"loc-{loc:03x}.json"
         s.out = out
+        if args.resume and s.shots.keep.is_dir() and not args.new_frames:
+            kept = Shots.load(s.shots.keep)
+            s.shots.frames.update(kept.frames)
+        elif s.shots.keep.is_dir():
+            shutil.rmtree(s.shots.keep)  # a new survey: new frames
         if args.resume and out.exists():
             old = json.loads(out.read_text())
             s.walk = {tuple(t) for t in old["walk"]}
