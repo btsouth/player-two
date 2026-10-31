@@ -287,8 +287,9 @@ CT_TOOLS = [
         "name": "field_menu",
         "description": "Chrono Trigger, outside battle: use a tech or an item on someone "
                        "through the menu ('Marle uses Cure on Crono', 'a Potion on Frog'), "
-                       "or change a battle setting (Battle Mode, Battle Speed). It opens the "
-                       "menu, does it, checks it and closes the menu.",
+                       "or change a battle setting (Battle Mode: Wait is best; Battle Speed: "
+                       "1 fastest to 8 slowest, 8 gives the player the most time). It opens "
+                       "the menu, does it, checks it and closes the menu.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["tech", "item", "setting"]},
             "user": {"type": "string", "description": "For a tech: who casts it."},
@@ -298,7 +299,7 @@ CT_TOOLS = [
                        "the value wanted (Wait, Active, slowest, fastest)."},
         }, "required": ["action", "name"]}}},
 ]
-FIELD_MENU = False  # the field_menu tool is offered (menu.py)
+FIELD_MENU = True  # the field_menu tool is offered (menu.py)
 BATTLE_TOOLS = [*CT_TOOLS[:2], *(t for t in TOOLS if t["function"]["name"] in (
     "say", "ask_player", "remember", "wait", "finish"))]
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
@@ -978,6 +979,8 @@ class Agent:
         st = await asyncio.to_thread(ctsteam.read, frame.image)
         if not (st.in_battle or st.paused):
             return None
+        if len(st.party) >= 2:
+            self._party = [m.name for m in st.party]  # the field menu's blocks, in order
         now = time.monotonic()
         if now - self._battle_seen > 30 and self._executor is not None:
             self._executor.ally_at.clear()  # a new fight: everyone stands elsewhere
@@ -1109,7 +1112,8 @@ class Agent:
         async def grab():
             return (await self.grab()).image
 
-        fm = FieldMenu(press, grab, cancelled=lambda: self.cancelled)
+        fm = FieldMenu(press, grab, cancelled=lambda: self.cancelled,
+                       party=getattr(self, "_party", None))
         action = str(a.get("action") or "")
         if action == "setting":
             out = await fm.setting(str(a.get("name") or ""), str(a.get("target") or ""))

@@ -121,7 +121,9 @@ ANY_TARGET = {"", "default", "any", "anyone", "all", "everyone", "enemy", "the e
 
 
 def victory(st: State) -> bool:
-    return bool(st.top) and bool(SPOILS.search(st.top))
+    """A won fight's messages (EXP, TP, a level, items) with no menu up: a list's
+    description bar never counts."""
+    return st.kind == "none" and bool(st.top) and bool(SPOILS.search(st.top))
 
 
 def merge_rows(order: list[tuple[str, ...]], view: list[list[str]]) -> list[tuple[str, ...]]:
