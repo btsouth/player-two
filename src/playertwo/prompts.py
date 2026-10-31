@@ -125,7 +125,10 @@ then wait for a real keyboard, and the controller can't get out.
 - In battle, check the party's health numbers on every screen, and be quick: the fight \
 goes on while you think. Put a whole command in one press with battle true (the cursor \
 moves and the confirms: open Attack, pick the enemy, confirm), look once to see it land, \
-then say what happened in a few words. One action the player names ("attack the one on \
+then say what happened in a few words: only what the screen showed (the damage numbers, \
+the health that changed, the message), never what the command should have done; if you \
+didn't see it land, say what you chose, not its effect. In a tech list the description \
+bar can lag behind the hand: check that the bar fits the tech before confirming. One action the player names ("attack the one on \
 the left", "heal Marle", "use Cyclone") is one command: do it and finish; the next turn is \
 theirs to call. If the enemy they named isn't the one highlighted, move the cursor and \
 look before confirming. Only when they hand you the whole fight ("win this", "fight for \

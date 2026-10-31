@@ -135,7 +135,7 @@ class Box:
         # Several boxes share the machine: each session's maths libraries get two
         # threads, not one per core each (dozens of sessions' worth of threads).
         cmd = ("exec env OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 "
-               "OPENCV_FOR_THREADS_NUM=2 "
+               "OPENCV_FOR_THREADS_NUM=2 PLAYER_TWO_FRAMES=$HOME/frames "
                f"{shlex.quote(P2)} run --controls keyboard --window RetroArch "
                f"--companion off --game {shlex.quote(self.game['name'])} --log $HOME/p2.jsonl")
         self.ob("run", "-d", "--pass", "MODEL_API_KEY", "--pass", "PLAYER_TWO_KEYMAP",
@@ -228,6 +228,10 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
                  steps=len((run or {}).get("steps", [])))
         shot = box.shot(shots / f"{tid}.end.png")
         shutil.copy2(box.log, shots / f"{tid}.events.jsonl")
+        frames = box.home / "frames"  # each frame the agent looked at
+        if frames.is_dir():
+            shutil.copytree(frames, shots / f"{tid}.frames", dirs_exist_ok=True)
+            shutil.rmtree(frames, ignore_errors=True)
         if watch is not None:  # what happened, by the game's memory (battle_judge.py)
             watch.stop()
             watch.save(shots / f"{tid}.ram.jsonl")

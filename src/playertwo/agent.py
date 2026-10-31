@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import openai
@@ -58,7 +60,8 @@ TOOLS = [
                          "description": "Buttons held down at the same time (then input is "
                          "ignored). Holding one and then the other isn't the same."},
             "direction": {"type": "string", "enum": list(DIRECTIONS)},
-            "ms": {"type": "integer", "description": "How long, in milliseconds (max 5000)."},
+            "ms": {"type": "integer", "description": "How long, in milliseconds (max 5000; "
+                   "8000 for buttons held together)."},
         }, "required": ["ms"]}}},
     {"type": "function", "function": {
         "name": "walk_to",
@@ -586,6 +589,15 @@ class Agent:
                          f"{stopped}. Look before pressing anything else")
             if ignored:
                 done += f" (ignored {', '.join(ignored)}: not buttons)"
+            if battle and pressed and pressed[-1] == "a" and not stopped:
+                # An attack, a tech or an item takes a second or two to play out: looking
+                # at once shows a menu again and the same command goes twice.
+                await asyncio.sleep(1.8)
+                done += (". A battle command plays out over a second or two: look for what "
+                         "it did (health or MP numbers changed, an enemy hit, a message) "
+                         "before doing anything again. A command list showing again is "
+                         "usually the next turn, not a sign it failed; a single action the "
+                         "player asked for is done once confirmed, so finish")
             if buttons == ["a"] and not battle and not str(a.get("say") or "").strip():
                 # The player can't read along: a text box skipped is story lost.
                 done += (". If a new line of dialogue shows now, say it word for word "
@@ -609,6 +621,7 @@ class Agent:
             ms = max(50, min(int(float(a.get("ms") or 500)), 5000))
             together = [b for b in (a.get("together") or []) if b in AGENT_BUTTONS]
             if len(together) >= 2:
+                ms = max(50, min(int(float(a.get("ms") or 500)), 8000))
                 if "a" in together and self.look_before_confirm:
                     return "not held: a held with others confirms what the player can't read"
                 await asyncio.to_thread(self.controls.chord, together, ms)
@@ -1443,6 +1456,12 @@ class Agent:
             # After a say too: the model may be waiting for text still typing out.
             frame = await self._settled(noise)
             turn["look_s"] = round(time.monotonic() - t_look, 2)
+            if os.environ.get("PLAYER_TWO_FRAMES"):  # what it saw, turn by turn (debugging)
+                with contextlib.suppress(OSError, AttributeError):
+                    d = Path(os.environ["PLAYER_TWO_FRAMES"]).expanduser()
+                    d.mkdir(parents=True, exist_ok=True)
+                    frame.image.convert("RGB").save(
+                        d / f"{time.strftime('%H%M%S')}-{_turn:02d}.jpg", quality=80)
             last = _turn == budget - 2
             shown = []
             if self._show_map and self._map_image is not None:
