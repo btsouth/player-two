@@ -76,8 +76,10 @@ class Box:
     def up(self) -> None:
         sh("omabox", "down", "-b", self.name, timeout=60)
         (EMU / f"port-{self.port}.cfg").write_text(f'network_cmd_port = "{self.port}"\n')
+        guides = Path.home() / ".config/player-two/guides"  # the player's walkthroughs
+        seed = ["--seed", f"{guides}:.config/player-two/guides"] if guides.is_dir() else []
         out = sh("omabox", "up", self.name, "--ro-bind", str(self.rom.parent),
-                 "--ro-bind", str(EMU), "--ro-bind", str(ROOT), timeout=180)
+                 "--ro-bind", str(EMU), "--ro-bind", str(ROOT), *seed, timeout=180)
         if f"box '{self.name}' up" not in out:
             raise RuntimeError(f"{self.name} didn't come up: {out[-300:]}")
         self.home = Path(sh("omabox", "path", "--home", "-b", self.name).strip().splitlines()[-1])
@@ -206,6 +208,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("tasks", type=Path)
     p.add_argument("--boxes", type=int, default=4)
+    p.add_argument("--first-box", type=int, default=0,
+                   help="number boxes from here, to run beside another run")
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--only", nargs="*", default=[])
     p.add_argument("--out", type=Path)
@@ -257,7 +261,8 @@ def main() -> None:
             box.down()
             runner.close()
 
-    threads = [threading.Thread(target=worker, args=(n,)) for n in range(args.boxes)]
+    threads = [threading.Thread(target=worker, args=(n,))
+               for n in range(args.first_box, args.first_box + args.boxes)]
     for t in threads:
         t.start()
     for t in threads:

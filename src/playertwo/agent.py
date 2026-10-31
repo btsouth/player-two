@@ -16,7 +16,7 @@ from PIL import Image
 
 from .areamap import AreaMap
 from .controls import BUTTONS, DIRECTIONS, Controls
-from .explore import ANGLES, Trail, find_me, keep_walking
+from .explore import ANGLES, Trail, find_me, keep_walking, words
 from .muse import Muse, image_part
 from .notes import GameNotes
 from .prompts import AGENT, CONFIRM, GAME_CONTEXT, LANGUAGE
@@ -92,6 +92,32 @@ TOOLS = [
             "seconds": {"type": "number", "description": "At most how long, 1 to 8; "
                         "default 3."},
         }, "required": ["direction"]}}},
+    {"type": "function", "function": {
+        "name": "guide",
+        "description": "Look something up in this game's walkthrough, if the player has "
+                       "one: where a place is and how to get there, what to do next, how a "
+                       "puzzle works. Search with names of places, people and things "
+                       "('Guardia Forest castle', 'Zenan Bridge'). It follows the story in "
+                       "order, so check which part fits where you are.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+        }, "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "travel",
+        "description": "Cross a big map (a world map, a large field) toward a place that "
+                       "isn't on screen yet, in games seen from above: it heads that way, "
+                       "slides around coasts, trees and walls in the way, and looks every "
+                       "few seconds for the place. It stops when the place comes into "
+                       "sight (then walk_to it), at a new area, or when that way is shut. "
+                       "One call goes far; better than many keep_walking.",
+        "parameters": {"type": "object", "properties": {
+            "direction": {"type": "string", "enum": list(ANGLES)},
+            "target": {"type": "string", "description": "What the place looks like on "
+                       "the map, to know it when it comes into sight ('a grey stone "
+                       "castle with towers')."},
+            "seconds": {"type": "number", "description": "At most how long, 10 to 90; "
+                        "default 45."},
+        }, "required": ["direction", "target"]}}},
     {"type": "function", "function": {
         "name": "exits",
         "description": "List the ways out of the place on screen (doors, stairs, paths off "
@@ -611,6 +637,23 @@ class Agent:
             steps = walker.travel / walker.size if walker.size else None
             self.trail.add(f"walk_to_map {label}", walked.outcome, steps)
             return walked.text()
+        if name == "guide":
+            from .guide import look_up
+
+            return look_up(self.game or "", str(a.get("query") or ""))
+        if name == "travel":
+            direction = str(a.get("direction") or "")
+            if direction not in ANGLES:
+                return f"direction must be one of {', '.join(ANGLES)}"
+            secs = max(10.0, min(float(a.get("seconds") or 45), 90.0))
+            await self.go.wait()
+            if self.cancelled:
+                return "stopped by the player"
+            try:
+                return await self._travel(direction, str(a.get("target") or ""), secs)
+            except WALK_ERRORS as exc:
+                self.controls.steer(None)
+                return f"walking failed ({exc}); hold the d-pad instead"
         if name == "keep_walking":
             direction = str(a.get("direction") or "")
             if direction not in ANGLES:
@@ -637,6 +680,71 @@ class Agent:
                 self.trail.add(f"keep_walking {direction}", went.outcome, went.steps)
             return went.text(direction.replace("_", " and "))
         return "ok"
+
+    async def _travel(self, direction: str, target: str, secs: float) -> str:
+        """Head `direction` across a scrolling map until `target` is in sight. The view
+        follows the character there, so how far the scenery scrolls says how far it went
+        (no need to pick the character out), and a way that's shut is slid along."""
+        walker = self.walker()
+        walker.memory = None  # the character is where the view keeps it: the middle
+        t0 = time.monotonic()
+        angle = ANGLES[direction]
+        unit = np.array([np.sin(np.radians(angle)), -np.cos(np.radians(angle))])
+        # The two ways off the line, to slide along whatever blocks it.
+        sides = [d for d, v in ANGLES.items() if abs(((v - angle + 180) % 360) - 180) == 90]
+        total, stalls, looks = np.zeros(2), 0, 0
+
+        def far() -> str:
+            return f"went {words(total)} in all ({time.monotonic() - t0:.0f} s)"
+
+        while time.monotonic() - t0 < secs:
+            if self.cancelled:
+                return "stopped by the player"
+            went = await keep_walking(self.walker_image, self.controls.steer, direction,
+                                      3.0, self.walker_keep_going, None, walker.log)
+            total += went.steps
+            if went.outcome in ("new_area", "interrupted", "stopped"):
+                return went.text(direction.replace("_", " and ")) + f"; {far()}"
+            if float(went.steps @ unit) < 1:
+                stalls += 1
+                if stalls > 2 * len(sides) + 1:
+                    return (f"blocked: the way {direction.replace('_', ' ')} is shut here "
+                            f"(slid both ways); {far()}. Try another direction or a path")
+                side = sides[(stalls - 1) % len(sides)]
+                slid = await keep_walking(self.walker_image, self.controls.steer, side,
+                                          1.5 + 0.5 * stalls, self.walker_keep_going, None,
+                                          walker.log)
+                total += slid.steps
+                if slid.outcome in ("new_area", "interrupted", "stopped"):
+                    return slid.text(side.replace("_", " and ")) + f"; {far()}"
+                continue
+            stalls = 0
+            if target:
+                looks += 1
+                seen = await self._sighted(target)
+                if seen:
+                    return (f"in_sight: {target} is on screen now, {seen}; walk_to it. "
+                            f"{far()}")
+        return f"walked: no {target or 'sign of it'} in sight yet; {far()}"
+
+    async def _sighted(self, target: str) -> str:
+        """Where `target` is on the screen now, in a few words, or "" if it isn't there:
+        one quick look, strict about near misses."""
+        from .muse import image_part
+
+        img = await self.walker_image()
+        try:
+            data = await self.muse.json([{"role": "user", "content": [
+                image_part(img, 1024),
+                {"type": "text", "text": (
+                    f'Is this on the screen: "{target}"? Only if it clearly matches that '
+                    "description; something merely like it (a town for a castle, a "
+                    "house for a shop) doesn't count. Answer JSON: {\"there\": true or "
+                    "false, \"where\": \"where on screen, relative to the middle, a "
+                    "few words\"}")}]}], effort="minimal", max_tokens=600)
+        except (ValueError, OSError):
+            return ""
+        return str(data.get("where") or "in view") if data.get("there") is True else ""
 
     async def _still_me(self, walker: Walker) -> bool:
         """Whether the character last walked is still in view near where it was (it may
@@ -791,7 +899,7 @@ class Agent:
             finished = None
             noise = None
             if any(c.function.name in ("press", "hold", "walk_to", "talk_to", "walk_to_map",
-                                       "keep_walking")
+                                       "keep_walking", "travel")
                    for c in calls):
                 noise = await self._noise()
             t_act = time.monotonic()
@@ -854,7 +962,7 @@ class Agent:
                     if result.startswith("new_area"):
                         # Which way it was going when it got here: the way back is behind.
                         self._came_in = (str(args.get("direction") or "")
-                                         if c.function.name == "keep_walking"
+                                         if c.function.name in ("keep_walking", "travel")
                                          else way(getattr(self, "_facing", None)))
                 step.result = result
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})

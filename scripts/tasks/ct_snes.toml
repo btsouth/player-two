@@ -49,7 +49,7 @@ id = "castle"
 category = "world map"
 state = "new-game-bedroom"
 request = "take me to Guardia Castle"
-check = "Crono is at or inside Guardia Castle: stone castle walls, guards or a throne room, not the world map far away"
+check = "Crono reached Guardia Castle: inside it, or on the world map right at the castle's entrance (at this point in the story guards walk him back out), not somewhere else"
 limit_s = 480
 
 [[task]]
@@ -83,3 +83,36 @@ state = "new-game-bedroom"
 request = "what weapon does Crono have equipped?"
 expect = ["wood sword"]
 limit_s = 180
+
+# The same trips with a perfect hint: the ceiling any guide could reach.
+[[task]]
+id = "castle-hint"
+category = "world map, hinted"
+state = "new-game-bedroom"
+request = "take me to Guardia Castle. From Truce it's northwest, through Guardia Forest; it's a big grey stone castle"
+check = "Crono reached Guardia Castle: inside it, or on the world map right at the castle's entrance (at this point in the story guards walk him back out), not somewhere else"
+limit_s = 480
+
+[[task]]
+id = "lucca-hint"
+category = "world map, hinted"
+state = "new-game-bedroom"
+request = "take me to Lucca's house. It's on the peninsula south of Truce, across the long wooden bridge"
+check = "Crono is inside Lucca's house (machines, pipes or a workshop) or right at its door"
+limit_s = 480
+
+[[task]]
+id = "fair-hint"
+category = "world map, hinted"
+state = "new-game-bedroom"
+request = "take me to the Millennial Fair. It's Leene Square, just north of my house; tents and balloons on the map"
+check = "Crono is at the Millennial Fair (Leene Square): tents, stalls and crowds of people around him, not the world map"
+limit_s = 480
+
+[[task]]
+id = "shop-hint"
+category = "towns, hinted"
+state = "new-game-bedroom"
+request = "find the item shop in Truce village and talk to the shopkeeper. It's the market in the village, not the inn"
+check = "a shop menu (items and prices) or a shopkeeper's lines are showing, in a shop rather than an inn"
+limit_s = 480
