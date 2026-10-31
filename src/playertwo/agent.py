@@ -336,6 +336,28 @@ def trim_images(msgs: list[dict], keep: int = KEEP_IMAGES) -> list[dict]:
     return out[::-1]
 
 
+
+def nearest_of_kind(m, name: str, said: str, at: tuple[float, float]) -> str:
+    """Of places on a map that are the same kind ("Truce Mayor's Manor", "Porre Mayor's
+    Manor"), the nearest, unless the player named which: "the mayor's house" means the
+    one in this town."""
+    import math
+
+    from .atlas import words
+
+    def kind(n: str) -> set[str]:
+        w = [x for x in re.findall(r"[a-z0-9]+", n.lower().replace("'s", ""))]
+        return set(w[1:]) if len(w) > 1 else set(w)
+
+    same = [n for n in m.places if n != name and kind(n) == kind(name) and kind(n)]
+    if not same:
+        return name
+    asked = words(said)
+    named = [n for n in [name, *same] if (words(n) - kind(n)) & asked]
+    if named:
+        return name if name in named else named[0]  # they said which town
+    return min([name, *same], key=lambda n: math.dist(m.places[n], at))
+
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
@@ -894,6 +916,8 @@ class Agent:
             return (f"no single place on the map for {place!r} ({found}). Places: {names}. "
                     "Ask the player which, or call go_to_place with an exact name")
         m, name = found
+        if spot is not None and m.name == spot.map:
+            name = nearest_of_kind(m, name, place, (spot.x, spot.y))
         walker = self.walker()
 
         async def shoot():
