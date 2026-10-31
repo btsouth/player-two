@@ -33,6 +33,9 @@ from .walk import Walker, small
 # Never the guide button: it opens the Steam overlay or the system menu, not the game.
 # Seconds of silence in a run before the model's own line about its plan is spoken.
 PROGRESS_GAP_S = 8.0
+# Walking around by trial and error in one request stops after this long: wandering on
+# camera looks lost, and an honest "I don't know the way here yet" is better.
+WANDER_LIMIT_S = 40.0
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
 
 TOOLS = [
@@ -524,6 +527,18 @@ class Agent:
             self.said.append(text)
             self._spoke_at = time.monotonic()
             await self.speak(text)
+
+    def _wandering(self, name: str, args: dict) -> float | None:
+        """Seconds spent so far this request walking by trial and error (walks without a
+        map, held directions), or None when this tool isn't that kind of walking."""
+        free = name in ("walk_to", "keep_walking", "travel", "walk_to_map", "talk_to") or (
+            name == "hold" and (args.get("direction") or set(args.get("together") or [])
+                                & {"up", "down", "left", "right"}
+                                or str(args.get("input") or "") in ("up", "down", "left",
+                                                                     "right"))) or (
+            name == "press" and args.get("buttons") and all(
+                b in ("up", "down", "left", "right") for b in args.get("buttons") or []))
+        return getattr(self, "_wander_s", 0.0) if free else None
 
     def _progress_line(self, content: str, calls, t0: float) -> None:
         """Speak the model's own line about the screen or its plan, written with its tool
@@ -1658,6 +1673,7 @@ class Agent:
         self.cancelled = False
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
+        self._wander_s = 0.0
         frame = frame or await self.grab()
         tried = ""
         trip = TRIP.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
@@ -1800,11 +1816,19 @@ class Agent:
                 elif c.function.name == "finish":
                     finished = (args.get("text") or "").strip()
                     result = "finished"
+                elif (self._wandering(c.function.name, args) or 0.0) >= WANDER_LIMIT_S:
+                    result = (f"not done: you've walked around for {WANDER_LIMIT_S:.0f} s "
+                              "by trial and error without getting there. Stop now: finish, "
+                              "and tell the player plainly that you don't know the way "
+                              "through this place yet and where they are. No more tries.")
                 else:
+                    wander_t0 = time.monotonic()
                     try:
                         result = await self._act(c.function.name, args)
                     except (TypeError, ValueError, KeyError) as exc:
                         result = f"bad arguments ({exc}); fix them and try again"
+                    if self._wandering(c.function.name, args) is not None:
+                        self._wander_s += time.monotonic() - wander_t0
                     acted = True
                     self._said_before_act = len(self.said)
                     result = self._check_walk(c.function.name, result)
