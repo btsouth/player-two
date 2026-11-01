@@ -54,7 +54,7 @@ class Tuning:
     playout_min_s: float = 1.0
     playout_quiet_s: float = 0.7  # party HP and the top bar unchanged this long: done
     playout_max_s: float = 3.5
-    spend_playout_s: float = 3.0  # after a tech's MP is spent, the time to see it land
+    spend_playout_s: float = 5.0  # after a tech's MP is spent, the time to see it land
     run_chunk_ms: int = 2500  # L and R held this long between looks
     run_chunks: int = 3
     spoils_wait_s: float = 1.2  # a won fight's message left this long gets an a
@@ -700,6 +700,10 @@ class Executor:
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()
         seen = changes(before, st, msgs) + spent
+        if spent and not landed and not victory(st):
+            # (live: a heal's MP went, a combo played first, the model healed again)
+            seen += (" What it does hadn't shown yet (it lands after what's playing): don't "
+                     "use it again.")
         if intent.command.lower() == "attack" and seen.startswith("No party HP"):
             # Enemies' HP isn't on screen: "nothing changed" sounded like a miss (live,
             # "Crono attacked but nothing changed").
