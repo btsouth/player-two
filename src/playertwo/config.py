@@ -140,6 +140,9 @@ class Settings:
     # Hands-free: always listening, and acting on what starts with "Player Two", for
     # players who can't easily press a talk key. A headset keeps the game out of it.
     hands_free: bool = False
+    # Listen to the game's own sound (Linux), so narration never talks over its voices
+    # and doesn't read out subtitles they're already saying.
+    hear_game: bool = True
     # The talk key starts and stops listening on two presses (GNOME and other desktops
     # without hold binds) instead of being held.
     talk_toggle: bool = False

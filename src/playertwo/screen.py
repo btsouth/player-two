@@ -29,6 +29,8 @@ class Frame:
     image: Image.Image
     t: float
     label: str = ""
+    # For a settled screen: when it started changing to this (the watcher's clock).
+    changed_at: float | None = None
 
 
 class NoGame(Exception):
@@ -478,6 +480,7 @@ class ChangeWatcher:
         settled = self.still_since is not None and now - self.still_since >= self.settle_s
         timed_out = now - self.pending_since >= self.max_wait_s
         if settled or timed_out:
+            frame.changed_at = self.pending_since
             self.last_change = 1.0 if self.base is None else self._frac(th, self.base)
             self.base = th
             self.pending_since = None
