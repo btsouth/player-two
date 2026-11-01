@@ -1257,7 +1257,9 @@ class Agent:
                             "(Truce Inn in 1000 A.D.), then call shop with action rest "
                             "again: it talks, pays, sleeps and checks HP and MP. Don't talk "
                             "to the innkeeper yourself.")
-                return f"couldn't get to {seller}: {walked}"
+                return (f"not done: couldn't get to {seller} from here ({walked[:160]}). Go "
+                        "into the seller's place with go_to_place first, then call shop "
+                        "again; don't talk to the seller yourself.")
             walked = f"Walked to {seller} and talked. "
         if rest:
             from .shop import Inn, vitals_line
