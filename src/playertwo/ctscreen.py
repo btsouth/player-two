@@ -1,0 +1,358 @@
+"""Chrono Trigger (Steam): what a screen reader would say, read from pixels with no model.
+
+`look` reads one frame into a `Look`: the kind of screen (battle, a menu, a question with
+choices, a text box, or none of those) and the parts worth saying (whose turn, what the
+cursor is on, text to read, who is in danger). `Reader` turns a stream of looks into lines:
+each part is said when it changes, text only once it has stopped typing out, and nothing
+twice. Frames the reader can't make sense of are left to the model narrator.
+
+Glyphs come from ctsteam's library of the game's pixel font; a run of text is only trusted
+when it reads as words (no strings of outline specks), so a textured field or world map
+never turns into made-up text.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from . import ctsteam
+from .glyphread import Run, find_template, runs_in, snap, to_canvas
+
+CANVAS = ctsteam.CANVAS
+DESC_Y = 1220  # field menus' description bars are below this
+# Words that may stand alone as a menu entry or an option.
+OPTIONS = ("Yes", "No", "Empty", "Resume", "New Game", "Load Game", "Extras", "Quit",
+           "Use / Switch", "Sort list", "Consumables", "ON", "OFF", "WAIT", "ACTIVE",
+           "ACTIONS", "Battle Mode", "Battle Speed", "Battle Message Speed",
+           "Battle Cursor Memory", "Help Messages")
+VOCAB = tuple(sorted({*ctsteam.MENU_WORDS, *OPTIONS}))
+END = re.compile(r"[.?!:\"')\]]$")  # text that ends like a finished sentence
+
+
+def plausible(r: Run) -> bool:
+    """Whether a run reads as words or numbers rather than texture or outline specks."""
+    t = r.text.strip()
+    if not t or r.worst > 30:
+        return False
+    body = t.replace(" ", "")
+    if re.search(r"['\-,.:]{2,}|^['\-,.]|[\[\]]", t) and t not in VOCAB:
+        return False
+    alnum = sum(c.isalnum() for c in body)
+    if alnum / len(body) < 0.75:
+        return False
+    if re.fullmatch(r"[\d :/G]+", t):
+        return True
+    words = re.findall(r"[A-Za-z]{3,}", t)
+    return any(re.search(r"[aeiouyAEIOUY]", w) for w in words) or snap(t, VOCAB, 0.8) in VOCAB
+
+
+def clean(text: str) -> str:
+    """Pixel-font look-alikes in running text."""
+    t = " ".join(text.split())
+    t = re.sub(r"(?<=[a-z])9(?=$|\s)", "?", t)  # "game9" is "game?"
+    return re.sub(r"\bTes\b", "Yes", t)
+
+
+@dataclass
+class Look:
+    kind: str = "none"  # battle | menu | choice | text | none
+    parts: dict[str, str] = field(default_factory=dict)  # said in ORDER, each on change
+    texts: set[str] = field(default_factory=set)  # parts that are text: said once
+    typing: set[str] = field(default_factory=set)  # text parts that may still be typing
+    battle: ctsteam.State | None = None
+    lines: list[list[Run]] = field(default_factory=list)
+    focus: str = ""
+    ms: int = 0
+    order: tuple[str, ...] = ()
+
+    @property
+    def readable(self) -> bool:
+        return self.kind != "none"
+
+
+ORDER = ("pause", "title", "turn", "focus", "question", "top", "text", "desc", "danger")
+
+
+def _danger(st: ctsteam.State) -> str:
+    out = []
+    for m in st.party:
+        if m.hp is None or not m.hp_max:
+            continue
+        if m.hp == 0:
+            out.append(f"{m.name} is down")
+        elif m.hp < m.hp_max / 3:
+            out.append(f"{m.name} {m.hp} HP")
+    return ", ".join(out)
+
+
+def battle_look(st: ctsteam.State) -> Look:
+    lk = Look("battle", battle=st)
+    if st.paused:
+        lk.parts["pause"] = "Paused"
+    if st.kind == "command" and st.actor:
+        lk.parts["turn"] = f"{st.actor}'s turn"
+        if st.command:
+            lk.parts["focus"] = st.command
+    elif st.kind == "list" and st.entry:
+        lk.parts["focus"] = st.entry + ("" if st.usable is not False else ", can't use")
+    top = clean(st.top)
+    if top and not st.paused and plausible(Run(top, 0, 0, 0, "", 0)):
+        lk.parts["top"] = top
+        lk.texts.add("top")  # the top bar comes up whole, never typed out
+    dz = _danger(st)
+    if dz:
+        lk.parts["danger"] = dz
+    lk.focus = lk.parts.get("focus", "")
+    # A message ("Combo Attack: Reduces HP to 1") is what just happened, so it comes
+    # first; in a list the top bar describes the entry under the hand, so after it.
+    lk.order = (("pause", "turn", "focus", "top", "danger") if st.kind == "list" else
+                ("pause", "top", "turn", "focus", "danger"))
+    return lk
+
+
+MAIN = ("Equipment", "Inventory", "Techs", "Party", "Settings", "Bookmark", "Save")
+SETTINGS = ("Battle", "Sound", "Graphics", "Controls", "Defaults")
+TITLE = ("Resume", "New Game", "Load Game", "Extras", "Settings", "Quit")
+ORDERS = (MAIN, SETTINGS, TITLE)
+
+
+def _column_entry(lines: list[list[Run]], tip: tuple[int, int]) -> str | None:
+    """A hand's entry in a list whose order is known, counted in rows from the readable
+    entries in its column: the one under the hand often reads badly through its
+    highlight, and the rows aren't evenly spaced."""
+    col = [r for row in lines for r in row if -30 <= r.x0 - tip[0] < 420]
+    ys: list[float] = []
+    for y in sorted([r.y for r in col] + [tip[1]]):
+        if ys and y - ys[-1] < 30:
+            continue
+        ys.append(y)
+    here = min(range(len(ys)), key=lambda j: abs(ys[j] - tip[1]))
+    for order in ORDERS:
+        votes: dict[str, int] = {}
+        for r in col:
+            w = snap(r.text, order, 0.75)
+            if w not in order or abs(r.y - tip[1]) < 30:
+                continue
+            j = min(range(len(ys)), key=lambda j: abs(ys[j] - r.y))
+            k = order.index(w) + here - j
+            if 0 <= k < len(order):
+                votes[order[k]] = votes.get(order[k], 0) + 1
+        if votes and sum(votes.values()) >= 2:
+            best = max(votes, key=votes.get)
+            if votes[best] >= 0.6 * sum(votes.values()):
+                return best
+    return None
+
+
+def _block_name(lines: list[list[Run]], tip: tuple[int, int]) -> str | None:
+    """A hand on a character block points at the portrait; the name is up and right."""
+    near = [(snap(r.text, ctsteam.NAMES, 0.6), r) for row in lines for r in row
+            if -170 < r.y - tip[1] < 40 and 0 <= r.x0 - tip[0] < 420]
+    near = [(n, r) for n, r in near if n in ctsteam.NAMES]
+    if not near:
+        return None
+    return min(near, key=lambda t: abs(t[1].y - tip[1]) + 0.1 * abs(t[1].x0 - tip[0]))[0]
+
+
+BLOCK_DY = 372  # character blocks in the techs and target lists are this far apart
+
+
+def _block_by_order(lines: list[list[Run]], tip: tuple[int, int],
+                    party: list[str]) -> str | None:
+    """The highlighted block's name, counted in blocks from a readable name in the same
+    column, in the party's menu order (the highlight makes the name itself unreadable)."""
+    votes: dict[str, int] = {}
+    for row in lines:
+        for r in row:
+            if not 0 <= r.x0 - tip[0] < 450:
+                continue
+            n = snap(r.text, ctsteam.NAMES, 0.75)
+            if n not in party:
+                continue
+            k = party.index(n) + round((tip[1] - 50 - r.y) / BLOCK_DY)
+            if 0 <= k < len(party) and party[k] != n:
+                votes[party[k]] = votes.get(party[k], 0) + 1
+    if not votes:
+        return None
+    best = max(votes, key=votes.get)
+    return best if votes[best] >= 0.6 * sum(votes.values()) else None
+
+
+def _hand_entry(lines: list[list[Run]], tip: tuple[int, int],
+                party: list[str] = ()) -> tuple[str, Run | None]:
+    """What a hand points at, and the run it was read from (None when inferred)."""
+    row = sorted((r for row in lines for r in row if abs(r.y - tip[1]) < 36
+                  and -30 <= r.x0 - tip[0] < 1400 and plausible(r)), key=lambda r: r.x0)
+    near = [r for r in row if r.x0 - tip[0] < 420]
+    if near:
+        w = snap(near[0].text, VOCAB, 0.7)
+        if w in VOCAB:
+            return w, near[0]
+    w = _column_entry(lines, tip) or _block_name(lines, tip) or (
+        _block_by_order(lines, tip, list(party)) if party else None)
+    if w:
+        return w, None
+    if row:
+        w = snap(row[0].text, VOCAB, 0.7)
+        return (w if w in VOCAB else clean(row[0].text)), row[0]
+    return "", None
+
+
+def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
+    """Menus, questions and text boxes (not battle)."""
+    hands = find_template(img, ctsteam.templates()["hand"], CANVAS)
+    lines = runs_in(ctsteam.lib(), img, (0, 0, *CANVAS), [h[:4] for h in hands], local=True)
+    lk = Look(lines=lines)
+    good = [r for row in lines for r in row if plausible(r)]
+    question = next((r for r in good if clean(r.text).endswith("?")), None)
+    tips = [(h[0] + h[2], h[1] + h[3] // 2) for h in hands]
+    found = [(tip, *_hand_entry(lines, tip, party)) for tip in tips]
+    found = [f for f in found if f[1]]
+    if question is not None:
+        below = [f for f in found if f[0][1] > question.y and abs(f[0][0] - question.x0) < 900]
+        found = below or found
+    blocks = [f for f in found if f[1] in ctsteam.NAMES and f[2] is None]
+    if len(blocks) >= 2 and len(blocks) == len(found):
+        # One hand on each character: the target is all of them.
+        names = [f[1] for f in sorted(blocks, key=lambda f: f[0][1])]
+        found = [(blocks[0][0], ", ".join(names[:-1]) + " and " + names[-1], None)]
+    if found:
+        tip, name, run = found[0]
+        lk.focus = name
+        if question is not None and question.y < tip[1]:
+            lk.kind = "choice"
+            lk.order = ("question", "focus", "desc")
+            lk.parts["question"] = clean(question.text)
+            lk.texts.add("question")
+            lk.typing.add("question")
+            x = run.x0 if run is not None else tip[0]
+            opts = [r for r in good if r.y > question.y and abs(r.x0 - x) < 160
+                    and r is not question and r.y - question.y < 700]
+            names = []
+            for r in sorted(opts, key=lambda r: r.y):
+                w = snap(r.text, VOCAB, 0.7)
+                names.append(w if w in VOCAB else clean(r.text))
+            others = [n for n in names if n != name]
+            lk.parts["focus"] = f"{name} selected" + (f", or {', '.join(others)}"
+                                                       if others else "")
+        else:
+            lk.kind = "menu"
+            lk.parts["focus"] = name
+            slot = [r for row in lines for r in row if abs(r.y - tip[1]) < 36
+                    and r.x1 <= tip[0] and tip[0] - r.x1 < 300 and r.text.strip().isdigit()]
+            if slot and run is not None and run.x0 - tip[0] > 420:
+                lk.parts["focus"] = f"{slot[0].text.strip()}, {name}"  # a save slot
+            head = [r for r in good if r.y < 160 and len(r.text) > 12 and finished(r.text)
+                    and r.text.strip()[-1] in ".?:"]
+            if head:
+                lk.parts["title"] = clean(head[0].text)
+                lk.texts.add("title")
+                lk.typing.add("title")
+            if run is not None and name in ctsteam.ITEMS:
+                count = [r for row in lines for r in row if abs(r.y - run.y) < 36
+                         and 0 < r.x0 - run.x1 < 900 and re.fullmatch(r":?\s*\d+", r.text)]
+                if count:
+                    lk.parts["focus"] = f"{name}, {count[0].text.lstrip(':').strip()}"
+        desc = [r for r in good if r.y > DESC_Y and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2]
+        if desc:
+            lk.parts["desc"] = clean(" ".join(r.text for r in sorted(desc, key=lambda r: r.x0)))
+            lk.texts.add("desc")
+            lk.typing.add("desc")
+        return lk
+    if question is not None:
+        lk.kind = "choice"
+        lk.parts["question"] = clean(question.text)
+        lk.texts.add("question")
+        lk.typing.add("question")
+        return lk
+    # A text box: lines of words across the top or bottom of the screen.
+    box = [row for row in lines if row and (row[0].y < 520 or row[0].y > 900)]
+    words = [[r for r in row if plausible(r) and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2]
+             for row in box]
+    words = [row for row in words if row]
+    if words and sum(len(r.text) for row in words for r in row) >= 12:
+        lk.kind = "text"
+        lk.parts["text"] = clean(" ".join(r.text for row in words for r in row))
+        lk.texts.add("text")
+        lk.typing.add("text")
+    return lk
+
+
+def look(image, party: list[str] = ()) -> Look:
+    """`party`: the characters in menu order, as earlier screens showed them (Reader.party)."""
+    t0 = time.perf_counter()
+    img = to_canvas(image if isinstance(image, np.ndarray) else ctsteam._bgr(image), CANVAS)
+    st = ctsteam.read(img)
+    if st.in_battle or st.paused:
+        lk = battle_look(st)
+    else:
+        lk = field_look(img, party)
+    lk.ms = round((time.perf_counter() - t0) * 1e3)
+    return lk
+
+
+def finished(text: str) -> bool:
+    """Text that ends like a whole sentence or label, not cut off mid-typing."""
+    t = text.strip()
+    return bool(END.search(t)) or t in VOCAB
+
+
+class Reader:
+    """Lines to say from successive looks: each part when it changes, text once it's whole.
+
+    A part of kind text (a description, a message, a question, dialogue) is said once two
+    looks agree on it and it ends like a sentence, or three agree whatever its end; the
+    rest (whose turn, the cursor) as soon as it's seen. The same text isn't said twice
+    within `forget_s`, unless the screen went elsewhere and came back to a new box.
+    """
+
+    def __init__(self, forget_s: float = 30.0):
+        self.forget_s = forget_s
+        self.kind = "none"
+        self.said: dict[str, str] = {}
+        self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
+        self.texts: dict[str, float] = {}  # text said -> when
+
+    def reset(self) -> None:
+        self.kind, self.said, self.seen = "none", {}, {}
+
+    def update(self, lk: Look, now: float | None = None, first: bool = False) -> str:
+        """What to say for this look ('' for nothing). `first` reads the look as the only
+        one there will be: text counts as whole when it ends like a sentence."""
+        now = time.monotonic() if now is None else now
+        opened = lk.kind != self.kind
+        if opened:
+            self.said, self.seen = {}, {}
+            self.kind = lk.kind
+        if lk.kind == "none":
+            return ""
+        out = []
+        for part in lk.order or ORDER:
+            value = lk.parts.get(part, "")
+            old_value, n = self.seen.get(part, ("", 0))
+            n = n + 1 if value == old_value else 1
+            self.seen[part] = (value, n)
+            if not value:
+                if part in ("danger", "pause", "top", "text", "question", "title"):
+                    self.said.pop(part, None)  # gone: say it again when it's back
+                continue
+            if self.said.get(part) == value:
+                continue
+            if part in lk.texts:
+                whole = finished(value)
+                if part in lk.typing and not ((whole and (n >= 2 or first)) or n >= 3):
+                    continue
+                if now - self.texts.get(value, -1e9) < self.forget_s:
+                    self.said[part] = value
+                    continue
+                self.texts[value] = now
+            self.said[part] = value
+            out.append(value)
+        self.texts = {t: w for t, w in self.texts.items() if now - w < self.forget_s}
+        if out and lk.kind == "menu" and lk.focus in MAIN and opened:
+            out.insert(0, "Menu")
+        return " ".join(s if s[-1] in ".?!" else s + "." for s in out)

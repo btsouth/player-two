@@ -78,6 +78,8 @@ HERO = "Crono"
 
 
 def has(text: str, phrase: str) -> bool:
+    if "|" in phrase:
+        return any(has(text, p) for p in phrase.split("|"))
     if phrase == HERO and (has(text, "you") or has(text, "your")):
         return True
     p = norm(phrase).replace("'", "")
@@ -111,7 +113,8 @@ def score(e: dict, said: str) -> dict:
                  out.get("read", 0) == 1)
     allowed = " ".join([*e.get("shown", []), *e.get("must", []), e.get("read", ""),
                         e.get("true_place", "")]).lower()
-    made_up = [n for n in CT_NAMES if has(said, n) and norm(n) not in norm(allowed)
+    # Names as names: capitalised ("a market" is no place name).
+    made_up = [n for n in CT_NAMES if has(said, n) and n in said and norm(n) not in norm(allowed)
                and not any(norm(n) in norm(a) for a in e.get("shown", []))]
     # A longer name already counted covers its parts ("Leene" in "Leene Square").
     made_up = [n for n in made_up if not any(n != m and n in m for m in made_up)]
@@ -119,6 +122,10 @@ def score(e: dict, said: str) -> dict:
     tp = e.get("true_place")
     out["unshown_true"] = bool(tp) and has(said, tp) and tp not in e.get("shown", [])
     return out
+
+
+# The party in menu order, as the screens before these showed it (the reader remembers it).
+PARTY = ["Crono", "Frog", "Marle", "Ayla", "Lucca", "Robo"]
 
 
 def settings() -> Settings:
@@ -162,7 +169,14 @@ async def run(args) -> None:
             t0 = time.monotonic()
             try:
                 if args.mode == "fast":
-                    text, first = await narrate_model(narr, frame)  # replaced by the fast path
+                    from playertwo import ctscreen
+
+                    lk = await asyncio.to_thread(ctscreen.look, frame.image, PARTY)
+                    if lk.readable:
+                        text = ctscreen.Reader().update(lk, first=True)
+                        first = time.monotonic() - t0
+                    else:
+                        text, first = await narrate_model(narr, frame)
                 else:
                     text, first = await narrate_model(narr, frame)
                 err = ""
