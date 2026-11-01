@@ -235,7 +235,7 @@ class FieldMenu:
         cells: list[tuple[int, int, int, int]] = []  # column, y, value, top
         for row in lines:
             for col in (0, 1):
-                runs = sorted((r for r in row if 950 < r.x0 and (r.x0 >= 1700) == bool(col)),
+                runs = sorted((r for r in row if r.x0 > 950 and (r.x0 >= 1700) == bool(col)),
                               key=lambda r: r.x0)
                 text = " ".join(r.text for r in runs)
                 for m in re.finditer(r"(\S+)\s*/\s*(\S+)", text):
