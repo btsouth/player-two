@@ -423,6 +423,27 @@ class RoomSurvey:
         time.sleep(secs(0.5))
         if self.g.location() != self.loc:
             raise RuntimeError(f"the state for {self.loc:#x} loaded somewhere else")
+        self.settle()
+
+    def settle(self) -> None:
+        """Wait out a scene or a text box the place opened with (a castle's guards
+        greeting the princess): press a until a tap moves the character."""
+        g = self.g
+        for i in range(10):
+            try:
+                p = g.pos()
+                for k in ("Up", "Right", "Left", "Down"):  # ways in are mostly below
+                    g.press(k, 0.05)
+                    time.sleep(secs(0.1))
+                    if g.pos() != p:
+                        return
+            except (Between, Battle):
+                return
+            if i == 0:
+                self.log("not moving: a scene or a text box? pressing a")
+            for _ in range(3):
+                g.press("Return", 0.08)
+                time.sleep(secs(0.4))
 
     def centre(self, t: tuple[int, int]) -> bool:
         """Stand in the middle of a tile (rays then run along its middle), or as near as
@@ -547,6 +568,7 @@ class RoomSurvey:
     # -- the survey ------------------------------------------------------------------
     def explore(self, minutes: float) -> None:
         end = time.monotonic() + minutes * 60
+        self.settle()
         here = tile_of(self.g.pos())
         self.walk.add(here)
         self.snap()
@@ -768,18 +790,24 @@ def boot(box: Box, speed: float, sprites: bool = False) -> None:
         box.cmd("FAST_FORWARD", wait=0.2)
 
 
-def enter_door(g: Field, world_survey: Path, state: Path, loc: int, log) -> bool:
-    """From a world-map state, walk to the door that goes to `loc` and go in."""
+def enter_door(g: Field, world_survey: Path, state: Path, loc: int, log,
+               at: tuple[int, int] | None = None, worlds: set[int] = frozenset()) -> bool:
+    """From a world-map state, walk to the door that goes to `loc` and go in (at the
+    cell `at`, for a door the map's survey didn't find open)."""
     import survey as sv
 
     d = json.loads(world_survey.read_text())
     g.box.load(state)
     s = sv.Survey(g, (8192, 8192), d["world"], log)
     s.walk = {tuple(c) for c in d["walk"]}
-    doors = [(r, c) for r, c, v in d["doors"] if v == loc]
+    doors = [at] if at else [(r, c) for r, c, v in d["doors"] if v == loc]
     if not doors:
         return False
     s.walk |= set(doors)
+    if at:  # off the map's survey: straight there from where the state stands
+        wg0 = sv.cell_of(Game(g.box, g.ram).pos())
+        s.walk |= {(r, c) for r in range(min(wg0[0], at[0]), max(wg0[0], at[0]) + 1)
+                   for c in range(min(wg0[1], at[1]), max(wg0[1], at[1]) + 1)}
     wg = Game(g.box, g.ram)  # world-map memory: x, y
     s.g = wg
     sv.SPEED = SPEED
@@ -807,8 +835,8 @@ def enter_door(g: Field, world_survey: Path, state: Path, loc: int, log) -> bool
         for _ in range(2):
             wg.press("Return", 0.12)
             time.sleep(max(secs(2.5), 0.8))
-            if g.location() == loc:
-                return True
+            if g.location() == loc or (loc < 0 and g.location() not in worlds):
+                return True  # (loc < 0: anywhere off the world maps)
         log(f"the door at {door} didn't open (stopped at {sv.cell_of(wg.pos())})")
     return False
 
@@ -826,7 +854,8 @@ JSON: {{"name": "...", "looks": "what's in it, a few words",
 "spots": [{{"name": "the counter", "x": 0, "y": 0}}]}}"""
 
 
-def name_rooms(folder: Path, game: str, known: dict[str, str]) -> dict[int, dict]:
+def name_rooms(folder: Path, game: str, known: dict[str, str], rename: bool = False
+               ) -> dict[int, dict]:
     """Each surveyed place's name (the world map's for a place entered from it, Muse's
     reading of the picture for the rest: rooms, floors) and the things in it to go to,
     in the picture's pixels: {loc: {"name": ..., "spots": {name: [x, y]}}}."""
@@ -858,9 +887,15 @@ def name_rooms(folder: Path, game: str, known: dict[str, str]) -> dict[int, dict
         msgs = [{"role": "user", "content": [
             image_part(img, 1024),
             {"type": "text", "text": NAME_PROMPT.format(game=game, known=hint, exits=exits)}]}]
-        try:
-            out = await muse.json(msgs, effort="low", max_tokens=3000)
-        except ValueError:
+        out = {}
+        for _ in range(3):
+            try:
+                out = await muse.json(msgs, effort="low", max_tokens=12000)
+                if out:  # (nothing when its thinking used every token)
+                    break
+            except Exception as exc:  # noqa: BLE001 (the API's errors too: try again)
+                print(f"{loc:#x}: naming failed ({exc}), again", flush=True)
+        if not out:
             return loc, None
         spots = {}
         for sp in out.get("spots") or []:
@@ -872,7 +907,10 @@ def name_rooms(folder: Path, game: str, known: dict[str, str]) -> dict[int, dict
         return loc, {"name": out.get("name"), "spots": spots}
 
     async def run():
-        return await asyncio.gather(*(one(k, r) for k, r in rooms.items()))
+        # Places named before keep their names and spots (asked again with --rename).
+        todo = {k: r for k, r in rooms.items() if (rename or "spots" not in r)
+                and (folder / f"loc-{k:03x}.png").exists()}  # (pictured: done)
+        return await asyncio.gather(*(one(k, r) for k, r in todo.items()))
 
     return {k: v for k, v in asyncio.run(run()) if v}
 
@@ -931,6 +969,233 @@ def sprites(box: Box, g: Field, folder: Path, state: Path, log) -> None:
     (folder / "player.json").write_text(json.dumps({"anchor": out}))
 
 
+# Objects below this number are the party (the player and whoever follows); the place's
+# own people and things start at it (CT: 8). Positions of 0xFF0 or more are no object.
+PARTY_OBJECTS = 8
+OBJECTS = 0x40
+
+
+def objects(g: Field) -> dict[int, tuple[float, float]]:
+    """Every object the place has now, by number: where its feet are (place pixels)."""
+    n = OBJECTS * 2
+    xs, ys = g.read(g.ram["field_x"], n), g.read(g.ram["field_y"], n)
+    out = {}
+    for i in range(OBJECTS):
+        x = (xs[2 * i] | xs[2 * i + 1] << 8) / 16
+        y = (ys[2 * i] | ys[2 * i + 1] << 8) / 16
+        if 0 < x < 0xF00 and 0 < y < 0xF00:
+            out[i] = (x, y)
+    return out
+
+
+def room_state(states: Path, loc: int) -> Path | None:
+    """A saved state standing in the place: just inside, far in, or come in by a way."""
+    for name in (f"door-{loc:x}", f"deep-{loc:x}"):
+        if (states / f"{name}.state").exists():
+            return states / f"{name}.state"
+    got = sorted(states.glob(f"arrive-*-{loc:x}.state")) + \
+        sorted(states.glob(f"arrive-*-{loc:x}-*.state"))
+    return got[0] if got else None
+
+
+def people(box: Box, g: Field, folder: Path, states: Path, locs: list[int], log) -> None:
+    """The people (and things that are drawn, like save points) standing in each place,
+    with the sprites on: where each is by the game's memory, whether it walks about, and
+    its look cut from the screen against the place's bare picture. Walks near each one
+    not on screen yet. Writes "people" into loc-X.json and the looks to people/."""
+    from PIL import Image
+
+    shots = Shots(box)
+    (folder / "people").mkdir(exist_ok=True)
+    for loc in locs:
+        out = folder / f"loc-{loc:03x}.json"
+        st = room_state(states, loc)
+        if st is None or not out.exists() or not out.with_suffix(".png").exists():
+            log(f"{loc:#x}: no state or no survey")
+            continue
+        box.load(st)
+        time.sleep(1.0)
+        if g.location() != loc:
+            log(f"{loc:#x}: {st.name} loaded somewhere else")
+            continue
+        d = json.loads(out.read_text())
+        pic = np.asarray(Image.open(out.with_suffix(".png")).convert("RGB")).astype(np.int16)
+        s = RoomSurvey(g, loc, st, log)
+        s.walk = {tuple(t) for t in d["walk"]}
+        H, W = pic.shape[:2]
+        # (objects off the place's picture are no one: leftovers, the game's own)
+        first = {i: p for i, p in objects(g).items() if p[0] < W and p[1] < H}
+        best: dict[int, tuple[int, np.ndarray, np.ndarray]] = {}  # i -> (pixels, crop, mask)
+        moved: set[int] = set()
+
+        def look() -> None:
+            a = shots.grab()
+            if a is None or a.shape[0] < TOP + HIGH:
+                return
+            cx, cy = g.scroll()
+            now = objects(g)
+            f = a[TOP:TOP + HIGH].astype(np.int16)
+            party = [(x - cx, y - cy) for i, (x, y) in now.items() if i < PARTY_OBJECTS]
+            for i, (x, y) in now.items():
+                if i < PARTY_OBJECTS:
+                    continue
+                if i in first and math.dist(first[i], (x, y)) > 8:
+                    moved.add(i)
+                sx, sy = int(x - cx), int(y - cy)
+                if not (12 <= sx <= 244 and 24 <= sy <= HIGH - 4):
+                    continue
+                x0, y0, x1, y1 = sx - 16, max(0, sy - 44), sx + 16, min(HIGH, sy + 6)
+                crop = f[y0:y1, x0:x1]
+                ground = pic[cy + y0:cy + y1, cx + x0:cx + x1]
+                if crop.shape != ground.shape or crop.size == 0:
+                    continue
+                mask = np.abs(crop - ground).sum(2) > 40
+                for qx, qy in party:  # the party drawn there: not theirs
+                    mask[max(0, int(qy) - 36 - y0):max(0, int(qy) + 3 - y0),
+                         max(0, int(qx) - 11 - x0):max(0, int(qx) + 11 - x0)] = False
+                # Theirs reaches down to their feet (not something drawn above where
+                # they stand, a counter's top, taken for them).
+                if int(mask[max(0, sy - 8 - y0):sy + 1 - y0, 8:24].sum()) < 4:
+                    continue
+                k = int(mask.sum())
+                if i not in best or k > best[i][0]:
+                    best[i] = (k, crop.astype(np.uint8), mask)
+
+        try:
+            look()
+            for i, (x, y) in sorted(first.items()):
+                if i < PARTY_OBJECTS or (i in best and best[i][0] >= 30):
+                    continue
+                # A few tiles off (the party beside it would hide it), nearest first;
+                # not at all when it's in view from where it is already.
+                goal = (int(y) // TILE, int(x) // TILE)
+                cx, cy = g.scroll()
+                if 12 <= x - cx <= 244 and 24 <= y - cy <= HIGH - 4:
+                    continue
+                near = sorted(s.walk, key=lambda t: abs(abs(t[0] - goal[0]) +
+                                                        abs(t[1] - goal[1]) - 3))
+                for t in near[:2]:
+                    if s.walk_to(t):
+                        break
+                time.sleep(0.4)
+                look()
+        except (Battle, Between, RuntimeError) as exc:
+            log(f"{loc:#x}: {type(exc).__name__} {exc}")
+        last = objects(g)
+        found = []
+        # Two objects at one spot (one drawn, one not, or the same look twice): once.
+        for i, (x, y) in sorted(first.items(), key=lambda kv: -best.get(kv[0], (0,))[0]):
+            if i < PARTY_OBJECTS or i not in best or best[i][0] < 30:
+                continue
+            if any(math.dist(p["at"], (x, y)) < 12 for p in found):
+                continue
+            k, crop, mask = best[i]
+            ys_, xs_ = np.nonzero(mask)
+            b = (int(xs_.min()), int(ys_.min()), int(xs_.max()) + 1, int(ys_.max()) + 1)
+            img = np.zeros((b[3] - b[1], b[2] - b[0], 4), np.uint8)
+            img[..., :3] = crop[b[1]:b[3], b[0]:b[2]]
+            img[..., 3] = mask[b[1]:b[3], b[0]:b[2]] * 255
+            name = f"loc-{loc:03x}-{i}.png"
+            Image.fromarray(img).save(folder / "people" / name)
+            if i in last and math.dist(last[i], (x, y)) > 8:
+                moved.add(i)
+            found.append({"obj": i, "at": [round(x, 1), round(y, 1)], "moves": i in moved,
+                          "look": name, "pixels": k})
+        found.sort(key=lambda p: p["obj"])
+        d["people"] = found
+        out.write_text(json.dumps(d))
+        log(f"{loc:#x}: {len(found)} people/things seen of "
+            f"{sum(1 for i in first if i >= PARTY_OBJECTS)} objects, "
+            f"{sum(1 for p in found if p['moves'])} walk about")
+
+
+PEOPLE_PROMPT = """These are the people and things drawn in one place inside {game}: "{name}".
+The first picture is the whole place (the people left out), with a numbered dot where
+each one stands; the next pictures are each one's look, numbered the same, enlarged.
+For each number: a short name a player would use to ask to go to or talk to it, saying
+its job when it shows ("the innkeeper", "the shopkeeper", "the guard by the door", "the
+old man", "the girl in the green dress", "the save point" for a glowing sparkle, "the
+cat"); two alike get names that tell them apart (by where they are: "the guard on the
+left"). Don't guess who someone is from a look alone: "the man in the green cap", not a
+story character's name, unless the place says so (a shop's counter, the inn's). kind:
+"person", "animal", "save point", "chest", "thing", or "none" when it's no one and
+nothing to go to (a bit of a wall, a light, a shadow, half of someone).
+JSON: {{"people": [{{"n": 1, "name": "...", "kind": "person"}}]}}"""
+
+
+def name_people(folder: Path, game: str, locs: list[int]) -> None:
+    """Names for the people found by people(): Muse, a place at a time."""
+    import asyncio
+
+    from PIL import Image, ImageDraw
+
+    from playertwo.config import Settings
+    from playertwo.muse import Muse, image_part
+
+    muse = Muse(Settings.load())
+
+    async def one(loc: int) -> None:
+        out = folder / f"loc-{loc:03x}.json"
+        d = json.loads(out.read_text())
+        ppl = d.get("people") or []
+        if not ppl:
+            return
+        pic = Image.open(out.with_suffix(".png")).convert("RGB")
+        ox, oy, x1, y1 = pic.getbbox() or (0, 0, *pic.size)  # what was seen of it
+        pic = pic.crop((ox, oy, x1, y1))
+        k = max(1, 1024 // max(pic.size))
+        big = pic.resize((pic.width * k, pic.height * k), Image.NEAREST)
+        draw = ImageDraw.Draw(big)
+        for n, p in enumerate(ppl, 1):
+            x, y = (p["at"][0] - ox) * k, (p["at"][1] - 12 - oy) * k
+            draw.ellipse((x - 9, y - 9, x + 9, y + 9), fill=(255, 255, 0), outline=(0, 0, 0))
+            draw.text((x - 4, y - 6), str(n), fill=(0, 0, 0))
+        parts: list[dict] = [image_part(big, 1024)]
+        for n, p in enumerate(ppl, 1):
+            look = Image.open(folder / "people" / p["look"]).convert("RGBA")
+            bg = Image.new("RGB", (look.width * 4 + 8, look.height * 4 + 8), (90, 90, 90))
+            bg.paste(look.resize((look.width * 4, look.height * 4), Image.NEAREST), (4, 4),
+                     look.resize((look.width * 4, look.height * 4), Image.NEAREST))
+            parts += [{"type": "text", "text": f"{n}:"}, image_part(bg, 256)]
+        parts.append({"type": "text", "text": PEOPLE_PROMPT.format(
+            game=game, name=d.get("name") or f"place {loc:#x}")})
+        got = {}
+        async with gate:
+            for _ in range(3):
+                try:
+                    got = await muse.json([{"role": "user", "content": parts}],
+                                          effort="low", max_tokens=12000)
+                    if got:  # (nothing when its thinking used every token)
+                        break
+                except Exception as exc:  # noqa: BLE001 (the API's errors too: try again)
+                    print(f"{loc:#x}: naming failed ({exc}), again", flush=True)
+                    await asyncio.sleep(2)
+            else:
+                return
+        said = got.get("people") or next((v for v in got.values() if isinstance(v, list)),
+                                          [])
+        if not said:
+            print(f"{loc:#x}: no names in {str(got)[:200]}", flush=True)
+        for e in said:
+            try:
+                p = ppl[int(e["n"]) - 1]
+            except (KeyError, ValueError, IndexError, TypeError):
+                continue
+            p["name"], p["kind"] = str(e.get("name") or ""), str(e.get("kind") or "person")
+        out.write_text(json.dumps(d))
+        print(f"{loc:#5x} {d.get('name')}: " + ", ".join(
+            f"{p.get('name')} ({p.get('kind')}{', walks' if p['moves'] else ''})" for p in ppl))
+
+    gate = None
+
+    async def run():
+        nonlocal gate
+        gate = asyncio.Semaphore(3)
+        await asyncio.gather(*(one(loc) for loc in locs))
+
+    asyncio.run(run())
+
+
 def main() -> None:
     import faulthandler
     import signal
@@ -947,6 +1212,8 @@ def main() -> None:
     ap.add_argument("--minutes", type=float, default=8, help="per place")
     ap.add_argument("--speed", type=float, default=2.0)
     ap.add_argument("--names", action="store_true", help="name the surveyed places (Muse)")
+    ap.add_argument("--rename", action="store_true",
+                    help="with --names: name again the places named before")
     ap.add_argument("--sprites", action="store_true",
                     help="cut the player's sprite from the --state's place")
     ap.add_argument("--deep", action="store_true",
@@ -962,11 +1229,26 @@ def main() -> None:
                     help="keep frames whose ground never settles (drifting mist)")
     ap.add_argument("--diagonal", action="store_true",
                     help="try the four slanting ways too (chain bridges, slopes)")
+    ap.add_argument("--start", help="the world-map state to go in from (a name under the "
+                    "states folder), instead of [rooms] start")
+    ap.add_argument("--world", help="that map's survey (survey-600-a-d.json), instead of "
+                    "[rooms] world_survey")
+    ap.add_argument("--at", help="with --door: go in at this world-map cell (row,col of "
+                    "the map's survey) rather than at the door the survey found")
+    ap.add_argument("--people", help="find the people standing in these surveyed places "
+                    "(hex, comma separated, or 'all'), with the sprites on, and name them")
+    ap.add_argument("--name-people", help="only name the people found (Muse, no box)")
     args = ap.parse_args()
     spec = tomllib.loads(args.tasks.read_text())
     gspec = spec["game"]
     rspec = spec.get("rooms", {})
-    folder = ATLASES / slug(gspec["name"]) / "rooms"
+    if args.start:  # another world-map state (and its map's survey) to go in from
+        rspec["start"] = args.start
+    if args.world:
+        rspec["world_survey"] = args.world
+    # PLAYER_TWO_ROOMS: a folder of its own for the rooms (a survey being tried out)
+    folder = Path(os.environ.get("PLAYER_TWO_ROOMS") or
+                  ATLASES / slug(gspec["name"]) / "rooms").expanduser()
     folder.mkdir(parents=True, exist_ok=True)
     known = {str(int(k, 16)): v for k, v in rspec.get("names", {}).items()}
     if args.repaint:
@@ -989,10 +1271,21 @@ def main() -> None:
             n = sum(len(v) for v in shots.frames.values())
             print(f"{d.name}: {len(cams)} views kept of {len(shots.frames)} ({n} frames)")
         return
+    def which(v: str) -> list[int]:
+        if v == "all":
+            return sorted(int(f.stem.split("-")[1], 16) for f in folder.glob("loc-*.json"))
+        return [int(x, 16) for x in v.split(",")]
+
+    if args.name_people:
+        name_people(folder, gspec["name"], which(args.name_people))
+        return
     if args.names:
-        world = ATLASES / slug(gspec["name"]) / rspec["world_survey"]
-        known = {**json.loads(world.read_text()).get("names", {}), **known}
-        names = name_rooms(folder, gspec["name"], known)
+        # The names each world map's doors have (every map surveyed), then the task file's.
+        worldwide: dict[str, str] = {}
+        for world in sorted((ATLASES / slug(gspec["name"])).glob("survey-*.json")):
+            worldwide.update(json.loads(world.read_text()).get("names", {}))
+        known = {**worldwide, **known}
+        names = name_rooms(folder, gspec["name"], known, args.rename)
         every = dict(known)
         for f in folder.glob("loc-*.json"):
             d = json.loads(f.read_text())
@@ -1023,7 +1316,7 @@ def main() -> None:
                                        check=False, capture_output=True,
                                        text=True).stdout.split()[-1])
     else:
-        boot(box, args.speed, sprites=args.sprites)
+        boot(box, args.speed, sprites=args.sprites or bool(args.people))
     g = Field(box, ram)
     for k in ("Up", "Down", "Left", "Right", "q", "e", "Return"):
         g.key(k, "up")  # a run stopped mid-walk can leave keys down
@@ -1032,6 +1325,11 @@ def main() -> None:
     def log(text: str) -> None:
         print(f"{time.monotonic() - t0:7.1f} {text}", flush=True)
 
+    if args.people:
+        locs = which(args.people)
+        people(box, g, folder, states, locs, log)
+        name_people(folder, gspec["name"], locs)
+        return
     if args.sprites:
         box.load(Path(args.state).expanduser())
         sprites(box, g, folder, Path(args.state), log)
@@ -1047,12 +1345,15 @@ def main() -> None:
         print(deep(s, states / f"deep-{loc:x}.state"))
         return
     if args.door:
-        loc = int(args.door, 16)
+        loc = -1 if args.door == "any" else int(args.door, 16)
         world_state = Path(gspec["states"]).expanduser() / f"{rspec['start']}.state"
+        at = tuple(int(v) for v in args.at.split(",")) if args.at else None
         if not enter_door(g, ATLASES / slug(gspec["name"]) / rspec["world_survey"],
-                          world_state, loc, log):
+                          world_state, loc, log, at,
+                          {int(str(w), 16) for w in rspec.get("worlds", [])}):
             sys.exit(f"couldn't go in at the door to {loc:#x}")
         time.sleep(secs(1.0))
+        loc = g.location()
         first = save_state(box, states / f"door-{loc:x}.state")
     else:
         box.load(Path(args.state).expanduser())

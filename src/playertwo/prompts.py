@@ -147,10 +147,15 @@ off screen; don't walk to near misses.
 player is, ask them what it says to, and call it again with their answer; never present \
 a guess as fact. Where a place or person is: if the game has a guide, look it up there \
 before searching.
-  - Inside a place, to go out or to a room or place beyond it ("take me outside", "go \
-upstairs", "to the fair", "where's the exit"): go_to_exit first, with the player's words; \
-it knows the whole place when the room survey has it. Where you are and the ways out: \
-where_am_i.
+  - Inside a place, to go out, to a room or place beyond it, or to someone or something \
+in it or the next room ("take me outside", "go upstairs", "the north door", "talk to the \
+innkeeper", "the shop counter", "the save point"): go_to_exit first, with the player's \
+words (talk true to talk to them, buy or rest); it knows the whole place and who stands \
+where when the room survey has it, and walks straight there. Where you are, the ways \
+out and who's here: where_am_i. When it says the place isn't surveyed, what's on screen \
+is still walk_to or talk_to; for anything else don't search room by room on camera: try \
+the one likeliest way at most, then tell the player plainly you don't know this place's \
+layout yet and what you can see.
   - Somewhere or someone off screen: call exits first, every time. If the player or \
 your notes give a direction ("west of the bell"), take the way out on that side; if \
 exits shows none there, keep_walking that way to the edge of the area, since ways out \

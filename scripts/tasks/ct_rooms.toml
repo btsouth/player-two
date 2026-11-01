@@ -27,6 +27,7 @@ cam_y = "0x1D0D"
 scroll_x = "0x1D87"  # the background's scroll (low byte): its low 3 bits are the
 scroll_y = "0x1D89"  # pixels the view is past cam_x, cam_y (rounded down to 8)
 battle = "0x117"    # 1 in a fight
+dialog = "0x134"    # 255 while a text box (or a shop) is up, else 0
 
 [rooms]
 start = "world-1000-home"        # a world-map state the doors are walked to from
@@ -46,6 +47,12 @@ worlds = ["0x1F0", "0x1F1", "0x1F2", "0x1F3", "0x1F4", "0x1F5", "0x1F6", "0x1F7"
 "0x18B" = "Mountain of Woe, between two chain ladders"
 "0x18D" = "Mountain of Woe, the ledge at the top of the long ladder"
 "0x1F0" = "outside (the world map)"
+"0xE" = "Mayor's Manor, upstairs"
+"0x15" = "Guardia Castle, the entrance hall"
+"0x18" = "Guardia Castle, the kitchen and dining hall"
+"0x1A" = "Guardia Castle, the passage by the east stairs"
+"0x1E8" = "Guardia Castle, the storeroom"
+"0x75" = "Truce Inn, upstairs"
 
 # Trips inside places. `to` is where scripts/rooms_bench.py walks (no model), `request`
 # what scripts/emu_tasks.py asks the full agent; both judged by `location`. States under
@@ -178,3 +185,402 @@ to = "0x18D"
 location = "0x18D"
 walk_s = 300
 limit_s = 420
+
+# Added 2026-11-01: more of Truce (1000 A.D.), Guardia Castle (1000 A.D., from the side
+# quests save outside it), Truce in 600 A.D.; and walking up to someone (`target`, named
+# as the people survey names them) or a thing in a place, talking to them (`talk`).
+[[task]]
+id = "r-mayor-out"
+category = "rooms"
+state = "rooms/arrive-e-d"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-mayor-up"
+category = "rooms"
+state = "rooms/door-d"
+request = "go upstairs"
+to = "0xE"
+location = "0xE"
+limit_s = 180
+
+[[task]]
+id = "r-res-out"
+category = "rooms"
+state = "rooms/deep-10"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-inn-keeper"
+category = "rooms"
+state = "rooms/deep-c"
+request = "talk to the innkeeper"
+to = "0xC"
+target = "the innkeeper"
+talk = true
+location = "0xC"
+limit_s = 180
+
+[[task]]
+id = "r-market-shop"
+category = "rooms"
+state = "rooms/door-11"
+request = "I want to buy something, take me to the shopkeeper"
+to = "0x11"
+target = "the shopkeeper"
+talk = true
+location = "0x11"
+limit_s = 180
+
+[[task]]
+id = "r-kitchen-mom"
+category = "rooms"
+state = "rooms/arrive-2-1"
+request = "talk to my mom"
+to = "0x1"
+target = "Crono's mom"
+talk = true
+location = "0x1"
+limit_s = 180
+
+[[task]]
+id = "r-fair-bell"
+category = "rooms"
+state = "rooms/door-5"
+request = "take me to the bell"
+to = "0x5"
+target = "the bell"
+location = "0x5"
+limit_s = 180
+
+[[task]]
+id = "r-castle-out"
+category = "rooms"
+state = "rooms/arrive-18-15"     # from the kitchen door, two guards below it
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-castle-kitchen"
+category = "rooms"
+state = "rooms/door-15"
+request = "take me to the kitchen"
+to = "0x18"
+location = "0x18"
+limit_s = 180
+
+[[task]]
+id = "r-inn600-up"
+category = "rooms"
+state = "rooms/door-74"
+request = "go upstairs"
+to = "0x75"
+location = "0x75"
+limit_s = 180
+
+[[task]]
+id = "r-inn600-out"
+category = "rooms"
+state = "rooms/deep-75"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-market600-out"
+category = "rooms"
+state = "rooms/deep-76"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-market600-shop"
+category = "rooms"
+state = "rooms/door-76"
+request = "I need to buy potions"
+to = "0x76"
+target = "the shopkeeper"
+talk = true
+location = "0x76"
+limit_s = 180
+
+[[task]]
+id = "r-inn600-shop"
+category = "rooms"
+state = "rooms/door-74"
+request = "take me to the shopkeeper"
+to = "0x74"
+target = "the shopkeeper"
+talk = true
+location = "0x74"
+limit_s = 180
+
+[[task]]
+id = "r-castle-guard"
+category = "rooms"
+state = "rooms/door-15"
+request = "talk to the guard on the left"
+to = "0x15"
+target = "the guard on the left"
+talk = true
+location = "0x15"
+limit_s = 180
+
+[[task]]
+id = "r-woe-save"
+category = "rooms"
+state = "rooms/deep-189"
+request = "take me to the save point"
+to = "0x189"
+target = "the save point"
+location = "0x189"
+limit_s = 180
+
+# The full agent only (no `to`): somewhere outside from inside a place.
+[[task]]
+id = "a-inn-to-market"
+category = "rooms"
+state = "rooms/deep-c"
+request = "take me to the market"
+location = "0x11"
+limit_s = 240
+
+# 600 A.D.: Truce's houses and the forest (from the save just arrived in 600 A.D.), Dorino
+# (from the save south of Zenan Bridge).
+[[task]]
+id = "r-res600-out"
+category = "rooms"
+state = "rooms/deep-72"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-forest600-out"
+category = "rooms"
+state = "rooms/door-77"
+request = "get me out of the forest"
+to = "0x1F1"
+location = "0x1F1"
+walk_s = 180
+limit_s = 300
+
+[[task]]
+id = "r-dorino-inn-out"
+category = "rooms"
+state = "rooms/deep-8a"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-dorino-innkeeper"
+category = "rooms"
+state = "rooms/door-8a"
+request = "I want to rest, talk to the innkeeper"
+to = "0x8A"
+target = "the innkeeper"
+talk = true
+location = "0x8A"
+limit_s = 180
+
+[[task]]
+id = "r-dorino-shop"
+category = "rooms"
+state = "rooms/door-8b"
+request = "take me to the shopkeeper"
+to = "0x8B"
+target = "the shopkeeper"
+talk = true
+location = "0x8B"
+limit_s = 180
+
+[[task]]
+id = "r-elder-out"
+category = "rooms"
+state = "rooms/deep-89"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-elder-oldman"
+category = "rooms"
+state = "rooms/door-89"
+request = "talk to the elder"
+to = "0x89"
+target = "the elder"
+talk = true
+location = "0x89"
+limit_s = 180
+
+# 600 AD Guardia Castle (a state past the guards at the door, made by walking in from
+# world-600-epoch): the hall and throne room are one place; treasure rooms off it.
+[[task]]
+id = "r-castle600-out"
+category = "rooms"
+state = "rooms/deep-78"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-castle600-treasury"
+category = "rooms"
+state = "rooms/door-78"
+request = "take me to the treasury"
+to = "0x1E0"
+location = "0x1E0"
+limit_s = 180
+
+[[task]]
+id = "r-castle600-wing-out"
+category = "rooms"
+state = "rooms/deep-7b"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240
+
+[[task]]
+id = "r-castle600-chest-out"
+category = "rooms"
+state = "rooms/deep-1d4"
+request = "get me out of the castle"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240
+
+# The first time in, the queen comes down the stairs and talks (her text box over the
+# hall): the walk waits it out, not pushing into people and calling it blocked.
+[[task]]
+id = "r-castle600-scene"
+category = "rooms"
+state = "rooms/door-78-scene"
+request = "take me to the treasury"
+to = "0x1E0"
+location = "0x1E0"
+limit_s = 180
+
+# Toma and the headman talk as you come in; you can walk while they do.
+[[task]]
+id = "r-elder-scene"
+category = "rooms"
+state = "rooms/door-89-scene"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+# Porre, 600 AD (from world-600-dorino, walked south).
+[[task]]
+id = "r-porre-inn-out"
+category = "rooms"
+state = "rooms/deep-9c"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-porre-cafe-out"
+category = "rooms"
+state = "rooms/deep-9b"
+request = "let's leave"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-porre-elder-out"
+category = "rooms"
+state = "rooms/deep-9a"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-tata-out"
+category = "rooms"
+state = "rooms/deep-98"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-porre-innkeeper"
+category = "rooms"
+state = "rooms/door-9c"
+request = "talk to the innkeeper"
+to = "0x9C"
+target = "the innkeeper"
+talk = true
+location = "0x9C"
+limit_s = 180
+
+[[task]]
+id = "r-porre-oldman"
+category = "rooms"
+state = "rooms/door-9a"
+request = "talk to the old man"
+to = "0x9A"
+target = "the old man at the table"
+talk = true
+location = "0x9A"
+limit_s = 180
+
+[[task]]
+id = "r-porre-waitress"
+category = "rooms"
+state = "rooms/door-9b"
+request = "talk to the waitress"
+to = "0x9B"
+target = "the waitress"
+talk = true
+location = "0x9B"
+limit_s = 180
+
+# Truce Canyon, 600 AD (monsters about: a fight on the way is the battle agent's).
+[[task]]
+id = "r-canyon-out"
+category = "rooms"
+state = "rooms/deep-70"
+request = "get me out of here"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240
+
+[[task]]
+id = "r-canyon-in"
+category = "rooms"
+state = "rooms/door-70"
+request = "take me to the clearing"
+to = "0x71"
+location = "0x71"
+limit_s = 240
+
+[[task]]
+id = "r-canyon-71-out"
+category = "rooms"
+state = "rooms/deep-71"
+request = "take me out of the canyon"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240

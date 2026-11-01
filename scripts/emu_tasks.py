@@ -88,6 +88,15 @@ class Box:
         if f"box '{self.name}' up" not in out:
             raise RuntimeError(f"{self.name} didn't come up: {out[-300:]}")
         self.home = Path(sh("omabox", "path", "--home", "-b", self.name).strip().splitlines()[-1])
+        own = os.environ.get("PLAYER_TWO_ROOMS")
+        if own:  # rooms being tried out: in the box in place of the game's own
+            from playertwo.atlas import Atlas
+
+            atlas = Atlas.folder_for(self.game["name"])
+            if atlas is not None:
+                dest = self.home / atlas.relative_to(Path.home()) / "rooms"
+                shutil.rmtree(dest, ignore_errors=True)
+                shutil.copytree(own, dest)
         # Its first start in a new HOME sometimes crashes while it writes its config:
         # the next one doesn't.
         for _ in range(3):
@@ -217,6 +226,25 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
             box.load(states / f"{task['state']}.state")
             watch = Watch(box, box.game.get("ram", {}).get("watch", "ct_ram"))
             watch.start()
+        talked: list[str] = []  # someone to go to (rooms_bench.by_target), as it went
+        stop_watch = threading.Event()
+        if task.get("target"):
+            from rooms_bench import by_target
+
+            def watch_target() -> None:
+                while not stop_watch.wait(0.7):
+                    loc = box.location()
+                    if loc is None:
+                        continue
+                    try:
+                        ok, why = by_target(box, task, loc)
+                    except (RuntimeError, OSError):
+                        continue
+                    if ok:
+                        talked.append(why)
+                        return
+
+            threading.Thread(target=watch_target, daemon=True).start()
         t = time.monotonic()
         requests = task["request"] if isinstance(task["request"], list) else [task["request"]]
         answers = list(task.get("answers", []))
@@ -224,6 +252,7 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
         for req in requests:
             run = do(box, req, float(task.get("limit_s", 300)), answers)
         r["seconds"] = round(time.monotonic() - t, 1)
+        stop_watch.set()
         r.update(outcome=(run or {}).get("outcome", "timed out"),
                  steps=len((run or {}).get("steps", [])))
         shot = box.shot(shots / f"{tid}.end.png")
@@ -243,6 +272,10 @@ def run_task(box: Box, task: dict, tid: str, states: Path, shots: Path,
             want = [int(w, 16) if isinstance(w, str) else w for w in want]
             r.update(done=got in want, location=None if got is None else hex(got),
                      why=f"in location {got if got is None else hex(got)}")
+            if task.get("target"):  # and stood by them (talking, when asked) on the way
+                r.update(done=r["done"] and bool(talked),
+                         why=r["why"] + (f", {talked[0]}" if talked else
+                                         f", never by {task['target']}"))
         elif task.get("expect"):  # a question with a known answer: in its words
             said = r["outcome"].lower()
             missing = [w for w in task["expect"] if w.lower() not in said]

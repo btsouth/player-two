@@ -210,8 +210,10 @@ def is_paused(img: np.ndarray) -> bool:
     x0, y0, x1, y1 = PAUSE_BOX
     if float((img[y0:y1, x0:x1].min(axis=2) > 200).mean()) <= 0.005:
         return False
-    # The battle windows are still there, dimmed (not a dark field with someone in white).
-    return sum(len(row) for row in runs_in(lib(), img, BOTTOM)) >= 4
+    # The battle windows are still there, dimmed (not a dark field with someone in white):
+    # words and numbers in them, not a dark floor's pattern read as dashes and specks.
+    return sum(1 for row in runs_in(lib(), img, BOTTOM) for r in row
+               if re.search(r"[A-Za-z]{3,}|\d{2,}", r.text)) >= 4
 
 
 def _slot(x: int) -> int:
