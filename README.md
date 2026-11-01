@@ -49,38 +49,44 @@ the game it's built and measured on.
 
 ## Measured on live Steam
 
-Chrono Trigger on Steam, on my Linux desktop, nights of Oct 31 and Nov 1, both nights added
-together, with Battle Mode set to Wait. Each request was sent to the running app as text, so
-speech recognition isn't part of these numbers. Times are for the whole job; Player Two starts
-speaking within 0.1 to 2 seconds of a request.
+Chrono Trigger on Steam, on my Linux desktop, three sessions from the night of Oct 31 to the
+afternoon of Nov 1, all added together, with Battle Mode set to Wait. Each request was sent to
+the running app as text, so speech recognition isn't part of these numbers. Times are for the
+whole job; Player Two starts speaking within 0.1 to 2 seconds of a request.
 
 | Request | Passed | Time |
 |---|---|---|
-| "Where am I?" | 8/8 | 4 to 10 s |
-| "What's on the screen?" (the demo save) | 7/7 | first words in about 2 s |
-| "Take me to the fair", from the world map | 11/11 | 3 to 10 s, once 38 s |
+| "Where am I?" | 12/12 | 4 to 10 s |
+| "What's on the screen?" (the demo save) | 9/9 | first words in about 2 s |
+| "What does it look like?" (after one fix; 0/2 before it) | 4/4 | 2 to 3 s |
+| "Who's here?" | 1/1 | 2.4 s |
+| "Take me to the fair", from the world map | 22/22 | 3 to 10 s, once 38 s |
 | "Take me to the fair", from inside a shop or the inn | 4/4 | 20 to 36 s |
-| "Take me back outside" | 13/14 | 4 to 29 s |
-| "Buy three potions" | 3/3 | 28 to 48 s |
-| "Rest at the inn" (after two fixes; the 3 tries before them failed) | 4/4 | 28 to 63 s |
-| "What are we fighting?" | 9/9 | 3 to 6 s |
-| "Attack the one on the left" | 10/11 | 7 to 10 s |
-| "Crono, use Cyclone", when it was his turn (3 other times it said he wasn't ready, which was true) | 7/7 | 9 to 27 s |
-| "Heal Marle" and the like, in a fight | 10/12 | 13 to 42 s |
-| "Win this fight for me" | 14/14 | 10 to 155 s |
+| "Take me back outside" | 22/23 | 4 to 29 s |
+| "Buy three potions" (gold and count checked every time) | 14/14 | 19 to 48 s |
+| "Buy a hi-potion" where it isn't sold: says so and lists what is | 1/1 | 16 s |
+| "Rest at the inn" (after two fixes; the 3 tries before them failed) | 5/5 | 26 to 63 s |
+| "Take me to the save point" | 2/2 | 13 to 18 s |
+| "Talk to ..." someone, by name or description | 14/19 | 8 to 107 s |
+| "What are we fighting?" | 12/12 | 2 to 6 s |
+| "Attack the one on the left" | 13/14 | 6 to 10 s |
+| "Crono, use Cyclone", when it was his turn (4 other times it said he wasn't ready or was knocked out, which was true) | 9/9 | 9 to 27 s |
+| "Heal Marle" and the like, in a fight (once at full HP: it said so and pressed nothing) | 15/17 | 1 to 42 s |
+| "Win this fight for me" | 17/18 | 10 to 155 s |
 | "Run away" | 6/6 | 10 to 16 s |
 | "Heal everyone up", outside a fight | 4/4 | 16 to 26 s |
 | "Set the battle mode to Wait" | 8/8 | 8 to 12 s |
-| "Talk to ..." someone, by name or description | 11/16 | 8 to 107 s |
 
 What doesn't work well yet, from the same runs:
 
 - A long trip to Guardia Castle took 2 to 4 minutes through forest fights.
-- "Talk to ..." missed people described by position ("the shopkeeper on the left") and people
-  walking around.
-- Walking to a save point failed (0/1).
+- "Win this fight for me" lost once, a fight that started with two of three already knocked out,
+  and it lost all 3 tries against a boss.
+- "Talk to ..." can miss people who walk around. When two people fit a description it now asks
+  which one.
+- Once in about 60 requests the model answered with a sentence that had nothing to do with the
+  game, and it was read out.
 - On a save where Crono was alone, "What's on the screen?" said I was Marle (3/3).
-- It lost all 3 tries against a boss.
 
 Offline benches, on labelled frames from the Steam version and on the SNES version in an emulator:
 
