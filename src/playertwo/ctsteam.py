@@ -33,6 +33,7 @@ CANVAS = (2560, 1440)
 TOP = (390, 16, 2180, 132)  # the message / description bar
 BOTTOM = (200, 1150, 2380, 1438)  # the command, list and party windows
 PAUSE_BOX = (980, 520, 1580, 720)  # where "Pause" shows
+PARTY_X = 1400  # left of the party box names (about 1477), when no line read as one
 SLOT_TEXT_X = (309, 723, 1138)  # where "Attack" starts in each party slot's command window
 # Tech and item lists have two columns: text starts near x 310 (left) and 1160 to 1330
 # (right). An entry, or the hand, left of this is in the left column; text starting past
@@ -136,6 +137,7 @@ class State:
     entry_rc: tuple[int, int | None] | None = None
     usable: bool | None = None
     party: list[Member] = field(default_factory=list)
+    slots: list[str | None] = field(default_factory=list)  # party box rows, None unread
     actor: str = ""
     top: str = ""
     gloves: list[tuple[int, int]] = field(default_factory=list)  # glove tips
@@ -150,9 +152,14 @@ class State:
     def member(self, name: str) -> Member | None:
         return next((m for m in self.party if m.name.lower() == name.lower()), None)
 
+    def who_in(self, slot: int) -> str | None:
+        """Whose row a party slot is (the box's rows, top down), None if unread."""
+        names = self.slots or [m.name for m in self.party]
+        return names[slot] if slot < len(names) else None
+
     def ready(self) -> list[str]:
         """Who has a command window open."""
-        return [self.party[c].name for c in self.columns if c < len(self.party)]
+        return [w for c in self.columns if (w := self.who_in(c))]
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -163,6 +170,25 @@ def numfix(s: str) -> str:
     t = s.translate(str.maketrans({"l": "1", "I": "1", "i": "1", "|": "1", "O": "0",
                                    "o": "0", "S": "5", "B": "8", "D": "0"}))
     return re.sub(r"(?<=/)\s+|\s+(?=/)", "", t)
+
+
+def _member(row: list[Run]) -> tuple[Member | None, int | None]:
+    """A party box line as a fighter (None if the name doesn't read as one), and where the
+    name starts (None if the line isn't a name and HP at all)."""
+    i = _hp_run(row)
+    if i is None or i == 0:
+        return None, None
+    name_run = row[i - 1]
+    if row[i].x0 - name_run.x1 > 700:
+        return None, None
+    who = snap(name_run.text, NAMES, 0.5)
+    if who not in NAMES:
+        return None, name_run.x0
+    nums = NUM.findall(numfix(" ".join(r.text for r in row[i:])))
+    hp = nums[0] if nums else (None, None)
+    mp = nums[1] if len(nums) > 1 else (None, None)
+    return (Member(who, *(int(n) if n is not None else None for n in (*hp, *mp)),
+                   name_run.colour), name_run.x0)
 
 
 def _hp_run(row: list[Run]) -> int | None:
@@ -218,23 +244,49 @@ def read(image, full: bool = True) -> State:
     lines = runs_in(lib(), img, BOTTOM, blank)
     t2 = time.perf_counter()
     party_x = None
+    found: list[Member | None] = []
     for row in lines:
-        i = _hp_run(row)
-        if i is None or i == 0:
+        m, x = _member(row)
+        if x is not None:
+            party_x = x if party_x is None else min(party_x, x)
+        found.append(m)
+    for k, (m, row) in enumerate(zip(found, lines, strict=True)):
+        if m is not None and m.hp is not None:
             continue
-        name_run = row[i - 1]
-        if row[i].x0 - name_run.x1 > 700:
+        # The Start pause halves every colour, so a critical (grey) line is drawn at about
+        # 83, barely over the mask's floor: its strokes break and it misreads. Read that
+        # line again lit back up, and keep it only if it then reads as a fighter.
+        x0 = party_x - 40 if party_x is not None else PARTY_X
+        if not any(r.x1 > x0 for r in row):
             continue
-        party_x = name_run.x0 if party_x is None else min(party_x, name_run.x0)
-        nums = NUM.findall(numfix(" ".join(r.text for r in row[i:])))
-        hp = nums[0] if nums else (None, None)
-        mp = nums[1] if len(nums) > 1 else (None, None)
-        who = snap(name_run.text, NAMES, 0.5)
-        if who not in NAMES:
-            continue
-        st.party.append(Member(who,
-                               *(int(n) if n is not None else None for n in (*hp, *mp)),
-                               name_run.colour))
+        y = row[0].y
+        band = img[max(0, y - 32):y + 32, x0:BOTTOM[2]]
+        top = float(np.percentile(band.max(axis=2), 99.7))
+        if top >= 200:
+            continue  # not dimmed: a second read would see the same
+        lit = np.clip(band.astype(np.float32) * (255 / max(top, 64)), 0, 255).astype(np.uint8)
+        again = runs_in(lib(), lit, (0, 0, lit.shape[1], lit.shape[0]))
+        near = min(again, key=lambda r: abs(r[0].y - 32), default=None)
+        m2 = _member(near)[0] if near else None
+        if m2 is not None and m2.hp is not None and m2.hp <= (m2.hp_max or 0):
+            if m2.mp is not None and m2.mp > (m2.mp_max or 0):
+                m2.mp = m2.mp_max = None
+            found[k] = m2
+    # Where the HP column starts, from the lines that read: an unread line with words (not
+    # the window edge's specks) in both the name and the HP column is a fighter's row, and
+    # keeps its place in the slots so the fighters below it keep theirs.
+    hp_xs = [row[i].x0 for m, row in zip(found, lines, strict=True)
+             if m and (i := _hp_run(row)) is not None]
+    names = set()
+    for m, row in zip(found, lines, strict=True):
+        if m is not None and m.name not in names:
+            names.add(m.name)
+            st.party.append(m)
+            st.slots.append(m.name)
+        elif m is None and party_x is not None and hp_xs and \
+                any(abs(r.x0 - party_x) < 40 and r.x1 - r.x0 >= 60 for r in row) and \
+                any(abs(r.x0 - min(hp_xs)) < 40 and r.x1 - r.x0 >= 60 for r in row):
+            st.slots.append(None)
     st.actor = next((m.name for m in st.party if m.colour == "yellow"), "")
     left = [[r for r in row if party_x is None or r.x1 < party_x - 20] for row in lines]
     left = [row for row in left if row]
@@ -289,10 +341,10 @@ def read(image, full: bool = True) -> State:
             # Not a battle list (a text box with a choice, a field menu): no known names.
             st.kind, st.entries, st.usable_rows, st.entry, st.entry_rc = "none", [], [], "", None
             st.usable = None
-    if st.kind == "command" and st.actor_col is not None and st.actor_col < len(st.party):
+    if st.kind == "command" and st.actor_col is not None and st.who_in(st.actor_col):
         # The column the hand is in says whose command it is. The yellow name can't be
         # trusted alone: a critical-HP actor is drawn grey, and pausing dims every name.
-        st.actor = st.party[st.actor_col].name
+        st.actor = st.who_in(st.actor_col)
     if st.gloves and not (st.kind == "list" and st.entry_rc is not None):
         # Gloves over the field while the hand is still in a list: a preview of who a
         # combo or group tech would hit, not the target picker.

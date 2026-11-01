@@ -380,19 +380,21 @@ class Executor:
     async def _pick_actor(self, st: State, actor: str) -> State:
         if not actor:
             return st
-        slot = next((i for i, m in enumerate(st.party) if same_name(m.name, actor)), None)
+        # Slots are the party box's rows, so a row that didn't read doesn't move the rest.
+        rows = st.slots or [m.name for m in st.party]
+        slot = next((i for i, n in enumerate(rows) if n and same_name(n, actor)), None)
         if slot is None:
             names = ", ".join(m.name for m in st.party)
             raise Stop(f"no one called {actor} in the party ({names})")
-        if st.party[slot].down:
-            raise Stop(f"{st.party[slot].name} is knocked out")
-        name = st.party[slot].name
+        name = rows[slot]
+        if st.member(name).down:
+            raise Stop(f"{name} is knocked out")
         if slot not in st.columns:
             if self._unpause_first:
                 await self.burst([])  # their turn needs the fight to run
                 st = await self._fresh()
             st = await self.until(lambda s: s.kind != "command" or slot in s.columns
-                                  or (slot < len(s.party) and s.party[slot].down),
+                                  or ((m := s.member(name)) is not None and m.down),
                                   self.t.actor_wait_s, st)
             if st.kind != "command" or slot not in st.columns:
                 ready = ", ".join(st.ready()) or "no one"

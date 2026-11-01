@@ -110,6 +110,28 @@ def test_ready_columns_and_where_the_actor_stands():
     assert (st.actor, st.columns, st.actor_col) == ("Frog", [1, 2], 1)
 
 
+def test_critical_names_under_the_pause_and_whose_turn_it_is():
+    # Paused with two fighters at 1 HP: their grey lines are drawn at about 83 and used to
+    # misread, Crono dropped out of the party and the slots below him moved up a place.
+    for name, actor, hps in (("020449-00", "Frog", [(1, 811), (101, 494), (1, 430)]),
+                             ("015255-00", "Marle", [(780, 780), (1, 494), (1, 430)]),
+                             ("180328-00", "Frog", [(1, 780), (1, 494), (430, 430)])):
+        st = ctsteam.read(load(name))
+        assert st.paused and st.actor == actor, name
+        assert [(m.name, m.hp, m.hp_max) for m in st.party] == [
+            (who, hp, most) for who, (hp, most) in zip(NAMES, hps, strict=True)], name
+        assert st.slots == list(NAMES)
+    st = ctsteam.read(load("180121-00"))  # Crono's own turn, at 1 HP
+    assert st.actor == "Crono" and st.member("Crono").hp == 1
+
+
+def test_an_unread_row_keeps_its_slot():
+    st = ctsteam.State(kind="command", columns=[1, 2], actor_col=1, slots=[None, "Frog", "Marle"],
+                       party=[ctsteam.Member("Frog", 101, 494, 60, 65, "yellow"),
+                              ctsteam.Member("Marle", 1, 430, 62, 66, "grey")])
+    assert st.who_in(0) is None and st.who_in(1) == "Frog" and st.ready() == ["Frog", "Marle"]
+
+
 def test_list_rows_and_greyed_entries():
     st = ctsteam.read(load("134933-11"))
     rows = [r for r in st.entries if r]
