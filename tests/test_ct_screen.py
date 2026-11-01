@@ -800,16 +800,27 @@ async def test_what_are_we_fighting_is_answered_from_a_count_and_the_party_box(m
     s.grab_now = grab_now
     asked = []
 
-    async def what_we_fight(image, st):
-        asked.append([m.name for m in st.party])
+    async def what_we_fight(image, st, known=None):
+        asked.append(([m.name for m in st.party], known))
         return "Three Gargoyles. Everyone's at full health."
 
-    s.agent = SimpleNamespace(_ct_steam=lambda f: True, history=[], what_we_fight=what_we_fight)
+    s.agent = SimpleNamespace(_ct_steam=lambda f: True, history=[], what_we_fight=what_we_fight,
+                              _executor=SimpleNamespace(acted_at=0.0))
     monkeypatch.setattr(ctscreen, "sharp", lambda image: True)
     monkeypatch.setattr(ctscreen, "look", lambda image, party=(): _fight())
     assert await s._screen_answer("what are we fighting?")
     assert said == ["Three Gargoyles. Everyone's at full health."]
-    assert asked == [["Crono", "Frog", "Marle"]]
+    assert asked == [(["Crono", "Frog", "Marle"], None)]
+    # The fight's opening count, seconds old and no command since: said with no look
+    # (live 3: 1.9 to 3.2 s for a second look).
+    from playertwo.battle import Foes
+
+    s.start_foes = start = Foes(3, "Gargoyles", time.monotonic())
+    assert await s._screen_answer("what are we fighting?")
+    assert asked[-1][1] is start
+    s.agent._executor.acted_at = time.monotonic()  # a command since: it may be fewer
+    assert await s._screen_answer("what are we fighting?")
+    assert asked[-1][1] is None
 
 
 def test_a_box_player_two_just_said_isnt_said_again_but_the_next_one_is():

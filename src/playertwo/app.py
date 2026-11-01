@@ -151,6 +151,7 @@ SETTABLE: dict[str, tuple] = {
 }
 SPEECH_RATES = (0.8, 2.0)
 FOES_GAP_S = 6.0  # a fight the player plays: enemies counted again at most this often
+START_COUNT_S = 20.0  # a fight's opening count answers "what are we fighting?" this long
 # Verbosities that get a line of what a place is like the first time it's entered.
 FEEL_VERBOSITY = ("normal", "detailed")
 # Two screens whose colours share this much are taken for one place not surveyed (its
@@ -1003,6 +1004,7 @@ class Session:
         elif self.reader.fight_started:
             # The reader says turns and HP; what the party is up against is a look's.
             self.reader.fight_started = False
+            self.start_foes = None  # the last fight's count isn't this one's
             # (A narration cancelled just above as stale isn't done yet, but it's over.)
             if self.narrating is None or self.narrating.done() or stale:
                 self.narrating = self.read_model = asyncio.create_task(
@@ -1052,7 +1054,20 @@ class Session:
         if self.agent.foes is None:
             self.agent.foes = foes
         self.foes_at = time.monotonic()
+        self.start_foes = foes
         await self._foe_news(foes.line())
+
+    def _start_count(self):
+        """The fight's opening count while it still holds: a few seconds old, with no
+        party command put in since (only a command takes an enemy down), so "what are
+        we fighting?" right after "Fight." is said at once, not after a second look
+        (live 3: 1.9 to 3.2 s)."""
+        foes = getattr(self, "start_foes", None)
+        ex = getattr(self.agent, "_executor", None)
+        acted = getattr(ex, "acted_at", 0.0) if ex is not None else 0.0
+        if foes is None or time.monotonic() - foes.at > START_COUNT_S or acted >= foes.at:
+            return None
+        return foes
 
     async def _foe_news(self, line: str) -> None:
         """An enemy count, said unless Player Two is acting (its lines go first)."""
@@ -1403,7 +1418,8 @@ class Session:
             if (ctscreen.ASK_FOE.search(ctscreen._plain(text)) and lk.battle is not None
                     and lk.battle.party and hasattr(self.agent, "what_we_fight")):
                 # The enemies, counted by a look, and the party's HP in a few words.
-                line = await self.agent.what_we_fight(frame.image, lk.battle)
+                line = await self.agent.what_we_fight(frame.image, lk.battle,
+                                                      known=self._start_count())
             line = line or await asyncio.to_thread(ctscreen.answer, text, lk,
                                            self.reader.active or self.reader.party,
                                            self.reader.heard, frame.image)

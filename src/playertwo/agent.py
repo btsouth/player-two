@@ -1226,11 +1226,12 @@ class Agent:
             look = plural(next(n for n in names if n.lower() in look.lower()))
         return Foes(count, look, time.monotonic())
 
-    async def what_we_fight(self, image, st: State) -> str | None:
+    async def what_we_fight(self, image, st: State, known: Foes | None = None) -> str | None:
         """"What are we fighting?" in a fight: the enemies, counted by a look, and the
         party's HP in a few words ("Three Gargoyles. Crono's full, Frog's at 1 of 494,
-        Marle's full."). None when the look fails (the agent answers then)."""
-        foes = await self.count_foes(image, [m.name for m in st.party])
+        Marle's full."). None when the look fails (the agent answers then). known: a
+        count that still holds (the fight's opening one), said with no look."""
+        foes = known or await self.count_foes(image, [m.name for m in st.party])
         if foes is None:
             return None
         self.foes = foes
