@@ -355,3 +355,75 @@ state = "rooms/deep-c"
 request = "take me to the market"
 location = "0x11"
 limit_s = 240
+
+# 600 A.D.: Truce's houses and the forest (from the save just arrived in 600 A.D.), Dorino
+# (from the save south of Zenan Bridge).
+[[task]]
+id = "r-res600-out"
+category = "rooms"
+state = "rooms/deep-72"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-forest600-out"
+category = "rooms"
+state = "rooms/door-77"
+request = "get me out of the forest"
+to = "0x1F1"
+location = "0x1F1"
+walk_s = 180
+limit_s = 300
+
+[[task]]
+id = "r-dorino-inn-out"
+category = "rooms"
+state = "rooms/deep-8a"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-dorino-innkeeper"
+category = "rooms"
+state = "rooms/door-8a"
+request = "I want to rest, talk to the innkeeper"
+to = "0x8A"
+target = "the innkeeper"
+talk = true
+location = "0x8A"
+limit_s = 180
+
+[[task]]
+id = "r-dorino-shop"
+category = "rooms"
+state = "rooms/door-8b"
+request = "take me to the shopkeeper"
+to = "0x8B"
+target = "the shopkeeper"
+talk = true
+location = "0x8B"
+limit_s = 180
+
+[[task]]
+id = "r-elder-out"
+category = "rooms"
+state = "rooms/deep-89"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-elder-oldman"
+category = "rooms"
+state = "rooms/door-89"
+request = "talk to the old man"
+to = "0x89"
+target = "the old man"
+talk = true
+location = "0x89"
+limit_s = 180

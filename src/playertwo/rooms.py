@@ -615,6 +615,22 @@ class Rooms:
                 return self._player_steam(v, self.rooms[loc], cam, score, near)
         return None
 
+    def arriving(self, e: Exit, steam: bool) -> Here | None:
+        """Where the view will likely be on coming out of a way out into a surveyed place
+        (where the character comes out, the view following it as far as it goes), for
+        the first look there to start from."""
+        room = self.rooms.get(e.to)
+        if room is None or not any(e.at):
+            return None
+        if steam:
+            lo_x, lo_y, hi_x, hi_y = steam_range(room)
+            fx, fy = STEAM_FOLLOW
+        else:
+            lo_x, lo_y, hi_x, hi_y = room.cam_range()
+            fx, fy = FOLLOW
+        cam = (int(min(max(e.at[0] - fx, lo_x), hi_x)), int(min(max(e.at[1] - fy, lo_y), hi_y)))
+        return Here(e.to, cam, e.at[0], e.at[1], 0.0, False, steam)
+
     def prefer(self, loc: int, near: Here | None) -> int:
         """Which of two places that look the same (a forest in two eras) it more likely
         is, least first: the one it was just in, then one whose ways out lead onto the
@@ -1143,8 +1159,10 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     trail: deque = deque()  # (when, place, x, y) over the last seconds
     best: tuple[int, int, float] = (-1, 10**6, 0.0)  # place, fewest tiles to go, since when
 
+    coming: Here | None = None  # where a way out just taken comes out, to look there first
+
     async def look() -> Here | None:
-        return await asyncio.to_thread(rooms.locate, await shoot(), here)
+        return await asyncio.to_thread(rooms.locate, await shoot(), coming or here)
 
     try:
         while time.monotonic() - t0 < limit:
@@ -1177,6 +1195,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     continue
                 if way is not None and misses >= 3:
                     steer(None)
+                    if coming is None and here is not None:
+                        coming = rooms.arriving(way, here.steam)
                     if way.to == goal and (goal in rooms.worlds or goal not in rooms.rooms):
                         # Out of the surveyed places, where it was going: wait the fade.
                         await asyncio.sleep(1.0)
@@ -1198,6 +1218,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 continue
             faded = False
             misses = 0
+            coming = None
             if here is not None and now.loc != here.loc:
                 log(f"rooms: now in {rooms.name(now.loc)}")
                 gone_by = None
@@ -1263,7 +1284,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             return (f"arrived: at {target} ({time.monotonic() - t0:.0f} s), "
                                     "facing them, but pressing a brought nothing up: look")
                         return (f"arrived: at {target}, facing them, and pressed a to talk "
-                                f"({time.monotonic() - t0:.0f} s): read what's on screen")
+                                f"({time.monotonic() - t0:.0f} s): read their line to the "
+                                "player word for word; a question in it (rest? buy?) is "
+                                "the player's to answer")
                     return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"
                 goals = set(ends)
                 if path is None and room.learned:
@@ -1485,8 +1508,8 @@ async def pick_exit(muse, game: str, said: str, here: str,
     return names[i - 1], ("talk: " if data.get("talk") is True else "") + why
 
 
-TALK = re.compile(r"\b(talk|speak|chat|ask|tell|buy|sell|shop|rest|sleep|stay|save|"
-                  r"open|search|check|read|examine|use)\b", re.IGNORECASE)
+TALK = re.compile(r"\b(talk|speak|chat|ask|tell|buy|sell|shop|rest|sleep|stay|"
+                  r"save(?! point)|open|search|check|read|examine|use)\b", re.IGNORECASE)
 
 
 def describe(rooms: Rooms, here: Here) -> str:
