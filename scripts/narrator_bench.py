@@ -239,6 +239,8 @@ def summarize(args) -> None:
     for k, r in recs.items():
         if k not in gt:
             continue
+        if args.res and (Image.open(gt[k]["path"]).width >= 1600) != (args.res == "full"):
+            continue  # full: frames as the app sees them; small: 960 previews
         sc = score(gt[k], r["said"])
         rows.append((gt[k], r, sc))
     def mean(v):
@@ -304,6 +306,9 @@ QUESTIONS = [
     ("164526-01", "what does that say", ["Attack all enemies with water."]),
     ("140421-06", "what does that say", ["Restore moderate HP to all allies."]),
     ("a6", "what does that say", ["Leene Square"]),
+    ("140406-00", "what's my HP", ["Crono", "811", "347", "430"]),
+    ("175358-00", "what's Frog's HP", ["Frog", "494"]),
+    ("h-menu-summit", "how's everyone doing", ["811", "455", "199"]),
 ]
 
 
@@ -490,6 +495,7 @@ def main() -> None:
     s.add_argument("run")
     s.add_argument("--gt", required=True)
     s.add_argument("-v", action="store_true")
+    s.add_argument("--res", default="", choices=["", "full", "small"])
     a = ap.parse_args()
     if a.cmd == "run":
         asyncio.run(run(a))

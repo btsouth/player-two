@@ -307,6 +307,12 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
             lk.parts["desc"] = clean(" ".join(r.text for r in sorted(desc, key=lambda r: r.x0)))
             lk.texts.add("desc")
             lk.typing.add("desc")
+        if lk.kind == "menu" and name in MAIN:
+            # The main page shows the party's HP: who's in danger, as in a fight.
+            low = [f"{n} is down" if h == 0 else f"{n} {h} HP"
+                   for n, h, top in _menu_hp(lk, list(party)) or [] if h < top / 3]
+            if low:
+                lk.parts["danger"] = ", ".join(low)
         return lk
     if question is not None:
         lk.kind = "choice"
@@ -590,10 +596,11 @@ def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
                 out.append(f"{m.name} is knocked out" if m.hp == 0 else
                            f"{m.name} {m.hp} of {m.hp_max} HP")
             return ", ".join(out) + "." if out else None
-        hp = _menu_hp(lk)
-        if hp and len(party) >= len(hp) and not who:
-            return ", ".join(f"{n} {h} of {m} HP" for n, (h, m) in zip(party, hp, strict=False)) + "."
-        return None
+        rows = [r for r in _menu_hp(lk, list(party)) or [] if not who or r[0] in who]
+        if not rows:
+            return None
+        return ", ".join(f"{n} is knocked out" if h == 0 else f"{n} {h} of {m} HP"
+                         for n, h, m in rows) + "."
     if ASK_ITEMS.search(q):
         items, unread = [], 0
         for row in lk.lines:
@@ -614,14 +621,39 @@ def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
     return None
 
 
-def _menu_hp(lk: Look) -> list[tuple[int, int]]:
-    """HP of the active party on the field menu's main page, top to bottom."""
+MENU_HP_Y = (252, 668, 1088)  # the HP rows of the three party blocks on the menu's main page
+
+
+def _menu_hp(lk: Look, party: list[str]) -> list[tuple[str, int, int]] | None:
+    """(name, HP, max HP) of the active party on the field menu's main page, top to
+    bottom; None if a block's HP or name can't be told. Low HP is right-aligned, apart
+    from its "HP :" label; names that don't read come from the party order."""
     if lk.kind != "menu" or lk.focus not in MAIN:
-        return []
-    out = []
+        return None
+    hp: dict[int, tuple[int, int]] = {}
+    names: dict[int, str] = {}
     for row in lk.lines:
-        for r in row:
-            m = re.match(r"HP\s*[:;]\s*(\d+)\s*/\s*(\d+)$", ctsteam.numfix(r.text).strip())
-            if m and 900 < r.x0 < 1300:
-                out.append((r.y, int(m.group(1)), int(m.group(2))))
-    return [(h, mx) for _y, h, mx in sorted(out)]
+        runs = [r for r in row if 900 < r.x0 < 1500]
+        if not runs:
+            continue
+        y = runs[0].y
+        k = min(range(3), key=lambda i: abs(MENU_HP_Y[i] - y))
+        m = re.search(r"HP\s*[:;]\s*(\d+)\s*/\s*(\d+)",
+                      " ".join(ctsteam.numfix(r.text) for r in runs))
+        if m and abs(MENU_HP_Y[k] - y) < 40:
+            h, top = int(m.group(1)), int(m.group(2))
+            if top > 0 and h <= top:
+                hp[k] = (h, top)
+            continue
+        k = min(range(3), key=lambda i: abs(MENU_HP_Y[i] - 137 - y))
+        for r in runs:
+            n = snap(r.text, ctsteam.NAMES, 0.75)
+            if n in ctsteam.NAMES and abs(MENU_HP_Y[k] - 137 - y) < 40:
+                names[k] = n
+    slots = range(max(*hp, *names, min(3, len(party)) - 1, -1) + 1) if hp else range(0)
+    if not hp or any(k not in hp for k in slots):
+        return None
+    who = [names.get(k) or (party[k] if k < len(party) else "") for k in slots]
+    if not all(who) or len(set(who)) < len(who):
+        return None
+    return [(n, *hp[k]) for n, k in zip(who, slots, strict=True)]

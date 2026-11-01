@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import cv2
@@ -118,8 +119,9 @@ def first_line(path: Path) -> tuple[str, str]:
     ("135007-19", "battle", "Athenian Water. Revives a KO'd ally."),
     ("140314-00", "battle", "Gargoyle. Crono 1 HP, Marle 1 HP."),
     ("180436-01", "battle", "Paused. Crono 1 HP, Frog 1 HP."),
-    ("135431-01", "menu", "Menu. Techs."),
-    ("135629-31", "menu", "Menu. Techs. View or use known techs."),
+    ("135431-01", "menu", "Menu. Techs. Crono 227 HP."),  # the party's HP is on the page
+    ("135629-31", "menu", "Menu. Techs. View or use known techs. Crono 227 HP."),
+    ("175358-00", "menu", "Menu. Equipment. Frog 1 HP, Marle 1 HP."),
     ("135445-06", "menu", "Shelter, 21. Fully restores HP/MP at a save point."),
     ("140413-03", "menu", "Frog."),  # the highlighted block, counted from its neighbours
     ("140421-06", "menu", "Crono, Frog and Marle. Restore moderate HP to all allies."),
@@ -132,7 +134,8 @@ def test_live_frames_read_as_a_screen_reader_would(name, kind, line):
 def test_half_typed_menu_descriptions_are_left_unsaid():
     for name in ("135428-00", "140409-01", "175403-01"):  # "Change characte", ...
         kind, line = first_line(FRAMES / f"{name}.jpg")
-        assert kind == "menu" and line.count(".") == 2, line  # "Menu. Equipment." only
+        assert kind == "menu" and re.fullmatch(r"Menu\. \w+\.( \w+ \d+ HP(, \w+ \d+ HP)*\.)?",
+                                               line), line  # "Menu. Equipment." and HP only
 
 
 @needs_frames
@@ -224,6 +227,12 @@ def test_questions_the_screen_answers_at_once():
     assert ask(battle, "what does it say") == "Combo Attack: Reduces HP to 1."
     assert ask(FRAMES / "135428-00.jpg", "how's everyone doing") == (
         "Crono 227 of 811 HP, Frog 241 of 494 HP, Marle 188 of 430 HP.")
+    # 1 HP sits apart from its "HP :" label; it must not shift everyone's HP up a name.
+    assert ask(FRAMES / "140406-00.jpg", "what's my HP") == (
+        "Crono 1 of 811 HP, Frog 347 of 494 HP, Marle 1 of 430 HP.")
+    assert ask(FRAMES / "175358-00.jpg", "what's Frog's HP") == "Frog 1 of 494 HP."
+    menu = ctscreen.look(cv2.imread(str(FRAMES / "140406-00.jpg")), PARTY)
+    assert ctscreen.answer("what's my HP", menu, ["Frog", "Crono", "Marle"]) is None  # Frog reads
     assert ask(FRAMES / "140314-00.jpg", "what are we fighting") == "The target now is Gargoyle."
     assert ask(FRAMES / "134854-00.jpg", "what items do we have").startswith("On screen: Potion")
     # The field shows none of it: the agent answers (and may open the menu).
