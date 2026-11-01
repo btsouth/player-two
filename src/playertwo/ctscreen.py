@@ -425,6 +425,7 @@ class Reader:
         self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
         self.texts: dict[str, float] = {}  # text said -> when
         self.heard = ""  # the last text box read out, for "what did he say?"
+        self.danger_at: dict[str, float] = {}  # who's low, as said -> when
 
     def reset(self) -> None:
         self.kind, self.said, self.seen = "none", {}, {}
@@ -527,8 +528,11 @@ class Reader:
                 continue
             if self.said.get(part) == value:
                 continue
-            if part == "danger" and now - self.texts.get("danger:" + value, -1e9) < 20:
-                self.said[part] = value  # the party box was hidden a moment: not news
+            if part == "danger" and now - self.danger_at.get(value, -1e9) < (
+                    20 if lk.kind == "battle" else 120):
+                # The party box was hidden a moment, or the menu page shows the same HP
+                # again: not news (in a fight, a reminder after 20 s is).
+                self.said[part] = value
                 continue
             if part in lk.texts:
                 whole = finished(value)
@@ -550,7 +554,7 @@ class Reader:
             if part == "text":
                 self.heard = value
             if part == "danger":
-                self.texts["danger:" + value] = now
+                self.danger_at[value] = now
             if part in lk.typing and before and value.startswith(before) and len(value) > len(before):
                 # It paused after a sentence, then typed on: only the rest is new.
                 value = value[len(before):].strip()

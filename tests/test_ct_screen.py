@@ -492,3 +492,20 @@ def test_a_setting_is_said_with_its_value():
     lk = ctscreen.look(cv2.imread(str(SETTINGS)), PARTY)
     assert lk.parts["focus"] == "Battle Mode, Wait"
     assert Reader().update(lk, first=True) == "Battle Mode, Wait."  # its help is cut off
+
+
+def test_low_hp_on_the_menu_page_is_said_once_not_on_every_return():
+    r = Reader()
+    assert r.update(look(focus="Equipment", danger="Crono 1 HP"), now=0) == (
+        "Equipment. Crono 1 HP.")
+    r.update(look("none"), now=10)  # the menu closed
+    assert r.update(look(focus="Techs", danger="Crono 1 HP"), now=40) == "Techs."
+    r.update(look("none"), now=50)
+    assert r.update(look(focus="Techs", danger="Crono 1 HP"), now=200) == "Techs. Crono 1 HP."
+    # In a fight, a reminder after 20 s.
+    b = Reader()
+    b.update(look("battle", danger="Frog 1 HP"), now=0)
+    b.update(look("battle"), now=5)
+    assert b.update(look("battle", danger="Frog 1 HP"), now=10) == ""
+    b.update(look("battle"), now=15)
+    assert b.update(look("battle", danger="Frog 1 HP"), now=30) == "Frog 1 HP."
