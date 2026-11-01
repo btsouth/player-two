@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from . import ctsteam
+from .ctscreen import finished
 from .glyphread import Run, snap
 
 LIST_X = 800  # a hand right of this is in the goods panel
@@ -187,11 +188,13 @@ class Shop:
                  cancelled: Callable[[], bool] = lambda: False,
                  read: Callable[[object], tuple] = ctsteam.menu_read,
                  dialogue: Callable[[object], object] | None = None,
-                 gap_s: float = GAP_S, wait_s: float = WAIT_S):
+                 gap_s: float = GAP_S, wait_s: float = WAIT_S,
+                 window: Callable[[object], bool] | None = None):
         self._press = press
         self._grab = grab
         self._read = read
         self._dialogue = dialogue
+        self._window = window  # whether a text box is up, by its window (ctscreen.box_up)
         self.cancelled = cancelled
         self.gap_s = gap_s
         self.wait_s = wait_s
@@ -219,6 +222,33 @@ class Shop:
             await asyncio.sleep(0.08)
             v = await self.look()
         return v
+
+    async def _up(self) -> bool:
+        """Whether a text box is over the place, read or not."""
+        if self._window is None:
+            from . import ctscreen
+
+            self._window = ctscreen.box_up
+        return await asyncio.to_thread(self._window, self.frame)
+
+    async def _whole_line(self, most: float = 2.5) -> str:
+        """The box's text once it has typed out: the same in two looks a moment apart and
+        ending like a sentence (or whatever it shows after `most` seconds). Pressing a
+        while it types doesn't close it."""
+        end = time.monotonic() + most
+        last, longest = None, ""
+        while True:
+            lk = await self._box()
+            line = ((getattr(lk, "parts", {}) or {}).get("text", "")
+                    if getattr(lk, "kind", "none") == "text" else "")
+            longest = line if len(line) > len(longest) else longest
+            if line and line == last and finished(line):
+                return line
+            if time.monotonic() > end:
+                return longest  # (some looks don't read: the most of it any look read)
+            last = line
+            await asyncio.sleep(0.25)
+            self.frame = await self._grab()
 
     async def _box(self):
         """The text box or choice on screen (ctscreen's look), or None."""
@@ -399,30 +429,38 @@ class Shop:
             v = await self.until(lambda v: v.funds is None, 0.8)
         if v.funds is not None:
             return "The shop screen is still up."
-        # The seller's goodbye: read, then pressed on, so no box is left over the place
-        # (live: the next "take me outside" stopped on it).
+        # The seller's goodbye: read once it has typed out, then pressed on, so no box is
+        # left over the place (live: the next "take me outside" stopped on it). Whether a
+        # box is up is told by its window, not by reading it: live 3 read the goodbye
+        # half typed ("Lucca's devi"), pressed a, found nothing it could read and said
+        # "no box is up" with the box on screen, and the model spent a turn closing it.
         said: list[str] = []
         end = time.monotonic() + 1.6  # the goodbye comes up a moment after the screen goes
-        while time.monotonic() < end:
-            lk = await self._box()
-            if getattr(lk, "kind", "none") == "text":
-                break
+        while time.monotonic() < end and not await self._up():
             await asyncio.sleep(0.2)
             self.frame = await self._grab()
-        for _ in range(4):
-            lk = await self._box()
-            line = (getattr(lk, "parts", {}) or {}).get("text", "") if lk is not None else ""
-            if getattr(lk, "kind", "none") != "text" or not line:
+        pressed = False
+        for _ in range(4):  # a page at a time
+            if not await self._up():
                 break
-            if line not in said:
-                said.append(line)
+            line = await self._whole_line()
+            if not line and not await self._up():
+                break  # a look that wasn't a box after all: a here would talk to them
+            pressed = True
+            if line and not any(x.startswith(line) for x in said):
+                said = [x for x in said if not line.startswith(x)] + [line]
             await self.tap("a")
-            await asyncio.sleep(0.5)
-            self.frame = await self._grab()
-        if said:
-            return "Out of the shop; the seller said: " + " / ".join(f'"{x}"' for x in said) \
-                + " (pressed on: no box is up)."
-        return "Out of the shop."
+            gone = time.monotonic() + 1.0  # closing, or the next page typing out
+            while time.monotonic() < gone:
+                await asyncio.sleep(0.15)
+                self.frame = await self._grab()
+                if not await self._up():
+                    break
+        bye = ("; the seller said: " + " / ".join(f'"{x}"' for x in said)) if said else ""
+        if await self._up():
+            return (f"Out of the shop{bye}. A text box is still up over the place: read it "
+                    "and press a to close it.")
+        return f"Out of the shop{bye}" + (" (pressed on: no box is up)." if pressed else ".")
 
 
 INN_Q = re.compile(r"stay|rest|night|lodging|inn\b|sleep", re.IGNORECASE)

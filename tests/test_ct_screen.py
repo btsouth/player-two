@@ -582,6 +582,18 @@ def test_a_line_starting_with_j_is_read_and_specks_by_the_frame_are_not():
                                 "straight, to the back of the square.")
 
 
+@pytest.mark.skipif(not GOODBYE.exists(), reason="no goodbye frame")
+def test_a_box_is_up_by_its_window_even_closing_and_not_over_the_place():
+    """Live 3: the shop said "no box is up" with the goodbye on screen."""
+    frames = GOODBYE.parent
+    assert ctscreen.box_up(cv2.imread(str(GOODBYE)))
+    assert ctscreen.box_up(cv2.imread(str(frames / "dialogue-fair-seller-goodbye-closing.png")))
+    assert ctscreen.box_up(cv2.imread(str(frames / "dialogue-box-top-frog-woe-summit.png")))
+    for name in ("leene-square-stalls-fountain.png", "interior-cronos-room-upstairs.png",
+                 "battle-woe-gargoyles-mist.png", "interior-truce-inn-bedroom.png"):
+        assert not ctscreen.box_up(cv2.imread(str(frames / name))), name
+
+
 @pytest.mark.skipif(not GUARDS.exists(), reason="no castle guards frame")
 def test_specks_after_a_short_line_are_not_words():
     lk = ctscreen.look(cv2.imread(str(GUARDS)), PARTY)
