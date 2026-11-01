@@ -179,6 +179,12 @@ def test_only_the_good_by_its_name_never_one_like_it():
     assert shop.find(melchior, "Iron Blade") is None
     assert shop.same_good("Brohze Blade", "Bronze Blade")
     assert not shop.same_good("Potion", "Hi-Potion") and not shop.same_good("Ether", "Mid-Ether")
+    # The count view: another good stops the last a; a name that reads as nothing doesn't.
+    potion = fair[0]
+    assert shop.other_good("Panacea", potion, fair) == "Panacea"
+    assert shop.other_good("Hi-Potion", potion, fair) == "Hi-Potion"
+    assert shop.other_good("Pctlcn", potion, fair) is None
+    assert shop.other_good("Potion", potion, fair) is None
 
 
 def test_hi_potion_isnt_bought_where_only_potion_is_sold():
@@ -195,8 +201,11 @@ def test_the_count_view_names_the_good_picked_from_the_list():
     good the hand was put on, so the last a goes ahead."""
     picked = read("shop-melchior-2-buy-list").on
     v = read("shop-melchior-3-item-picked")
-    assert v.kind == "count" and shop.same_good(v.on, picked)
-    assert not shop.same_good(v.on, "Silver Sword")
+    goods = read("shop-melchior-2-buy-list").goods
+    good = next(g for g in goods if g.name == picked)
+    assert v.kind == "count" and shop.other_good(v.on, good, goods) is None
+    silver = next(g for g in goods if g is not good)
+    assert shop.other_good(v.on, silver, goods) == "Bronze Blade"
 
 
 class FakeShopPlus(FakeShop):
@@ -207,8 +216,9 @@ class FakeShopPlus(FakeShop):
     SELL: ClassVar = [("Potion", 5), ("Tonic", 5)]
 
     def __init__(self, funds=400, mode="talk", choice=False, count_shown=lambda c: c,
-                 count_row=0):
+                 count_row=0, paid=None):
         super().__init__(funds)
+        self.paid = paid  # what the last a really costs each (another good than shown)
         self.mode, self.choice, self.on_no = mode, choice, choice
         self.count_shown, self.count_row, self.sold = count_shown, count_row, 0
         if mode.startswith("sell"):
@@ -236,6 +246,11 @@ class FakeShopPlus(FakeShop):
                 self.mode, self.count = "sellcount", 1
             elif b == "b":
                 self.mode = "main"
+            return
+        if m == "count" and b == "a" and self.paid is not None:
+            self.log.append(b)
+            self.funds -= self.paid * self.count
+            self.mode = "list"
             return
         if m == "sellcount":
             self.log.append(b)
@@ -336,6 +351,13 @@ def test_a_count_read_one_too_many_is_said_as_the_gold_says():
     out = asyncio.run(make(game).buy("Potion", 3))
     assert game.stock == {"Potion": 2}
     assert "Bought 2 Potion for 20 G" in out and "the gold says 2" in out, out
+
+
+def test_gold_that_doesnt_fit_the_good_isnt_turned_into_a_count():
+    """2 bought at 200 G each where Potion is 10 G: not "Bought 40 Potion"."""
+    game = FakeShopPlus(funds=1000, paid=200)
+    out = asyncio.run(make(game).buy("Potion", 2))
+    assert "Bought 2 Potion for 400 G" in out and "doesn't fit" in out, out
 
 
 def test_the_count_for_another_good_isnt_bought():

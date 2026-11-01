@@ -158,6 +158,18 @@ def same_good(a: str, b: str) -> bool:
     return difflib.SequenceMatcher(None, x, y).ratio() >= 0.85
 
 
+def other_good(on: str, good: Good, goods: list[Good]) -> str | None:
+    """The name of another good, when `on` (a name read off the screen) reads as one: one
+    of the shop's other goods, or an item the game has that isn't `good`. None when it's
+    `good`, or reads as nothing known (a misread)."""
+    if not on or same_good(on, good.name):
+        return None
+    for g in goods:
+        if g is not good and g.name and same_good(on, g.name):
+            return g.name
+    return on if _plain(on) in KNOWN else None
+
+
 def find(goods: list[Good], want: str) -> Good | None:
     """The good the player means, by its name ("Potion", not "Mid-Potion" or "Hi-Potion");
     None when the shop doesn't sell it (the caller lists what it does)."""
@@ -325,7 +337,7 @@ class Shop:
             funds0 = v.funds
             v = await self.to_list(v)
             v, good = await self.to_good(v, item)
-            have0 = v.stock
+            goods, have0 = list(v.goods), v.stock
             v = await self.set_count(v, count)
             n = v.count
             if n == 0:
@@ -333,10 +345,12 @@ class Shop:
                                f"({good.price} G each)")
             if not v.on:
                 v = await self.until(lambda v: v.kind == "count" and bool(v.on), 0.6)
-            if v.kind != "count" or not same_good(v.on, good.name):
-                # The last a buys what the count shows: it must be what was asked for.
-                raise ShopStop(f"the count shows {v.on or 'a name that does not read'}, "
-                               f"not {good.name}")
+            if v.kind != "count":
+                raise ShopStop("the count went away before buying")
+            if (other := other_good(v.on, good, goods)) is not None:
+                # The last a buys what the count shows: never another good. (A name that
+                # reads as nothing known is a misread: "Brohze Blade", live.)
+                raise ShopStop(f"the count shows {other}, not {good.name}")
             await self.tap("a")
             v = await self.until(lambda v: v.funds is not None and v.funds != funds0, 2.5)
             if v.funds == funds0 and v.kind == "count":
@@ -353,13 +367,14 @@ class Shop:
                 raise ShopStop(f"the funds didn't change ({funds0} G): nothing was bought")
             note = ""
             if good.price and spent != n * good.price:
-                if spent % good.price == 0:
+                k = spent // good.price
+                if spent % good.price == 0 and 0 < k <= count:
                     # The gold says how many: the count misread.
-                    note = f" (the count read {n}; the gold says {spent // good.price})"
-                    n = spent // good.price
+                    note = f" (the count read {n}; the gold says {k})"
+                    n = k
                 else:
-                    note = (f" ({spent} G isn't a whole number of {good.name} at "
-                            f"{good.price} G: how many is unsure; look at the inventory)")
+                    note = (f" ({spent} G doesn't fit {n} {good.name} at {good.price} G: "
+                            "what was bought is unsure; look at the inventory)")
             have = v.stock
             out = await self.leave()
             got = (f"Bought {n} {good.name} for {spent} G (funds {funds0} G to {v.funds}"
