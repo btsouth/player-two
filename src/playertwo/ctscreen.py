@@ -429,11 +429,13 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     if hands:
         return lk  # a menu whose highlighted entry doesn't read: the model sees it
     if rows and sum(len(r.text) for row in rows for r in row) >= 12:
-        # Specks on the box's frame, far left or right of the words: not words.
+        # Specks on the box's frame, far left or right of the words: not words, however
+        # long they read ("-t T" and ".t ." either side of the fair seller's second
+        # line). A word that misreads sits among the others.
         ok = [r for row in rows for r in row if plausible(r)]
         lo, hi = min(r.x0 for r in ok), max(r.x1 for r in ok)
-        rows = [[r for r in row if plausible(r) or len(r.text.strip()) > 3
-                 or lo - 60 <= r.x0 <= hi + 200] for row in rows]
+        rows = [[r for r in row if plausible(r) or lo - 60 <= r.x0 <= hi + 60]
+                for row in rows]
         text = clean(" ".join(r.text for row in rows for r in row))
         lk.kind = "text"
         lk.parts["text"] = text

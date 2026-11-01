@@ -564,6 +564,37 @@ def test_a_two_line_box_at_the_bottom_is_read_whole():
     assert text.startswith("Mother: ") and text.count("!") == 2 and len(text.split()) == 9
 
 
+GOODBYE = LIVE.parent / "night-2026-11-01" / "steam-frames" / \
+    "dialogue-fair-seller-goodbye-two-lines.png"
+GUARDS = LIVE.parent / "night-2026-11-01" / "steam-frames" / \
+    "interior-guardia-castle-hall-guards.png"
+ADJUST = LIVE.parent / "night-2026-11-01" / "narrator-bench" / "frames" / "175403-01.jpg"
+
+
+@pytest.mark.skipif(not GOODBYE.exists(), reason="no goodbye frame")
+def test_a_line_starting_with_j_is_read_and_specks_by_the_frame_are_not():
+    """Live 3: the fair seller's goodbye lost its second line ("Just..." read as "8ust",
+    no J in the font library), and once J read, specks on the box's frame either side
+    ("-t T", ".t .") made it unsure."""
+    lk = ctscreen.look(cv2.imread(str(GOODBYE)), PARTY)
+    assert lk.kind == "text" and not lk.unsure, lk.parts
+    assert lk.parts["text"] == ("Lucca's device is all set up now, you know. Just go "
+                                "straight, to the back of the square.")
+
+
+@pytest.mark.skipif(not GUARDS.exists(), reason="no castle guards frame")
+def test_specks_after_a_short_line_are_not_words():
+    lk = ctscreen.look(cv2.imread(str(GUARDS)), PARTY)
+    assert lk.parts["text"] == "Soldier: Stop right there!" and not lk.unsure
+
+
+@pytest.mark.skipif(not ADJUST.exists(), reason="no settings help frame")
+def test_a_small_j_reads():
+    """Live 3: "Ad,ust game settings." was read out on the menu."""
+    lk = ctscreen.look(cv2.imread(str(ADJUST)), PARTY)
+    assert lk.parts["desc"].startswith("Adjust game sett")
+
+
 TITLE = LIVE.parent / "night-2026-11-01" / "steam-frames" / "title-menu.png"
 
 
