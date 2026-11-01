@@ -1636,6 +1636,9 @@ class Agent:
         them), for knowing them by it later."""
         if target is None or not line or not getattr(target, "person", False):
             return
+        room = self._rooms.rooms.get(target.loc) if getattr(self, "_rooms", None) else None
+        if room is None or any(p.moves for p in room.people if p.name == target.name):
+            return  # someone who walks about: it may have been someone else who answered
         lines = self._heard_lines()
         key = f"{target.loc}|{target.name}"
         if key in lines:
@@ -1644,8 +1647,7 @@ class Agent:
         with contextlib.suppress(OSError):
             self._heard_path().parent.mkdir(parents=True, exist_ok=True)
             self._heard_path().write_text(json.dumps(lines, indent=1), encoding="utf-8")
-        room = self._rooms.rooms.get(target.loc) if getattr(self, "_rooms", None) else None
-        for p in room.people if room is not None else ():
+        for p in room.people:
             if p.name == target.name and not p.said:
                 p.said = line
 
@@ -1661,32 +1663,40 @@ class Agent:
         from .rooms import pick_words
 
         request = getattr(self, "_request", "") or ""
-        known = getattr(self, "_settled_pick", {}).get(request)
-        if known in choices:
-            return known, ""  # asked already this request
         cands = people.candidates(rooms, here, choices, targets)
         me = (here.x, here.y)
         marks = people.landmarks(rooms, here)
         mid = people.middle(rooms, here)
-        theirs = people.wanted(request)
+        hit = pick_words(to, {k: k for k in choices})
+        mine = await asyncio.to_thread(people.resolve, to, cands, me, marks, people.MARGIN,
+                                       mid)
+        # The model's call is for a way out or another place ("upstairs" after "talk to
+        # the guard, then go upstairs"): that, not the player's someone.
+        elsewhere = (hit is not None and hit not in targets) or (
+            mine.sure and mine.key not in targets)
+        theirs = "" if getattr(self, "_theirs_done", False) or elsewhere else \
+            people.wanted(request)
         talking = bool(people.TALK_WORDS.search(request))
         pick = None
         if theirs and not ((talking and talk is False) or (talking and tool == "walk_to")):
             pick = await asyncio.to_thread(people.resolve, theirs, cands, me, marks,
                                            people.MARGIN, mid)
-        # The player's words when they settle it; else an exact name from the model (it
-        # may have asked them itself); else the question, or the model's words.
+        # The player's words when they settle it (and once they've been gone to, the
+        # model's); else an exact name from the model (it may have asked them itself);
+        # else the question, or the model's words.
         if pick is not None and pick.sure:
+            self._theirs = pick.key
             return pick.key, ""
-        hit = pick_words(to, {k: k for k in choices})
         if hit is not None:
             return hit, ""
         if pick is None or not pick.options:
-            pick = await asyncio.to_thread(people.resolve, to, cands, me, marks,
-                                           people.MARGIN, mid)
+            pick = mine
         if pick.sure:
             return pick.key, ""
         if pick.options:
+            settled = getattr(self, "_settled_pick", None)
+            if settled in {o.key for o in pick.options}:
+                return settled, ""  # asked already, this request, between these
             if self.ask is None:
                 return None, (f"not sure who: ask the player \"{pick.ask}\" and call "
                               "go_to_exit again with the name they pick")
@@ -1699,7 +1709,9 @@ class Agent:
                 return None, (f"asked the player \"{pick.ask}\"; they said \"{got}\", "
                               "which didn't settle it: ask them once more, or call "
                               "go_to_exit with the exact name")
-            self._settled_pick = {request: key}
+            self._settled_pick = key
+            if theirs:
+                self._theirs = key
             return key, ""
         return None, pick.why
 
@@ -1709,7 +1721,7 @@ class Agent:
         just one)."""
         from . import people
 
-        inside = await self._inside(frame.image)
+        inside = await self._inside(frame.image, sure=True)
         if inside is None:
             return False
         rooms, here = inside
@@ -1729,7 +1741,7 @@ class Agent:
         more: the next few further off (\"who else?\")."""
         from .people import around
 
-        inside = await self._inside((await self.grab()).image)
+        inside = await self._inside((await self.grab()).image, sure=True)
         if inside is None:
             return ""
         rooms, here = inside
@@ -1846,6 +1858,8 @@ class Agent:
             await told
         if out.startswith("arrived"):
             walker.memory = None
+            if label == getattr(self, "_theirs", None):
+                self._theirs_done = True
             if talk and "pressed a" in out:
                 line = await self._settled_line()
                 if line:
@@ -1910,13 +1924,18 @@ class Agent:
         walker.memory = None
         return out, found
 
-    async def _inside(self, image):
-        """(rooms, where) when the screen is inside a place the room survey knows."""
+    async def _inside(self, image, sure: bool = False):
+        """(rooms, where) when the screen is inside a place the room survey knows. sure:
+        only a strong match with the character found (a weak one named "Residence" on
+        the world map, live): for answers and trips started without the model."""
         if await self._rooms_data() is None:
             return None
         self._rooms.world_hint = getattr(self, "_last_world", None)
         self._rooms.world_spot = getattr(self, "_world_xy", None)
         here = await asyncio.to_thread(self._rooms.locate, image)
+        if here is not None and sure and (not getattr(here, "sure", True)
+                                          or getattr(here, "score", 1.0) < 0.75):
+            return None
         return (self._rooms, here) if here is not None else None
 
     async def _go_to_exit(self, to: str, limit: float = 90.0, talk: bool | None = None
@@ -1951,9 +1970,10 @@ class Agent:
                     "ask the player which, or call go_to_exit with an exact name")
         target: Target | None = targets.get(label)
         if talk is None:
+            mine = label == getattr(self, "_theirs", None)  # the player's someone
             talk = target is not None and (why.startswith("talk:") or bool(TALK.search(to))
-                                           or bool(TALK.search(getattr(self, "_request", "")
-                                                               or "")))
+                                           or (mine and bool(TALK.search(
+                                               getattr(self, "_request", "") or ""))))
         walker = self.walker()
 
         async def shoot():
@@ -1973,6 +1993,8 @@ class Agent:
         self._talked_to = target if talk else None
         if result.startswith("arrived"):
             walker.memory = None  # somewhere else now
+            if label == getattr(self, "_theirs", None):
+                self._theirs_done = True
             if target is not None and target.person and any(
                     p.moves and p.name == target.name
                     for p in rooms.rooms[target.loc].people):
@@ -2146,7 +2168,9 @@ class Agent:
         self._failed_walks = 0
         run = Run(request)
         self._request = request  # the player's own words (tools get the model's)
-        self._settled_pick = {}  # who the player picked when asked, this request
+        self._settled_pick = None  # who the player picked when asked, this request
+        self._theirs = None  # who the player's own words meant, this request
+        self._theirs_done = False  # gone to them: later calls are the model's own
         self.cancelled = False
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
@@ -2183,9 +2207,14 @@ class Agent:
                 return run
             frame = await self.grab()
             tried += f"go_to_exit(outside) was tried already: {result}\n\n"
+        from .people import wanted
+
         talk_to = TALK_TO.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
-        who = talk_to.group("who") if talk_to and not trip and not out else \
+        whole = talk_to.group("who") if talk_to and not trip and not out else \
             trip.group("place") if trip and not tried and not out else ""
+        who = wanted(request) if whole else ""
+        # Only that ("take me to Melchior"), or more after it ("...and buy a sword").
+        only = bool(who) and who.lower().strip(" .!?,") == whole.lower().strip(" .!?,")
         if who and await self._known_here(who, frame, sure=not talk_to):
             # "Talk to Melchior" ("take me to the fountain") inside a surveyed place, who
             # the survey knows: there now, by the player's own words, no model turn first
@@ -2193,22 +2222,27 @@ class Agent:
             a = {"to": who, "talk": True} if talk_to else {"to": who}
             result = await self._act("go_to_exit", a)
             run.steps.append(Step("go_to_exit", a, time.monotonic() - t0, result))
-            if not talk_to and result.startswith("arrived") and "save point" not in result \
-                    and not self.cancelled:
-                await self._speak("We're there.")  # (a save point's result says how to save)
-            if self.cancelled or (not talk_to and result.startswith("arrived")
-                                  and "save point" not in result):
+            there = result.startswith("arrived")
+            # "Take me to the fountain", there and nothing more to do: done, no model turn
+            # (a save point's result says how to save; a talk's line is the model's).
+            done = there and not talk_to and only and "save point" not in result \
+                and "pressed a" not in result
+            if done and not self.cancelled:
+                await self._speak("We're there.")
+            if self.cancelled or done:
                 run.outcome = "cancelled" if self.cancelled else \
                     (self.said[-1] if self.said else result)
                 run.seconds = time.monotonic() - t0
                 self.history.append(f"{request} -> {run.outcome}")
                 return run
             frame = await self.grab()
-            tried += (f"go_to_exit({a['to']!r}{', talk' if talk_to else ''}) was done "
-                      f"already: {result}\n" + (
-                          "Say their line as it says, then only what's needed (a question in "
-                          "it is the player's to answer); don't walk again.\n\n" if talk_to
-                          else "Tell the player in a few words, and finish.\n\n"))
+            tried += f"go_to_exit({a}) was done already: {result}\n"
+            if there and not only:
+                tried += "Now the rest of what they asked; don't walk to them again.\n"
+            elif there and "pressed a" in result:
+                tried += ("Say their line as it says, then only what's needed (a question in "
+                          "it is the player's to answer); don't walk again.\n")
+            tried += "\n"
         # Chrono Trigger on Steam in a fight: pause it while the model thinks.
         self._battle = await self._battle_on(frame)
         if self._battle is not None:

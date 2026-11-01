@@ -317,7 +317,8 @@ class Rooms:
                     return f"outside, by {plain_place(m.nearest(*e.at)[0])}"
                 own = room.name.lower()
                 others = [(math.dist(p, e.at), n) for n, p in m.places.items()
-                          if not own or (n.lower() not in own and own not in n.lower())]
+                          if not own or (n.lower() not in own and own not in n.lower()
+                                         and plain_place(n).lower() != own)]
                 if others:
                     return f"outside, toward {plain_place(min(others)[1])}"
         return self.name(e.to)

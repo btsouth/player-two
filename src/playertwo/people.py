@@ -241,8 +241,9 @@ def wanted(said: str) -> str:
         return ""
     rest = s[m.end():].strip()
     # "...and buy a potion", "...then come back": only the someone.
-    rest = re.split(r"\b(?:and|then|so|to)\s+(?:buy|sell|rest|ask|talk|see|come|go|get|"
-                    r"check|say|find)\b", rest, maxsplit=1)[0]
+    rest = re.split(r"[,;]?\s*\b(?:and|then|so|to)\s+(?:then\s+)?(?:buy|sell|rest|ask|talk|"
+                    r"see|come|go|get|check|say|find|save|open|use|pick|give|show|take|"
+                    r"tell|sleep|stay|heal|look|read|back)\b", rest, maxsplit=1)[0]
     return rest.strip(" .!?,")
 
 
@@ -469,8 +470,8 @@ def question(options: list[Who]) -> str:
     return f"Do you mean {', '.join(names[:-1])}, or {names[-1]}?"
 
 
-ORDINALS = {"first": 0, "1st": 0, "one": 0, "former": 0, "second": 1, "2nd": 1, "two": 1,
-            "latter": -1, "third": 2, "3rd": 2, "three": 2, "last": -1}
+ORDINALS = {"first": 0, "1st": 0, "former": 0, "second": 1, "2nd": 1, "latter": -1,
+            "third": 2, "3rd": 2, "last": -1}
 
 
 def answer(said: str, options: list[Who], me: tuple[float, float] | None = None) -> str | None:

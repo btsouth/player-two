@@ -66,7 +66,10 @@ def test_the_players_words_win_over_the_models(tmp_path, monkeypatch):
     assert said == ["Going to the innkeeper."]
     assert sim.pressed and sim.pressed[-1][0] == "a"
     # Not even when the model names someone else exactly (live: "the bearded old man at
-    # the middle-right stall" for the old man at the lower stalls).
+    # the middle-right stall" for the old man at the lower stalls), till they've been
+    # gone to.
+    assert agent._theirs_done
+    agent._theirs_done = False
     key, _ = asyncio.run(agent._resolve(*_inside(agent), "the cat", True, "go_to_exit"))
     assert key == "the innkeeper (in here)"
     # A walk the model makes for its own reasons isn't turned into the talk.
@@ -101,6 +104,49 @@ def test_two_alike_are_asked_about(tmp_path, monkeypatch):
     # Asked once a request: the model's next call with other words goes there too.
     key, _ = asyncio.run(agent._resolve(*_inside(agent), "him", True, "go_to_exit"))
     assert key == "the old man by the window (in here)" and len(asked) == 1
+
+
+def test_the_players_someone_doesnt_take_over_later_walks(tmp_path, monkeypatch):
+    asked = []
+
+    async def ask(question):
+        asked.append(question)
+        return "the left one"
+
+    agent, _sim, _said, rooms = agent_in(tmp_path, monkeypatch, ask=ask)
+    agent._request = "talk to the innkeeper, then go downstairs"
+    agent._settled_pick = agent._theirs = None
+    agent._theirs_done = False
+    inside = _inside(agent)
+    # The model's call for a way out is that way out, not the innkeeper again.
+    assert asyncio.run(agent._resolve(*inside, "downstairs", None, "go_to_exit"))[0] == \
+        "the inn, downstairs"
+    assert asyncio.run(agent._resolve(*inside, "the stairs down", None, "go_to_exit"))[0] \
+        == "the innkeeper (in here)"
+    agent._theirs_done = True  # gone to them: the model's words from now on
+    assert asyncio.run(agent._resolve(*inside, "the cat", None, "go_to_exit"))[0] == \
+        "the cat (in here)"
+    # A pick the player made counts only between the same ones.
+    rooms.rooms[2].people += [Person("the old man by the window", "person", (72.0, 60.0)),
+                              Person("the old man by the stairs", "person", (280.0, 60.0))]
+    agent._request = "talk to the old man"
+    agent._theirs_done = False
+    inside = _inside(agent)
+    key, _ = asyncio.run(agent._resolve(*inside, "the old man", True, "go_to_exit"))
+    assert key == "the old man by the window (in here)" and len(asked) == 1
+    agent._theirs_done = True
+    assert asyncio.run(agent._resolve(*inside, "the cat", None, "go_to_exit"))[0] == \
+        "the cat (in here)"
+
+
+def test_more_after_the_someone_goes_on_to_the_model(tmp_path, monkeypatch):
+    muse = Muse()
+    agent, _sim, said, _rooms = agent_in(tmp_path, monkeypatch, muse=muse)
+    run = asyncio.run(agent.run("take me to the innkeeper and ask about a room"))
+    assert run.steps[0].tool == "go_to_exit" and run.steps[0].args == {"to": "the innkeeper"}
+    assert "We're there." not in said and muse.seen  # the rest is the model's
+    told = muse.seen[0][1]["content"][1]["text"]
+    assert "Now the rest of what they asked" in told
 
 
 def test_no_one_to_ask_says_so(tmp_path, monkeypatch):

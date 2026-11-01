@@ -110,6 +110,7 @@ def test_two_or_three_alike_are_asked_about():
     assert answer("the second one", p.options) == p.options[1].key
     assert answer("Barnaby", p.options) == SQUARE[0].key
     assert answer("hmm", p.options) is None
+    assert answer("that one", p.options) is None  # not "the first"
 
 
 def test_no_one_fits():
@@ -144,6 +145,8 @@ def test_parsing():
     assert wanted("please talk to the old man and buy a potion") == "the old man"
     assert wanted("take me to the fountain") == "the fountain"
     assert wanted("I need to buy some potions") == ""
+    assert wanted("talk to the guard, then go upstairs") == "the guard"
+    assert wanted("take me to the save point and save") == "the save point"
     assert wanted("Melchior") == ""
 
 
