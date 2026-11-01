@@ -848,7 +848,10 @@ class Session:
             ears.stop()
 
     def _game_identity(self) -> tuple[int | None, str]:
-        """The game window's process and Steam app id (read from the ears' thread)."""
+        """The game window's process and Steam app id (read from the ears' thread); none
+        for a game whose pack says it never speaks, so nothing is listened to."""
+        if self._voiced_hint() == "none":
+            return None, ""
         return window_identity(getattr(self.capture, "target", None))
 
     def _voiced_hint(self) -> str:
