@@ -643,3 +643,18 @@ def test_a_question_in_dialogue_says_where_the_hand_is():
     lk = ctscreen.look(cv2.imread(str(FRAMES / "box-manor-shelter-question.png")))
     assert lk.parts == {"question": "Shelters are quite useful. Do you know about them?",
                         "focus": "Yes selected, or No"}
+
+
+@needs_frames
+def test_options_whose_question_has_gone_still_say_the_hand():
+    """Melchior's "Take a look." / "No, thanks." under an empty box (his question was the
+    box before): the reader said only "No, thanks.", with the hand on "Take a look."."""
+    path = FRAMES / "box-melchior-options-no-question.png"
+    if not path.exists():
+        pytest.skip("no Melchior frame")
+    lk = ctscreen.look(cv2.imread(str(path)))
+    assert lk.kind == "choice"
+    assert lk.parts == {"focus": "Take a look selected, or No, thanks"}
+    r = ctscreen.Reader()
+    assert r.update(lk, now=1.0) == "Take a look selected, or No, thanks."
+    assert r.update(lk, now=1.3) == ""  # once
