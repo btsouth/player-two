@@ -339,7 +339,7 @@ async def ask(args) -> None:
         line = None
         if args.mode == "fast" and ctscreen.sharp(img):
             lk = await asyncio.to_thread(ctscreen.look, img, PARTY)
-            line = ctscreen.answer(q, lk, PARTY)
+            line = await asyncio.to_thread(ctscreen.answer, q, lk, PARTY, "", img)
             if line:
                 said.append((time.monotonic() - t0, line))
                 via = "screen"

@@ -249,6 +249,10 @@ def test_questions_the_screen_answers_at_once():
     assert ctscreen.answer("what's my HP", menu, ["Frog", "Crono", "Marle"]) is None  # Frog reads
     assert ask(FRAMES / "140314-00.jpg", "what are we fighting") == "The target now is Gargoyle."
     assert ask(FRAMES / "134854-00.jpg", "what items do we have").startswith("On screen: Potion")
+    # Green (usable) items on bright metal are read again with a lower bar: all of them.
+    inv = cv2.imread(str(FRAMES / "135445-06.jpg"))
+    line = ctscreen.answer("what items do I have", ctscreen.look(inv, PARTY), PARTY, image=inv)
+    assert line.startswith("On screen: Potion 67, Mid-Potion 83, Hi-Potion 2,") and line.count(",") == 12
     # The field shows none of it: the agent answers (and may open the menu).
     assert ask(FRAMES / "185021-00.jpg", "what's my HP") is None
 

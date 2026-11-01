@@ -627,10 +627,27 @@ def asks(question: str) -> bool:
                                                                   ASK_ITEMS, ASK_FOE))
 
 
-def answer(question: str, lk: Look, party: list[str] = (), heard: str = "") -> str | None:
+def _items(lines: list[list[Run]]) -> tuple[list[str], int]:
+    """Items in a list with their counts, and how many entries didn't read."""
+    items, unread = [], 0
+    for row in lines:
+        for i, r in enumerate(row):
+            w = snap(r.text, ctsteam.ITEMS, 0.8)
+            if w not in ctsteam.ITEMS:
+                # An entry in the list that didn't read: the answer would leave it out.
+                unread += 300 < r.y < 1000 and len(r.text) > 3 and not r.text.startswith(":")
+                continue
+            n = next((x.text.lstrip(":").strip() for x in row[i + 1:i + 2]
+                      if re.fullmatch(r":?\s*\d+", x.text)), "")
+            items.append(f"{w} {n}".strip())
+    return items, unread
+
+
+def answer(question: str, lk: Look, party: list[str] = (), heard: str = "",
+           image=None) -> str | None:
     """A question answered from the screen as read, or None when the screen doesn't show
     the answer (the agent looks, and may open a menu). `heard`: the last text box read out,
-    for "what did he say?" once it's gone."""
+    for "what did he say?" once it's gone. `image`: the frame looked at, to read again."""
     if not asks(question):
         return None
     q = _plain(question)
@@ -674,17 +691,15 @@ def answer(question: str, lk: Look, party: list[str] = (), heard: str = "") -> s
         return ", ".join(f"{n} is knocked out" if h == 0 else f"{n} {h} of {m} HP"
                          for n, h, m in rows) + "."
     if ASK_ITEMS.search(q):
-        items, unread = [], 0
-        for row in lk.lines:
-            for i, r in enumerate(row):
-                w = snap(r.text, ctsteam.ITEMS, 0.8)
-                if w not in ctsteam.ITEMS:
-                    # An entry in the list that didn't read: the answer would leave it out.
-                    unread += 300 < r.y < 1000 and len(r.text) > 3 and not r.text.startswith(":")
-                    continue
-                n = next((x.text.lstrip(":").strip() for x in row[i + 1:i + 2]
-                          if re.fullmatch(r":?\s*\d+", x.text)), "")
-                items.append(f"{w} {n}".strip())
+        items, unread = _items(lk.lines)
+        if unread and image is not None and lk.kind == "menu":
+            # Green (usable) items on bright metal: read the list again with a lower bar.
+            img = to_canvas(image if isinstance(image, np.ndarray) else ctsteam._bgr(image), CANVAS)
+            hands = [h[:4] for h in find_template(img, ctsteam.templates()["hand"], CANVAS)]
+            again = _items(runs_in(ctsteam.lib(), img, (0, 300, CANVAS[0], 1000), hands,
+                                   local=True, margin=40, ring_bg=True))
+            if not again[1] and len(again[0]) >= len(items):
+                items, unread = again
         if st is not None and st.kind == "list":
             items = [e for row in st.entries for e in row if e in ctsteam.ITEMS] or items
         if len(items) >= 2 and (not unread or st is not None):

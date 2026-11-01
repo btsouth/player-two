@@ -1184,8 +1184,9 @@ class Session:
         try:
             frame = await self.grab_now()
             lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
-            line = ctscreen.answer(text, lk, self.reader.active or self.reader.party,
-                                   heard=self.reader.heard)
+            line = await asyncio.to_thread(ctscreen.answer, text, lk,
+                                           self.reader.active or self.reader.party,
+                                           self.reader.heard, frame.image)
         except Exception as exc:  # noqa: BLE001  the agent answers instead
             self.events.emit("error", where="screen_answer", message=str(exc)[:300])
             return False
