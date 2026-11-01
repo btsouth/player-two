@@ -81,7 +81,9 @@ def load_kokoro():
     d = ensure_models()
     onnx, voices = str(d / MODEL_FILES[0]), str(d / MODEL_FILES[1])
     ort.set_default_logger_severity(3)
-    if "CUDAExecutionProvider" in ort.get_available_providers():
+    # No NVIDIA driver, no CUDA: trying anyway fills the terminal with missing-library errors.
+    nvidia = sys.platform != "linux" or Path("/proc/driver/nvidia/version").exists()
+    if nvidia and "CUDAExecutionProvider" in ort.get_available_providers():
         try:
             if hasattr(ort, "preload_dlls"):
                 ort.preload_dlls()
@@ -93,7 +95,12 @@ def load_kokoro():
                 return Kokoro.from_session(sess, voices), "gpu"
         except Exception as exc:  # noqa: BLE001  any CUDA setup problem means CPU
             print(f"Voice: GPU unavailable ({exc}), using the CPU.", file=sys.stderr)
-    return Kokoro(onnx, voices), "cpu"
+    # The CPU by name: left to choose, onnxruntime-gpu tries TensorRT first and prints a
+    # long error about missing libraries on every machine without them.
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 3
+    sess = ort.InferenceSession(onnx, opts, providers=["CPUExecutionProvider"])
+    return Kokoro.from_session(sess, voices), "cpu"
 
 
 GPU_ADDON = 'uv tool install --reinstall ".[cuda]" --excludes uv-excludes.txt'
