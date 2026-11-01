@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -491,6 +492,49 @@ def where_text(m, x: float, y: float, step: float = 8.0, rise: float = 0.0) -> t
     if others:
         out += "; " + ", ".join(others)
     return out + ".", name if steps <= 3 else ""
+
+
+def where_said(m, x: float, y: float, step: float = 8.0, rise: float = 0.0,
+               aliases: dict[str, set[str]] | None = None) -> tuple[str, str]:
+    """"Where am I?" on a world map, as Player Two says it, the same way every time and
+    only from the atlas: "On the world map, 1000 A.D., right at Leene Square, the fair.
+    Truce Market is south." (live 3: the model reworded where_text each time, once
+    "at the fairgrounds ... with Leene Square just to the north", the same place). The
+    nearest place, the player's side of it, and up to two others close by. Also the
+    nearest place's name when the character is at it (as where_text)."""
+    from .atlas import compass
+
+    era = bool(re.search(r"\b(A\.D\.|B\.C\.)", m.name))
+    head = f"On the world map, {m.name}" if era else f"On the {m.name} map"
+    if not m.places:
+        return head + ".", ""
+    px, py = x, y - rise
+    near = sorted(m.places.items(), key=lambda kv: (kv[1][0] - px) ** 2 + (kv[1][1] - py) ** 2)
+    name, (nx, ny) = near[0]
+
+    def called(n: str) -> str:
+        # "Leene Square, the fair": the name the player may know it by, once.
+        other = sorted(a for a in (aliases or {}).get(n, ()) if a.lower().startswith("the "))
+        return f"{plain_name(n)}, {other[0]}" if other else plain_name(n)
+
+    steps = math.dist((nx, ny), (px, py)) / step
+    if steps < 1.5:
+        out = f"{head}, right at {called(name)}."
+    elif steps <= 4:
+        out = f"{head}, just {compass(px - nx, py - ny)} of {called(name)}."
+    else:
+        out = f"{head}, {compass(px - nx, py - ny)} of {called(name)}, a little way off."
+    others = [f"{plain_name(n)} is {compass(ox - px, oy - py)}"
+              for n, (ox, oy) in near[1:3] if math.dist((ox, oy), (px, py)) / step <= 30]
+    if others:
+        out += " " + " and ".join(others) + "."
+    return out, name if steps <= 3 else ""
+
+
+def plain_name(name: str) -> str:
+    """A place's name as said: "Truce Residence (west)" is "the west Truce Residence"."""
+    m = re.fullmatch(r"(.+?) \((\w+)\)", name)
+    return f"the {m.group(2)} {m.group(1)}" if m else name
 
 
 def atlas_aliases(game: str) -> dict[str, set[str]]:

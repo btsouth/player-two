@@ -213,6 +213,24 @@ def test_where_text_says_the_players_side_of_the_nearest_place():
     assert "no places are named" in text
 
 
+def test_where_said_is_the_same_plain_line_from_the_atlas():
+    """Live 3: "where am I?" was reworded by the model every time, once "at the fairgrounds
+    ... with Leene Square just to the north" (the same place)."""
+    from playertwo.quests import where_said
+
+    aliases = {"Leene Square": {"the fair", "Millennial Fair"}}
+    line, at = where_said(world(), 424, 214, aliases=aliases)
+    assert line == ("On the world map, 1000 A.D., right at Leene Square, the fair. "
+                    "Crono's house is south and Truce Inn is southwest.")
+    assert at == "Leene Square"
+    line, at = where_said(world(), 424, 214 + 3 * 8 + 12, rise=12)
+    assert line.startswith("On the world map, 1000 A.D., just south of Leene Square.")
+    line, at = where_said(world(), 700, 600)
+    assert "a little way off" in line and at == ""
+    other = SimpleNamespace(name="Overworld", places={"Truce Residence (west)": (0, 0)})
+    assert where_said(other, 0, 0)[0] == "On the Overworld map, right at the west Truce Residence."
+
+
 def test_pick_place_exact_names_and_aliases_need_no_model():
     muse = JsonMuse([])
     m = world()
@@ -294,6 +312,22 @@ def test_where_am_i_on_the_map_and_off_it(monkeypatch, tmp_path):
     agent, _ = agent_with(monkeypatch, tmp_path, None)
     out = run(agent._act("where_am_i", {}))
     assert out.startswith("not on a world map") and "near Leene Square" in out
+
+
+def test_where_am_i_is_said_from_the_atlas_with_no_model_turn(monkeypatch, tmp_path):
+    spot = atlas_mod.Spot("1000 A.D.", 424, 214 + atlas_mod.RISE, 0.9, 0.3)
+    agent, muse = agent_with(monkeypatch, tmp_path, spot)
+    said = []
+
+    async def speak(t):
+        said.append(t)
+
+    agent.speak = speak
+    agent._ct_steam = lambda frame: True
+    result = run(agent.run("Where am I?"))
+    assert said == [result.outcome] and result.outcome.startswith(
+        "On the world map, 1000 A.D., right at Leene Square")
+    assert muse.seen == []  # no model turn
 
 
 def test_next_goal_asks_then_takes_the_players_word(monkeypatch, tmp_path):

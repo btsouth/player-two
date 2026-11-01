@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import os
 import re
 import time
@@ -435,6 +436,8 @@ HEAL = re.compile(r"(?:(?P<actor>crono|marle|lucca|robo|frog|ayla|magus),? )?"
                   r"(?:please |can you |could you )?(?:heal|cure) (?P<who>.{2,40})")
 # Commands in one request ("heal Frog and attack"): a fight gets that many battle calls.
 COMMANDS = re.compile(r"\b(attack|hit|heal|cure|use|cast|revive|raise)\b")
+WHERE = re.compile(r"(?:(?:hey|so|okay|ok|and|um),? )?(?:where am i|where are we)"
+                   r"(?: (?:now|right now|exactly|again))?")
 OUT = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|us) |"
                  r"(?:let'?s |please )?(?:go|head|walk) )(?:back )?(?:out|outside)"
                  r"(?: of here| again)?")
@@ -1640,6 +1643,44 @@ class Agent:
             progress.save(self.notes.folder, self.game or "")
         return f"{text} Places on this map for go_to_place: {', '.join(m.places)}."
 
+    async def _where_line(self) -> str:
+        """"Where am I?" as said to the player, from the atlas on a world map or the room
+        survey inside a place ('' when neither knows: the model answers from the screen)."""
+        from . import atlas as atlas_mod
+        from .people import PEOPLE_KINDS, THING_KINDS, directions
+        from .quests import atlas_aliases, where_said
+
+        frame = await self.grab()
+        if not self._ct_steam(frame):
+            return ""
+        atlas = await self._the_atlas()
+        spot = await self._spot(atlas, frame.image) if atlas is not None else None
+        if spot is not None and spot.margin >= 0.1:
+            m = atlas.map(spot.map)
+            line, at = where_said(m, spot.x, spot.y, getattr(atlas_mod, "CELL", 8),
+                                  getattr(atlas_mod, "RISE", 0), atlas_aliases(self.game or ""))
+            if at:
+                progress = self._progress()
+                progress.went(at)
+                progress.save(self.notes.folder, self.game or "")
+            return line
+        inside = await self._inside(frame.image, sure=True)
+        if inside is None:
+            return ""
+        rooms, here = inside
+        name = rooms.name(here.loc)
+        if name.startswith("place 0x"):
+            return ""
+        out = f"We're at {name}."
+        near = sorted((p for p in rooms.rooms[here.loc].people
+                       if p.kind in PEOPLE_KINDS + THING_KINDS),
+                      key=lambda p: math.dist(p.at, (here.x, here.y)))
+        if near and math.dist(near[0].at, (here.x, here.y)) <= 6 * 16:
+            p = near[0]
+            way = directions(p.at[0] - here.x, p.at[1] - here.y)
+            out += f" {p.name[:1].upper()}{p.name[1:]} is {way}."
+        return out
+
     async def _next_goal(self, step: int = 0, player_says: str = "") -> str:
         """What to do next, from the quest list and where the player seems to be in it."""
         from .quests import Guess, Quests, place_in_story, tell
@@ -2418,6 +2459,16 @@ class Agent:
         self._wander_s = 0.0
         frame = frame or await self.grab()
         tried = ""
+        if WHERE.fullmatch(" ".join(request.lower().split()).strip(" .!?")):
+            # "Where am I?" from the atlas or the room survey, said the same way every
+            # time (live 3: the model reworded it each time, once contradicting itself).
+            line = await self._where_line()
+            if line and not self.cancelled:
+                await self._speak(line)
+                run.outcome = line
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
         trip = TRIP.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
         if trip and await self._on_surveyed_map():
             # "Take me to the fair" on a world map the atlas knows: go now, without a
