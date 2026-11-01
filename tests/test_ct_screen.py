@@ -409,6 +409,26 @@ async def test_a_new_surveyed_place_is_named_once_before_the_model_speaks():
     assert await s._place(frame) == ""  # not a surveyed place: no name at all
 
 
+async def test_a_place_player_two_just_named_isnt_named_again():
+    """Live 2026-11-01: "We're at Leene Square." then the narrator's "Leene Square." """
+    import time
+    from collections import deque
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    s.agent = SimpleNamespace(_ct_steam=lambda f: True, game="Chrono Trigger")
+    s.narrator = SimpleNamespace(recent=deque(["We're at Leene Square."], maxlen=4))
+    s.rooms = SimpleNamespace(worlds=set(), name=lambda loc: "Leene Square",
+                              locate=lambda image: SimpleNamespace(loc=5))
+    frame = Frame(Image.new("RGB", (1920, 1080)), time.monotonic())
+    assert await s._place(frame) == ""
+
+
 async def test_narration_says_the_place_then_the_model_line():
     import time
     from types import SimpleNamespace

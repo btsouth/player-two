@@ -588,6 +588,9 @@ class Session:
         if short == last and time.monotonic() - when < 120:
             return ""
         self.place_said = (short, time.monotonic())
+        recent = getattr(getattr(self, "narrator", None), "recent", ())
+        if any(short.lower() in r.lower() for r in recent):
+            return ""  # just said, by Player Two ("We're at Leene Square.") or a narration
         return short
 
     async def _narrate(self, frame: Frame, interrupt: bool = False, extra: str = "") -> None:
