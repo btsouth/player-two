@@ -549,3 +549,59 @@ async def test_the_agent_pauses_a_ct_fight_and_offers_only_the_battle_tools(monk
     assert run.steps[0].result.startswith("not pressed")
     assert ex.acts == [Intent("Crono", "attack", "", "left")]
     assert run.steps[1].result.startswith("done: Crono: attack")
+
+
+async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
+    # Live, Woe 2026-11-01: "win this fight" won, the spoils screen still read as a fight,
+    # and the model called fight again (2 of 6), then said there was no fight.
+    import json
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo import agent as agent_mod
+    from playertwo.battle import Outcome
+    from playertwo.controls import DryRun
+    from playertwo.screen import Frame
+
+    spoils = State(kind="none", party=[Member("Crono", 653, 780, 54, 64, "white")],
+                   top="Earned 648 EXP.")
+    monkeypatch.setattr(agent_mod.ctsteam, "read", lambda img, full=True: spoils)
+
+    class Muse:
+        s = SimpleNamespace(image_max_side=640)
+
+        def __init__(self):
+            self.tools_seen, self.texts = [], []
+
+        async def tools(self, messages, tools, effort=None, max_tokens=0):
+            self.tools_seen.append({t["function"]["name"] for t in tools})
+            self.texts.append(json.dumps(messages[-1]["content"], default=str))
+            call = SimpleNamespace(id="c", function=SimpleNamespace(
+                name="finish", arguments=json.dumps({"text": "We won."})),
+                model_dump=lambda: {"id": "c", "type": "function", "function": {
+                    "name": "finish", "arguments": json.dumps({"text": "We won."})}})
+            return SimpleNamespace(content="", tool_calls=[call])
+
+    class Ex:
+        ally_at: dict = {}
+
+        async def pause(self, st=None):
+            return spoils
+
+        async def win(self, decide, say=None):
+            return Outcome(True, "won after 9 commands. Earned 648 EXP.", spoils)
+
+    async def grab():
+        return Frame(Image.new("RGB", (1280, 720)), 0)
+
+    async def speak(_text):
+        pass
+
+    muse = Muse()
+    ag = agent_mod.Agent(muse, DryRun(), grab, speak, game="Chrono Trigger")
+    ag._executor = Ex()
+    run = await ag.run("win this fight for me")
+    assert run.steps[0].tool == "fight" and run.steps[0].result.startswith("done: won")
+    assert "fight" not in muse.tools_seen[0] and "battle" not in muse.tools_seen[0]
+    assert "fight(win) was done already" in muse.texts[0]

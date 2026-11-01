@@ -1758,7 +1758,10 @@ class Agent:
                     self.history.append(f"{request} -> {run.outcome}")
                     return run
                 frame = await self.grab()
-                self._battle = await self._battle_on(frame)
+                # Won or got away: it's over, even while the spoils still look like a fight
+                # (live, twice in six: the model called fight again and said there was none).
+                self._battle = None if result.startswith("done:") else \
+                    await self._battle_on(frame)
                 tried += (f"fight({mode}) was done already: {result}\nTell the player how "
                           "it went in a sentence, from that result, and finish.\n\n")
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
