@@ -421,9 +421,47 @@ limit_s = 180
 id = "r-elder-oldman"
 category = "rooms"
 state = "rooms/door-89"
-request = "talk to the old man"
+request = "talk to the elder"
 to = "0x89"
-target = "the old man"
+target = "the elder"
 talk = true
 location = "0x89"
 limit_s = 180
+
+# 600 AD Guardia Castle (a state past the guards at the door, made by walking in from
+# world-600-epoch): the hall and throne room are one place; treasure rooms off it.
+[[task]]
+id = "r-castle600-out"
+category = "rooms"
+state = "rooms/deep-78"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-castle600-treasury"
+category = "rooms"
+state = "rooms/door-78"
+request = "take me to the treasury"
+to = "0x1E0"
+location = "0x1E0"
+limit_s = 180
+
+[[task]]
+id = "r-castle600-wing-out"
+category = "rooms"
+state = "rooms/deep-7b"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240
+
+[[task]]
+id = "r-castle600-chest-out"
+category = "rooms"
+state = "rooms/deep-1d4"
+request = "get me out of the castle"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240

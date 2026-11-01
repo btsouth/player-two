@@ -87,6 +87,7 @@ class Person:
     kind: str  # "person", "animal", "save point", "chest" or "thing"
     at: tuple[float, float]  # their feet, in the place's pixels
     moves: bool = False  # walks about: may not be just there
+    look: str = ""  # their cut-out (people/<look>, the survey's), to find them on screen
 
 
 @dataclass
@@ -260,7 +261,8 @@ class Rooms:
                         spots={k: tuple(v) for k, v in d.get("spots", {}).items()
                                if not WAY_OUT.search(k)}, moving=bool(d.get("moving")),
                         people=[Person(p["name"], p.get("kind") or "person",
-                                       tuple(p["at"]), bool(p.get("moves")))
+                                       tuple(p["at"]), bool(p.get("moves")),
+                                       p.get("look") or "")
                                 for p in d.get("people", []) if p.get("name")
                                 and p.get("kind") != "none"])
             room.small = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2),
@@ -473,15 +475,19 @@ class Rooms:
             box = (px - STEAM_NEAR, py - STEAM_NEAR, px + STEAM_NEAR, py + STEAM_NEAR)
         else:
             box = None
-        fit = self._steam_feet(v[:200], box, 2) if self.sprites else []
+        fit = self._steam_feet(v[:200], box, 3, standing(room, cam)) if self.sprites else []
+        # Feet on ground the survey walked (not someone behind a counter).
+        fit = [f for f in fit if on_ground(room, cam[0] + f[1][0], cam[1] + f[1][1])][:2]
         if fit:
             s0, (fx_, fy_) = fit[0]
             second = fit[1][0] if len(fit) > 1 else 0.0
             prior = (near.x - cam[0], near.y - cam[1]) if box is not None else FOLLOW
             # A clear fit, or a fair one standing out from the next (facing up fits
             # least, ~0.55), or a fair one where it was.
-            if s0 >= 0.65 or (s0 >= 0.45 and (s0 - second >= 0.08 or
-                                              math.dist((fx_, fy_), prior) <= 24)):
+            # Where it was, fainter still: half hidden by those following it.
+            if s0 >= 0.65 or (s0 >= 0.45 and s0 - second >= 0.08) or (
+                    s0 >= (0.38 if box is not None else 0.45)
+                    and math.dist((fx_, fy_), prior) <= 24):
                 return Here(room.loc, cam, cam[0] + fx_, cam[1] + fy_, score, True)
         bg = room.image[cam[1]:cam[1] + h, cam[0]:cam[0] + w]
         if bg.shape != v.shape:
@@ -495,6 +501,7 @@ class Rooms:
             prior = (near.x - cam[0], near.y - cam[1])
         else:
             prior = (FOLLOW[0], FOLLOW[1])
+        tracked = near is not None and near.loc == room.loc and near.sure
         best = None
         for i in range(1, n):
             bx, by, bw, bh, area = stats[i]
@@ -509,6 +516,10 @@ class Rooms:
             # The feet: under the player's own colours (someone may stand beside it).
             feet = (bx + float(xs.mean()), by + int(ys.max()) + 1)
             cost = math.dist(feet, prior) + 80 * (1 - min(1.0, k / 150))
+            if not on_ground(room, cam[0] + feet[0], cam[1] + feet[1]):
+                continue  # someone behind a counter, more likely
+            if tracked and math.dist(feet, prior) > 64:
+                continue  # further than it walks between two looks: someone else
             if best is None or cost < best[0]:
                 best = (cost, feet)
         if best is not None:
@@ -749,11 +760,54 @@ class Rooms:
                                (round(ax), round(ay))) for b, m, (ax, ay) in got.values()]
         return self._ssprites
 
+    def seen_now(self, frame, here: Here, who: Person) -> float | None:
+        """Where someone who walks about is now across the screen (their x, in the
+        place's pixels), by their cut-out (either way round) near where the survey saw
+        them; None when they aren't clearly there."""
+        import cv2
+
+        f = self.folder / "people" / who.look
+        if not who.look or not f.exists():
+            return None
+        if getattr(self, "_looks", None) is None:
+            self._looks: dict[str, list] = {}
+        if who.look not in self._looks:
+            rgba = np.asarray(Image.open(f).convert("RGBA"))
+            bgr = cv2.GaussianBlur(np.ascontiguousarray(rgba[:, :, 2::-1]).astype(np.float32),
+                                   (0, 0), 0.7)
+            m = np.ascontiguousarray((rgba[:, :, 3] > 0).astype(np.uint8))
+            self._looks[who.look] = [(bgr, m), (np.ascontiguousarray(bgr[:, ::-1]),
+                                                np.ascontiguousarray(m[:, ::-1]))]
+        rgb = np.asarray(frame.convert("RGB")) if isinstance(frame, Image.Image) else frame
+        v = steam_view(rgb) if here.steam else view(rgb)
+        sx, sy = who.at[0] - here.cam[0], who.at[1] - here.cam[1]
+        h, w = v.shape[:2]
+        x0, x1 = max(0, int(sx) - 88), min(w, int(sx) + 88)
+        y0, y1 = max(0, int(sy) - 60), min(h, int(sy) + 20)
+        win = cv2.GaussianBlur(v[y0:y1, x0:x1].astype(np.float32), (0, 0), 0.7)
+        # Not the player (and whoever follows close behind).
+        px, py = here.x - here.cam[0] - x0, here.y - here.cam[1] - y0
+        best, at = 0.5, None
+        for spr, m in self._looks[who.look]:
+            if spr.shape[0] > win.shape[0] or spr.shape[1] > win.shape[1]:
+                continue
+            r = cv2.matchTemplate(win, spr, cv2.TM_CCOEFF_NORMED, mask=m)
+            r = np.nan_to_num(r, nan=-1.0, posinf=-1.0, neginf=-1.0)
+            fy = np.arange(r.shape[0])[:, None] + spr.shape[0]  # their feet there
+            fx = np.arange(r.shape[1])[None, :] + spr.shape[1] / 2
+            r[(np.abs(fy - py) < 12) & (np.abs(fx - px) < 12)] = -1
+            _, sc, _, (x, _y) = cv2.minMaxLoc(r)
+            if sc > best:
+                best, at = sc, x0 + x + spr.shape[1] / 2 + here.cam[0]
+        return at
+
     def _steam_feet(self, v: np.ndarray, box: tuple[float, float, float, float] | None = None,
-                    n: int = 4) -> list[tuple[float, tuple[int, int]]]:
+                    n: int = 4, skip: list[tuple[float, float]] = ()
+                    ) -> list[tuple[float, tuple[int, int]]]:
         """Where the player's cut-outs fit Steam's view best, as (score, feet), the
         best few at least a body apart; feet only within `box` (x0, y0, x1, y1) when
-        given, which is quicker."""
+        given, which is quicker; none at `skip` (where people who don't walk about
+        stand: someone dressed like the player, seen from behind, fits as well)."""
         import cv2
 
         h, w = v.shape[:2]
@@ -773,6 +827,10 @@ class Rooms:
             np.maximum(sub, r[:sub.shape[0], :sub.shape[1]], out=sub)
         # Steam's toasts, bottom right
         best[max(0, h - STEAM_CUT[3] - oy):, max(0, w - STEAM_CUT[2] - ox):] = -1
+        for sx, sy in skip:
+            lx, ly = round(sx) - ox, round(sy) - oy
+            if -6 <= lx < vw + 6 and -8 <= ly < vh + 8:
+                best[max(0, ly - 8):max(0, ly + 9), max(0, lx - 6):max(0, lx + 7)] = -1
         out = []
         for _ in range(n):
             _, s, _, (x, y) = cv2.minMaxLoc(best)
@@ -809,7 +867,7 @@ class Rooms:
             sx, sy = follow
             box = (sx - 24 if follows[0] else 0, sy - 28 if follows[1] else 0,
                    sx + 24 if follows[0] else w, sy + 28 if follows[1] else h)
-        for s, feet in self._steam_feet(v, box):
+        for s, feet in self._steam_feet(v, box, skip=standing(room, cam)):
             far = math.dist(feet, prior)
             if s < 0.6 and not (s >= 0.4 and far <= 24):
                 continue
@@ -1140,6 +1198,17 @@ def centre(t: tuple[int, int]) -> tuple[float, float]:
     return t[1] * TILE + TILE / 2, t[0] * TILE + 13
 
 
+def on_ground(room: Room, x: float, y: float) -> bool:
+    """Whether feet at x, y are on (or at the edge of) a tile the survey walked."""
+    return not room.walk or any((int(y + dy) // TILE, int(x + dx) // TILE) in room.walk
+                                for dx in (-4, 0, 4) for dy in (-3, 0, 3))
+
+
+def standing(room: Room, cam: tuple[int, int]) -> list[tuple[float, float]]:
+    """Where the people who don't walk about stand, in a view at `cam`."""
+    return [(p.at[0] - cam[0], p.at[1] - cam[1]) for p in room.people if not p.moves]
+
+
 def line_up(t: tuple[int, int], at: tuple[float, float], face: tuple[int, int]) -> float:
     """Where across the way it faces to stand on tile t to talk to someone at `at`: in
     line with them (the game answers only within about 10 px of straight on), kept on
@@ -1185,6 +1254,12 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     t0 = time.monotonic()
     person = isinstance(spot, Target) and spot.person
     at = (spot.at if isinstance(spot, Target) else spot) if spot is not None else None
+    # Someone who walks about (behind a counter): found on screen at the end, a was
+    # pressed when they come across from the player.
+    who = next((p for p in rooms.rooms[spot.loc].people if p.at == spot.at and p.moves
+                and p.look), None) if person and spot.loc in rooms.rooms else None
+    pressed = waited = 0
+    settled = False  # stopped on a tile to stand on, at the end
     lines = 0  # small steps taken to line up with someone, at the end
     blocker: Person | None = None  # someone the survey saw standing in the way
     waits = 0  # times waited for the way to clear
@@ -1306,10 +1381,23 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     if path is not None:
                         ends = tier
                         break
+                if tile in ends and not settled:
+                    # Stop first and look again: still walking, it would slide on past
+                    # while it lines up (the look was from a moment before).
+                    settled = True
+                    steer(None)
+                    await asyncio.sleep(STEAM_LEAD if here.steam else 0.15)
+                    trail.clear()
+                    continue
                 if tile in ends:
                     fx, fy = ends[tile]
+                    aim, seen = at, None
+                    if who is not None and fy and shot is not None:
+                        seen = await asyncio.to_thread(rooms.seen_now, shot, here, who)
+                        if seen is not None:
+                            aim = (seen, at[1])
                     # Someone is talked to straight on: lined up across the way it faces.
-                    off = line_up(tile, at, (fx, fy)) - (here.x if fy else here.y)
+                    off = line_up(tile, aim, (fx, fy)) - (here.x if fy else here.y)
                     if person and abs(off) > 5 and lines < 6:
                         lines += 1
                         steer(angle_to(off, 0) if fy else angle_to(0, off))
@@ -1322,6 +1410,29 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     steer(angle_to(fx, fy))
                     await asyncio.sleep(max(0.08, tap))
                     steer(None)
+                    if talk and press is not None and who is not None:
+                        if seen is not None and abs(seen - here.x) > 9 and waited < 24:
+                            waited += 1  # not across from the player yet: wait for them
+                            await asyncio.sleep(0.2)
+                            continue
+                        await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
+                        before = await shoot()
+                        press("a")
+                        await asyncio.sleep(0.6)
+                        if came_up(before, await shoot()):
+                            return (f"arrived: at {target}, facing them, and pressed a to "
+                                    f"talk ({time.monotonic() - t0:.0f} s): read their line "
+                                    "to the player word for word; a question in it (rest? "
+                                    "buy?) is the player's to answer")
+                        pressed += 1
+                        log(f"rooms: nothing came up ({pressed}): {target} walks about; "
+                            "lining up again")
+                        if pressed >= 10:  # about 10 s: they come by now and then
+                            return (f"arrived: at {target} ({time.monotonic() - t0:.0f} s), "
+                                    "but they walk about and pressing a as they came by "
+                                    "brought nothing up: look")
+                        lines = 0
+                        continue
                     if talk and press is not None:
                         await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
                         for tries in range(3):
@@ -1345,6 +1456,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                                 "player word for word; a question in it (rest? buy?) is "
                                 "the player's to answer")
                     return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"
+                settled = False
                 goals = set(ends)
                 if path is None and room.learned:
                     if (said_wait := await wait_for_way(room, blocker, waits, steer, log)):

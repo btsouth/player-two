@@ -77,7 +77,7 @@ def by_target(box: Box, task: dict, loc: int) -> tuple[bool, str]:
         if (int(y) // 16, int(x) // 16) == t and (off <= 6 or not person):
             ok = True
     if task.get("talk") and "dialog" in ram:  # talking: near them is enough (a step on)
-        ok = math.dist((x, y), at) <= 48
+        ok = math.dist((x, y), at) <= (80 if hit and hit[0].moves else 48)  # (walks about)
     why = f"at {x:.0f},{y:.0f}, by it" if ok else f"at {x:.0f},{y:.0f}, not by it"
     if task.get("talk"):  # bytes that may say a text box is up (to find which does)
         why += " " + " ".join(f"{a:x}={g.read(a, 1)[0]}" for a in (0x11F, 0x127, 0x134, 0x1EE,
