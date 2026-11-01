@@ -347,6 +347,11 @@ class Session:
                            self.agent_say,
                            game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
                            language=settings.language, on_action=self.on_action)
+        # What was said lately (narration, the reader, answers): the screen in words, for
+        # the agent's check that a line it's about to say is about the game.
+        self.agent.context_lines = lambda: [e["text"] for e in self.events.recent
+                                            if e.get("kind") in ("say", "ask")
+                                            and e.get("text")]
         self.status = ""
         self.transcribing = False
         # The game in view: None until the first look, then its name ("" when it has

@@ -105,6 +105,10 @@ class FakeMuse:
         for i in range(0, len(self.stream_text), 5):
             yield self.stream_text[i : i + 5]
 
+    async def json(self, messages, effort=None, max_tokens=3000):
+        # The on-topic check's second look (ontopic.second_look): about the game.
+        return {"game": True}
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -927,3 +931,69 @@ def test_a_game_pack_is_shared_by_every_version_of_the_game(tmp_path):
 
 async def _now():
     return None
+
+
+class TestOnTopic:
+    """Live 3: "what's the battle mode set to?" was answered with a sentence about
+    football fouls, a reply in words spoken as is."""
+
+    FOUL = ("If a tackle involves contact that endangers the safety of an opponent, it must be "
+            "sanctioned as serious foul play.")
+
+    def test_grounding_tells_the_foul_from_game_lines(self):
+        from playertwo import ontopic
+        from playertwo.prompts import AGENT
+
+        g = ontopic.Grounds(AGENT, "Chrono Trigger", "what's the battle mode set to?")
+        assert g.off_topic(self.FOUL)
+        assert not g.off_topic("It's set to Active.")
+        assert not g.off_topic("Battle mode is set to Wait, closing the menu.")
+        assert g.off_topic("Preheat the oven and grease a nine inch baking pan.")
+        assert not g.off_topic("Done.")  # too short to judge, and a helper's word
+
+    def _agent(self, replies, verdicts):
+        """An agent whose model replies in words (str) or tool calls, and whose second
+        look answers each held line in turn."""
+        t = TestAgent()
+        agent, _pad, said, _asked, muse = t.make([])
+        looks = []
+        queue = list(replies)
+
+        async def tools(messages, tools, effort=None, max_tokens=3000):
+            muse.seen.append(messages)
+            r = queue.pop(0)
+            if isinstance(r, str):
+                return SimpleNamespace(content=r, tool_calls=[])
+            return await FakeMuse([r]).tools(messages, tools)
+
+        async def judge(messages, effort=None, max_tokens=0):
+            looks.append(messages[0]["content"])
+            return {"game": verdicts.pop(0)}
+
+        muse.tools, muse.json = tools, judge
+        agent.game = "Chrono Trigger"
+        return agent, said, looks, muse
+
+    def test_an_unrelated_reply_in_words_is_never_said(self):
+        agent, said, looks, muse = self._agent(
+            [self.FOUL, [("finish", {"text": "It's set to Active."})]], [False])
+        result = run(agent.run("what's the battle mode set to?"))
+        assert said == ["It's set to Active."] and result.outcome == "It's set to Active."
+        assert len(looks) == 1 and "battle mode" in looks[0]
+        assert "not said" in muse.seen[-1][-1]["content"]  # told why, and asked again
+
+    def test_a_good_line_the_check_is_unsure_of_is_said_after_a_yes(self):
+        agent, said, looks, _muse = self._agent(
+            ["Standing by the bed, I'll try to settle in tonight."], [True])
+        run(agent.run("talk to the innkeeper"))
+        assert said == ["Standing by the bed, I'll try to settle in tonight."]
+        assert len(looks) == 1
+
+    def test_twice_off_the_point_ends_with_a_plain_line(self):
+        from playertwo.agent import LOST_THREAD
+
+        agent, said, _looks, _muse = self._agent(
+            [self.FOUL, [("finish", {"text": "Preheat the oven and grease a nine inch "
+                                             "baking pan."})]], [False, False])
+        result = run(agent.run("what's the battle mode set to?"))
+        assert said == [LOST_THREAD] and result.outcome == LOST_THREAD
