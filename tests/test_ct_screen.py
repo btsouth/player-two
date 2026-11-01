@@ -522,3 +522,14 @@ def test_what_did_he_say_never_repeats_an_older_box_after_one_the_model_read():
         r.update(bad, now=t)
     assert r.model_read and r.heard == ""
     assert ctscreen.answer("what did she say", look("none"), heard=r.heard) is None
+
+
+MOTHER = LIVE.parent / "night-2026-11-01" / "steam-frames" / "interior-cronos-room-dialogue-bottom.png"
+
+
+@pytest.mark.skipif(not MOTHER.exists(), reason="no bottom dialogue frame")
+def test_a_two_line_box_at_the_bottom_is_read_whole():
+    lk = ctscreen.look(cv2.imread(str(MOTHER)), PARTY)
+    text = lk.parts.get("text", "")
+    assert lk.kind == "text" and not lk.unsure, lk.parts
+    assert text.startswith("Mother: ") and text.count("!") == 2 and len(text.split()) == 9

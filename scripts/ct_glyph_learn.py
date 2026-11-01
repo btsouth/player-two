@@ -4,7 +4,7 @@ was read by eye.
     python scripts/ct_glyph_learn.py LABELS.json [--save]
 
 LABELS.json: [{"path": frame, "lines": [[y, "text near canvas row y", x0?, x1?], ...],
-               "box": [x0, y0, x1, y1] (optional), "local": true}]
+               "box": [x0, y0, x1, y1] (optional), "local": true, "scale": 0.75 (dialogue)}]
 A line is learned only when its glyph count matches the label's (spaces aside), so a misread
 cut never teaches the library a wrong shape. Prints what it read before and after.
 """
@@ -53,8 +53,14 @@ def main() -> None:
         img = to_canvas(cv2.imread(item["path"]), ctsteam.CANVAS)
         hs = find_template(img, ctsteam.templates()["hand"], ctsteam.CANVAS)
         box = item.get("box") or [0, 0, *ctsteam.CANVAS]
+        k = item.get("scale", 1.0)  # dialogue is read at 0.75 (ctscreen.DIALOGUE)
+        if k != 1.0:
+            img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+            box = [round(v * k) for v in box]
+            hs = []
         found = lines_of(img, box, [h[:4] for h in hs], item.get("local", True))
         for spec in item["lines"]:
+            spec = [round(spec[0] * k), spec[1], *[round(v * k) for v in spec[2:]]]
             y, text = spec[0], spec[1]
             cand = [(abs(fy - y), fy, gl) for fy, gl in found if abs(fy - y) < 30]
             if not cand:

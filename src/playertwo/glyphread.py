@@ -16,6 +16,7 @@ of any size reads the same.
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -227,7 +228,8 @@ class GlyphLib:
                 s += " "
             s += self.y[int(idx[k, 0])]
             worst = max(worst, float(dist[k, 0]))
-        return s, worst
+        # A "u" whose thin bottom didn't make the mask comes apart as "i]".
+        return re.sub(r"(?<=[A-Za-z])i\](?=[a-z])", "u", s), worst
 
 
 def colour(crop: np.ndarray, m: np.ndarray) -> str:
