@@ -55,10 +55,14 @@ class Tuning:
     playout_quiet_s: float = 0.7  # party HP and the top bar unchanged this long: done
     playout_max_s: float = 3.5
     spend_playout_s: float = 5.0  # after a tech's MP is spent, the time to see it land
+    # A heal or revive is watched until the HP rises: live, Frog's Heal showed its numbers
+    # about 6 s after its MP went, past the 5 s above, and the model healed again.
+    heal_playout_s: float = 9.0
     run_chunk_ms: int = 2500  # L and R held this long between looks
     run_chunks: int = 3
     spoils_wait_s: float = 1.2  # a won fight's message left this long gets an a
     win_max_s: float = 240.0
+    gone_s: float = 3.0  # no party box this long, with no spoils seen: the fight is over
     low_share: float = 0.34  # under this share of most HP, someone needs healing
 
 
@@ -73,6 +77,23 @@ HEAL_ALL_TECHS = {"Frog": ("Heal", 2), "Robo": ("Heal Beam", 3), "Marle": ("Cure
 REVIVE_TECHS = {"Crono": ("Raise", 10)}
 HEAL_ITEMS = ("Mid-Potion", "Hi-Potion", "Potion")
 REVIVE_ITEMS = ("Athenian Water", "Revive")
+# (Elixirs restore MP too, so they're never "nothing to heal".)
+HEAL_NAMES = {n for ts in HEAL_TECHS.values() for n, _c in ts} | set(HEAL_ITEMS) | {
+    t for t, _c in HEAL_ALL_TECHS.values()} | {"Full Potion", "Lapis", "Tonic", "Mid Tonic",
+                                               "Full Tonic"}
+GROUP_HEALS = {t for t, _c in HEAL_ALL_TECHS.values()} | {"Lapis"}
+REVIVE_NAMES = {t for t, _c in REVIVE_TECHS.values()} | set(REVIVE_ITEMS) | {"Arise"}
+
+
+def heals(intent: Intent) -> bool:
+    """A heal (not a revive): what it does shows as HP going up."""
+    return intent.command.lower() in ("tech", "item") and any(
+        same_name(intent.name, n) for n in HEAL_NAMES)
+
+
+def revives(intent: Intent) -> bool:
+    return intent.command.lower() in ("tech", "item") and any(
+        same_name(intent.name, n) for n in REVIVE_NAMES)
 
 
 @dataclass
@@ -176,8 +197,24 @@ class Executor:
         self.lists: dict[str, list[tuple[str, ...]]] = {}  # rows seen, per list
         self.notes: list[str] = []
         self.held: State | None = None  # the screen as it was when paused
+        self.missing: set[tuple[str, str]] = set()  # (who or "item", name) not in a list
         self._unpause_first = False
         self._acting = ""  # whose command is being put in, once known
+        self.landed = False  # whether the last watched heal's HP showed
+        self.after: State | None = None  # the last command's screen once it played out
+
+    def lacks(self, intent: Intent, actor: str) -> bool:
+        """Whether this command was found missing in this fight (not in the list, or the
+        list empty): not worth opening the list again."""
+        if intent.command.lower() not in ("tech", "item"):
+            return False
+        key = key_for(intent, actor)
+        return (key, "*") in self.missing or (key, _norm(intent.name)) in self.missing
+
+    def new_fight(self) -> None:
+        """A new fight: everyone stands somewhere else, and a list may hold other things."""
+        self.ally_at.clear()
+        self.missing.clear()
 
     # -- seeing and pressing ---------------------------------------------------------------
 
@@ -326,6 +363,11 @@ class Executor:
         self._unpause_first = False
         try:
             st = st or await self.look()
+            full = needless(self.held if st.paused and self.held is not None else st, intent)
+            if full:
+                # Nothing pressed, the fight left as it was (paused).
+                self.log(f"not done: {full}")
+                return Outcome(False, full, st, stopped=full)
             if st.paused and self.held is not None and self.held.kind == "command":
                 # Plan from what was there when it paused; Start goes with the first burst,
                 # so the fight runs only while the presses do.
@@ -353,6 +395,7 @@ class Executor:
             if watch:
                 st, seen = await self._watch(before, intent)
                 text += ". " + seen
+            self.after = st  # the screen once it played out, before any pause
             if pause_after and self.t.hold_paused:
                 st = await self._pause_after(st)
             return Outcome(True, text, st, presses=self.presses[start:])
@@ -466,9 +509,10 @@ class Executor:
             if st.kind == "list" and not any(e for r in st.entries for e in r):
                 st = await self.back_out(st)
                 what = "techs" if intent.command.lower().startswith("tech") else "items"
+                self.missing.add((key_for(intent, actor), "*"))
                 raise Stop(f"{actor or 'their'} {intent.command.lower()} list is empty: no "
                            f"{what} to use yet, so {name} can't be done")
-        key = "item" if intent.command.lower().startswith("item") else f"tech:{actor}"
+        key = key_for(intent, actor)
         order = self.lists.get(key, [])
         way = "down"
         hit = next((i for i, r in enumerate(order) for e in r if same_name(e, name)), None)
@@ -523,15 +567,17 @@ class Executor:
                 turned += 1
                 if turned >= 2:
                     seen = ", ".join(e for r in order for e in r if not e.startswith("["))
+                    self.missing.add((key, _norm(name)))
                     st = await self.back_out(st)
                     raise Stop(f"{name} isn't in the {intent.command.lower()} list "
                                f"(it has {seen})")
                 way = "up" if way == "down" else "down"
         raise Stop(f"couldn't reach {name} in the list")
 
-    async def who_at(self, st: State) -> str | None:
+    async def who_at(self, st: State, opened_on: str = "") -> str | None:
         """Which ally the glove is on: by where each was bracketed on their turn, by
-        elimination, or by asking `identify`."""
+        elimination, by whose heal it is when it has just opened, or by asking `identify`
+        (a model call: 3 to 10 s each, live)."""
         if not st.gloves:
             return None
         gx, gy = st.gloves[0]
@@ -542,7 +588,13 @@ class Executor:
             return near[0][1]
         unknown = [n for n in names if n not in self.ally_at]
         if len(unknown) == 1 and len(names) > 1:
+            self.ally_at[unknown[0]] = (gx + 8, gy - 60)
             return unknown[0]
+        if opened_on and opened_on in unknown:
+            # A heal's glove opens on the one using it (live, 20 of 20: Marle's Cure on
+            # Marle, Frog's Slurp and Heal on Frog, Crono's potions on Crono).
+            self.ally_at[opened_on] = (gx + 8, gy - 60)
+            return opened_on
         if self.identify is not None:
             try:
                 got = await self.identify(self.frame, st.gloves[0], names)
@@ -574,16 +626,17 @@ class Executor:
         if want in ("me", "self", "myself", "himself", "herself", "themselves"):
             ally = intent.actor or None
         if ally:
-            return await self._target_ally(st, ally)
+            opened = "" if revives(intent) else (self._acting or intent.actor)
+            return await self._target_ally(st, ally, opened)
         side = next((SIDES[w] for w in want.split() if w in SIDES), None)
         if side:
             return await self._target_side(st, side)
         return await self._target_named(st, intent.target)
 
-    async def _target_ally(self, st: State, ally: str) -> State:
+    async def _target_ally(self, st: State, ally: str, opened_on: str = "") -> State:
         self._still_up(st)
         member = st.member(ally) if st.party else None
-        who = await self.who_at(st)
+        who = await self.who_at(st, opened_on)
         if who and same_name(who, ally):
             return st
         if who is None and member is not None and member.down \
@@ -665,14 +718,18 @@ class Executor:
         return st
 
     async def _watch(self, before: State | None, intent: Intent) -> tuple[State, str]:
-        """Look until the command has played out; what changed, in words."""
+        """Look until the command has played out; what changed, in words. A heal or revive
+        is watched until the HP it gives shows (or `heal_playout_s`), so what it did can
+        be said and nothing is cast twice for one request."""
         t0 = time.monotonic()
         st = await self.look()
         msgs: list[str] = []
         last_change = t0
         hp = _hp(st) or (_hp(before) if before else {})
+        hp0 = _hp(before) if before else {}
         target = next((m.name for m in (before.party if before else [])
                        if _norm(m.name) in _norm(intent.target).split()), None)
+        healing = heals(intent) or revives(intent)
         stale = before.top if before else ""  # a message from before the command
         named = intent.name.strip()
         seen_name = not named  # a tech or item shows its name in the bar as it goes off
@@ -682,9 +739,25 @@ class Executor:
         mp0 = _mp(before).get(before.actor) if before and before.actor else None
         tech = intent.command.lower() == "tech"
         spent, spent_at, landed = "", None, False
-        while time.monotonic() - t0 < max(
-                self.t.playout_max_s + (0 if seen_name else 2.5),
-                spent_at - t0 + self.t.spend_playout_s if spent_at else 0.0):
+
+        low = {n: h for n, h in hp0.items() if h is not None}  # the least seen, by name
+
+        def rose(now: dict) -> bool:
+            """The heal's HP showed: its target's (or anyone's, for a group heal) went up
+            from the least it was seen at (a hit can land first)."""
+            for n, h in now.items():
+                if h is not None:
+                    low[n] = min(low.get(n, h), h)
+            who = [target] if target else list(now)
+            return any(now.get(n) is not None and n in low and now[n] > low[n] for n in who)
+
+        def limit() -> float:
+            base = self.t.playout_max_s + (0 if seen_name else 2.5)
+            if healing:
+                return max(base, self.t.heal_playout_s)
+            return max(base, spent_at - t0 + self.t.spend_playout_s if spent_at else 0.0)
+
+        while time.monotonic() - t0 < limit():
             mp = _mp(st).get(before.actor) if mp0 is not None else None
             if tech and mp0 is not None and mp is not None and mp < mp0 and not spent:
                 # MP goes as the tech starts; what it does lands a moment later (live, a
@@ -698,24 +771,33 @@ class Executor:
             if top and named and same_name(top.split(":")[0], named):
                 seen_name = True
             now = _hp(st)
-            if now and now != hp:
-                if target and before and now.get(target) != _hp(before).get(target):
+            if healing and now and not landed and rose(now):
+                landed = seen_name = True
+                last_change = time.monotonic()
+                if target:
                     hp = now
-                    break  # the heal or revive landed
+                    break  # the heal or revive landed on the one it was for
+            if now and now != hp:
+                if not healing and target and before and \
+                        now.get(target) != _hp(before).get(target):
+                    hp = now
+                    break
+                if not healing:
+                    landed = landed or spent_at is not None
                 hp, last_change = now, time.monotonic()
-                landed = landed or spent_at is not None
             if victory(st):
                 break
             el = time.monotonic() - t0
+            waiting_heal = healing and not landed
             if el >= self.t.playout_min_s and seen_name and time.monotonic() - last_change \
-                    >= self.t.playout_quiet_s and not top and (
+                    >= self.t.playout_quiet_s and not top and not waiting_heal and (
                         spent_at is None or landed
                         or time.monotonic() - spent_at >= self.t.spend_playout_s):
                 break
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()
         seen = changes(before, st, msgs) + spent
-        if spent and not landed and not victory(st):
+        if (spent or healing) and not landed and not victory(st):
             # (live: a heal's MP went, a combo played first, the model healed again)
             seen += (f" {named} is on its way (it lands after what's playing): this command "
                      "is done; finish now, and send no other command for it (no second heal).")
@@ -724,10 +806,11 @@ class Executor:
             # "Crono attacked but nothing changed").
             seen = ("The attack went in (damage to enemies isn't read from the screen); no "
                     "party HP changed")
-        if not seen_name:
+        if not seen_name and not (healing and not landed):
             seen += (f" {intent.name} is chosen but hadn't gone off yet (it waits its turn "
                      "behind what's playing); it goes off once the fight runs again: this "
                      "command is done, so send no other command for it.")
+        self.landed = landed
         return st, seen
 
     # -- whole fights ----------------------------------------------------------------------
@@ -795,8 +878,10 @@ class Executor:
                                    + " ".join(x.rstrip(".") + "." for x in said), st,
                                    presses=self.presses[start:])
                 if not st.in_battle:
+                    # (live, Guardia Forest: the party box didn't read for 1.5 s mid-fight
+                    # and "the fight ended after 1 command", three times on one trip)
                     gone = gone or time.monotonic()
-                    if time.monotonic() - gone > 1.5:
+                    if time.monotonic() - gone > self.t.gone_s:
                         return Outcome(True, f"the fight ended after {len(turns)} commands",
                                        st, presses=self.presses[start:])
                 else:
@@ -810,6 +895,11 @@ class Executor:
                 if st.kind == "command" and st.actor:
                     intent = plan(st, self.t)
                     why = ""
+                    options = [o for o in fallbacks(st, self.t) if not self.lacks(o, st.actor)]
+                    if intent is None and len(options) <= 1:
+                        # Nothing to heal or revive with (a level 1 party with no techs or
+                        # items): attack, without a model call each turn.
+                        intent = Intent(st.actor, "attack")
                     if intent is None and decide is not None:
                         why = surprise(st, self.t)
                         seen = st
@@ -826,7 +916,8 @@ class Executor:
                         seen = st
                     missed: set[str] = set()  # targets the glove couldn't reach
                     for option in [intent, *fallbacks(seen, self.t)]:
-                        if option is None or (option.target and option.target in missed):
+                        if option is None or (option.target and option.target in missed) \
+                                or self.lacks(option, seen.actor):
                             continue
                         option.actor = seen.actor
                         out = await self.act(option, watch=False, pause_after=False, st=st)
@@ -853,6 +944,33 @@ class Executor:
         except Stop as exc:
             return Outcome(False, f"{exc} after {len(turns)} commands",
                            await self._settle_stopped(), str(exc), self.presses[start:])
+
+
+def key_for(intent: Intent, actor: str) -> str:
+    """Which list an entry is in: the items, or one character's techs."""
+    return "item" if intent.command.lower().startswith("item") else f"tech:{actor}"
+
+
+def needless(st: State, intent: Intent) -> str:
+    """Why a heal would do nothing (everyone it reaches is at full HP), or ''. Live: "heal
+    Marle" with Marle at 430/430 had Frog lick her anyway."""
+    if not heals(intent) or not st.party or any(m.hp is None or not m.hp_max
+                                                 for m in st.party):
+        return ""
+    want = _norm(re.sub(r"^(the|on|at) ", "", intent.target.strip().lower()))
+    if want in ("me", "self", "myself", "himself", "herself", "themselves"):
+        want = _norm(intent.actor)
+    who = next((m for m in st.party if _norm(m.name) in want.split()), None)
+    group = any(same_name(intent.name, g) for g in GROUP_HEALS)
+    if who is not None and not group:
+        if who.hp >= who.hp_max:
+            return (f"{who.name} is at full HP ({who.hp}/{who.hp_max}): nothing to heal, "
+                    "so nothing was pressed")
+        return ""
+    if (group or not want or want in ANY_TARGET) and all(
+            m.hp >= m.hp_max or m.down for m in st.party):
+        return "everyone standing is at full HP: nothing to heal, so nothing was pressed"
+    return ""
 
 
 def message(top: str) -> bool:
@@ -945,3 +1063,123 @@ def parse_intent(d: dict, actor: str = "") -> Intent | None:
         return None
     return Intent(str(d.get("actor") or actor), cmd, str(d.get("name") or ""),
                   str(d.get("target") or ""))
+
+
+# -- "Heal X": the choice made here, not by a model --------------------------------------
+
+EVERYONE = re.compile(r"^(every(one|body)|all( of us| of you)?|the (party|team|group)|us|"
+                      r"the whole (party|team))$")
+HURT = re.compile(r"^(whoever('s| is)? (hurt|low|weakest|needs it)|who(ever)? needs it|"
+                  r"the (weakest|lowest)( one)?|someone|anyone( hurt)?|the one who'?s hurt|"
+                  r"(the )?(hurt|injured) (one|ally|person))$")
+
+
+def heal_target(said: str, st: State) -> str | None:
+    """Who "heal <said>" means: a party member's name, "everyone", "hurt", or None when
+    it doesn't say (the model decides then)."""
+    w = _norm(said)
+    w = re.sub(r"\b(up|please|now|again|for me)\b", "", w).strip()
+    w = re.sub(r"\s+", " ", w)
+    if EVERYONE.match(w):
+        return "everyone"
+    if HURT.match(w):
+        return "hurt"
+    names = [m.name for m in st.party]
+    return next((n for n in names if _norm(n) == w), None)
+
+
+@dataclass
+class HealPlan:
+    intents: list[Intent] = field(default_factory=list)
+    say: str = ""  # nothing to do: what to tell the player instead
+    whom: str = ""  # who it's for ("" for everyone)
+
+
+def heal_plan(st: State, said: str, actor: str = "",
+              lacks: Callable[[Intent, str], bool] = lambda i, a: False) -> HealPlan | None:
+    """What to do for "heal <said>" (spoken by the player), in order of preference: a
+    healing tech of whoever is up (or of `actor`, when named), then of the others ready,
+    then an item. None when the screen or the words don't settle it."""
+    if not st.party or any(m.hp is None or not m.hp_max for m in st.party):
+        return None
+    who = heal_target(said, st)
+    if who is None:
+        return None
+    standing = [m for m in st.party if not m.down]
+    hurt = sorted((m for m in standing if m.hp < m.hp_max), key=lambda m: m.share)
+    if who == "everyone":
+        if not hurt:
+            return HealPlan(say="Everyone's at full health already.")
+    elif who == "hurt":
+        if not hurt:
+            down = [m.name for m in st.party if m.down]
+            return HealPlan(say="Everyone standing is at full health" + (
+                f"; {' and '.join(down)} {'is' if len(down) == 1 else 'are'} knocked out."
+                if down else " already."))
+        who = hurt[0].name
+    else:
+        m = st.member(who)
+        if m.down:
+            return None  # a revive: the model's call
+        if m.hp >= m.hp_max:
+            return HealPlan(say=f"{who} is at full health already, {m.hp} of {m.hp_max}.")
+    ready = st.ready() or ([st.actor] if st.actor else [])
+    if not ready and not actor:
+        # No one's command is up yet: whoever can heal, waited for in turn.
+        ready = [m.name for m in standing if HEAL_TECHS.get(m.name)]
+    if actor:
+        name = next((n for n in ready if same_name(n, actor)), None)
+        users = [name] if name else [actor]
+    else:
+        users = sorted(ready, key=lambda n: n != st.actor)
+    out: list[Intent] = []
+    for user in users:
+        u = st.member(user)
+        mp = (u.mp or 0) if u else 0
+        if u is None or u.down:
+            continue
+        group = HEAL_ALL_TECHS.get(user)
+        if who == "everyone" and group and mp >= group[1]:
+            out.append(Intent(user, "tech", group[0], ""))
+        if who != "everyone":
+            # The stronger single heal first (Cure over Aura).
+            singles = sorted(((n, c) for n, c in HEAL_TECHS.get(user, []) if mp >= c),
+                             key=lambda t: -t[1])
+            out += [Intent(user, "tech", n, who) for n, _c in singles]
+        elif not group:
+            out += [Intent(user, "tech", n, hurt[0].name)
+                    for n, c in HEAL_TECHS.get(user, []) if mp >= c][:1]
+    first = users[0] if users else ""
+    if who == "everyone":
+        # Lapis heals everyone; else a potion for the one worst off.
+        out += [Intent(first, "item", "Lapis", ""),
+                *(Intent(first, "item", it, hurt[0].name) for it in HEAL_ITEMS)]
+    else:
+        out += [Intent(first, "item", it, who) for it in HEAL_ITEMS]
+    out = [i for i in out if not lacks(i, i.actor)]
+    return HealPlan(out, whom="" if who == "everyone" else who)
+
+
+def heal_line(intent: Intent, out: Outcome, before: State | None,
+              after: State | None = None) -> str:
+    """What a heal did, in a sentence, from what the screen showed (`after`: the last
+    look before the fight was paused again; a paused screen reads less)."""
+    st = after if after is not None and after.party else out.state
+    actor = intent.actor or (out.text.split(":")[0] if ":" in out.text else "")
+    what = f"{actor}'s {intent.name}" if actor else intent.name
+    if not out.ok:
+        return ""
+    b, a = _hp(before), _hp(st)
+    up = [(n, a[n]) for n in a if a.get(n) is not None and b.get(n) is not None
+          and a[n] > b[n]]
+    tops = {m.name: m.hp_max for m in (st.party if st else [])}
+    if intent.target:
+        hp = a.get(intent.target)
+        top = tops.get(intent.target)
+        if any(n == intent.target for n, _h in up) and hp is not None:
+            full = " (full)" if top and hp >= top else ""
+            return f"{what} healed {intent.target}: {hp} of {top}{full}."
+        return f"{what} is on its way to {intent.target}."
+    if up:
+        return f"{what}: " + ", ".join(f"{n} up to {h}" for n, h in up) + "."
+    return f"{what} is on its way."

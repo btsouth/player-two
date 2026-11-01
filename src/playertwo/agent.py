@@ -20,7 +20,7 @@ from PIL import Image
 from . import ctsteam
 from .ack import FIGHT, RUN
 from .areamap import AreaMap
-from .battle import Executor, Intent, Stop, parse_intent
+from .battle import Executor, Intent, Stop, heal_line, heal_plan, parse_intent
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
@@ -403,6 +403,11 @@ with its middle in thousandths of the picture's width and height, or {"epoch": n
 
 
 # A plain request to go somewhere: on a world map the atlas knows, it's walked at once.
+# "Heal Frog", "Marle, heal everyone": in a fight, chosen and done without a model turn.
+HEAL = re.compile(r"(?:(?P<actor>crono|marle|lucca|robo|frog|ayla|magus),? )?"
+                  r"(?:please |can you |could you )?(?:heal|cure) (?P<who>.{2,40})")
+# Commands in one request ("heal Frog and attack"): a fight gets that many battle calls.
+COMMANDS = re.compile(r"\b(attack|hit|heal|cure|use|cast|revive|raise)\b")
 OUT = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|us) |"
                  r"(?:let'?s |please )?(?:go|head|walk) )(?:back )?(?:out|outside)"
                  r"(?: of here| again)?")
@@ -1069,11 +1074,21 @@ class Agent:
             return None
         if len(st.party) >= 2:
             self._party = [m.name for m in st.party]  # the field menu's blocks, in order
-        now = time.monotonic()
-        if now - self._battle_seen > 30 and self._executor is not None:
-            self._executor.ally_at.clear()  # a new fight: everyone stands elsewhere
-        self._battle_seen = now
+        self.note_battle(st, new=time.monotonic() - self._battle_seen > 30)
         return st
+
+    def note_battle(self, st: State | None = None, new: bool = False) -> None:
+        """A fight is on screen (the app's reader sees it too, between requests); `new`:
+        it just started, so where everyone stood and what the lists lacked are forgotten.
+        (A fight with a quiet spell of more than 30 s between requests is still the same
+        fight: the reader keeps this fresh.) A turn the reader saw shows where that
+        fighter stands, for the target glove later (no model call to tell who it's on)."""
+        if new and self._executor is not None:
+            self._executor.new_fight()
+        self._battle_seen = time.monotonic()
+        if st is not None and st.kind == "command" and st.actor and st.bracket \
+                and not st.paused:
+            self.executor().ally_at[st.actor] = st.bracket
 
     def executor(self) -> Executor:
         if self._executor is None:
@@ -1132,6 +1147,40 @@ class Agent:
                 f" on {intent.target}" if intent.target else "") + "."
             asyncio.get_running_loop().create_task(self._speak(line))
         return intent
+
+    async def _heal_now(self, actor: str, who: str, run: Run, t0: float) -> str | None:
+        """"Heal X" in a fight, chosen here (whoever is up with a healing tech, else an
+        item) and done once: what it did, said, or None to leave it to the model."""
+        st = self._battle
+        ex = self.executor()
+        held = ex.held if st is not None and st.paused and ex.held is not None else st
+        plan = heal_plan(held, who, actor, ex.lacks) if held is not None else None
+        if plan is None:
+            return None
+        if plan.say:
+            await self._speak(plan.say)
+            return plan.say
+        for intent in plan.intents[:4]:
+            await self.go.wait()
+            if self.cancelled:
+                return "cancelled"
+            before = ex.held or held
+            out = await ex.act(intent)
+            args = {"actor": intent.actor, "command": intent.command, "name": intent.name,
+                    "target": intent.target}
+            now = ctsteam.describe(out.state) if out.state is not None else "unreadable"
+            run.steps.append(Step("battle", args, time.monotonic() - t0,
+                                  f"{'done' if out.ok else 'stopped'}: {out.text}. Now: {now}"))
+            if out.ok:
+                line = heal_line(intent, out, before, ex.after)
+                await self._speak(line)
+                return line
+            if self.cancelled or "player" in out.stopped:
+                return "cancelled"
+            if out.stopped.startswith(("not in a battle", "the fight is won")) \
+                    or "full HP" in out.stopped:
+                return None
+        return None
 
     async def _hold_fight(self, st: State) -> State:
         """Pause the fight while the model thinks (Start), if it isn't already."""
@@ -2045,6 +2094,19 @@ class Agent:
                     await self._battle_on(frame)
                 tried += (f"fight({mode}) was done already: {result}\nTell the player how "
                           "it went in a sentence, from that result, and finish.\n\n")
+            heal = HEAL.fullmatch(said.strip(" .!?"))
+            if heal and not mode:
+                line = await self._heal_now(heal.group("actor") or "", heal.group("who"),
+                                            run, t0)
+                if line is not None:
+                    run.outcome = line
+                    run.seconds = time.monotonic() - t0
+                    self.history.append(f"{request} -> {run.outcome}")
+                    return run
+                frame = await self.grab()
+                self._battle = await self._battle_on(frame)
+                tried += "".join(f"battle({s.args}) was tried already: {s.result}\n"
+                                 for s in run.steps) + ("\n" if run.steps else "")
         recent = "\n".join(f"- {h}" for h in self.history[-4:])
         trail = self.trail.notes()
         msgs: list[dict] = [
@@ -2058,6 +2120,11 @@ class Agent:
         ]
         # The player's answer to a question sets a new course: it gets turns of its own.
         budget, _turn, out_of_turns = self.max_turns, -1, True
+        # A fight: as many battle commands as the player named, then only finish (live:
+        # "heal Frog" became three heals in five runs of nine, up to 42 s).
+        asked = max(1, len(COMMANDS.findall(" ".join(request.lower().split()))))
+        commanded = sum(1 for st in run.steps if st.tool == "battle"
+                        and st.result.startswith("done:"))
         while _turn + 1 < budget:
             _turn += 1
             if self.cancelled:
@@ -2066,8 +2133,11 @@ class Agent:
                 break
             t_model = time.monotonic()
             last_turn = _turn == budget - 1
-            msg = await self.muse.tools(trim_images(msgs), self._tools(frame) if not last_turn
-                                        else FINISH_OR_ASK if self.ask else FINISH_ONLY)
+            done_fighting = self._battle is not None and commanded >= asked
+            msg = await self.muse.tools(trim_images(msgs), self._tools(frame)
+                                        if not last_turn and not done_fighting
+                                        else FINISH_ONLY if done_fighting or not self.ask
+                                        else FINISH_OR_ASK)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
@@ -2117,6 +2187,9 @@ class Agent:
                     result = ("not done: you're out of steps; ask_player whether to keep "
                               "going, or finish" if self.ask else
                               "not done: only finish is left now")
+                elif c.function.name == "battle" and commanded >= asked:
+                    result = ("not done: the command the player asked for is done already "
+                              "(one battle command each); finish with what it did")
                 elif c.function.name == "finish" and acted:
                     # It hasn't seen what its presses did: no telling the player yet.
                     result = "not finished: look at the screen after those actions first"
@@ -2169,6 +2242,11 @@ class Agent:
                         self._wander_s += time.monotonic() - wander_t0
                     acted = True
                     self._said_before_act = len(self.said)
+                    if c.function.name == "battle" and result.startswith("done:"):
+                        commanded += 1
+                        if commanded >= asked:
+                            result += (" That was the command asked for: finish now, saying "
+                                       "what it did (no other command).")
                     result = self._check_walk(c.function.name, result)
                     if (c.function.name in ("go_to_place", "go_to_exit", "go_to_era")
                             and result.startswith("arrived")) or result.startswith("new_area"):

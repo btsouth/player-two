@@ -14,7 +14,8 @@ from playertwo.ctsteam import Member, State
 
 FAST = Tuning(after_tap_s=0.0, poll_s=0.0, pause_wait_s=0.2, ready_wait_s=0.5,
               actor_wait_s=0.3, target_wait_s=0.2, playout_min_s=0.0, playout_quiet_s=0.0,
-              playout_max_s=0.2, spoils_wait_s=0.05, win_max_s=5.0, run_chunk_ms=10)
+              playout_max_s=0.2, spoils_wait_s=0.05, win_max_s=5.0, run_chunk_ms=10,
+              heal_playout_s=1.0, gone_s=0.3)
 ITEMS = ["Potion", "Mid-Potion", "Hi-Potion", "Mid-Ether", "Panacea", "Athenian Water",
          "Lapis", "Hi-Ether", "Ether", "Elixir", "Barrier Sphere", "Shield Sphere"]
 HEALS = {"Potion": 50, "Mid-Potion": 200, "Hi-Potion": 500, "Cure": 300, "Aura": 100}
@@ -207,7 +208,8 @@ class FakeCT:
             st.command = ("Attack", "Tech", "Item")[self.cmd]
             st.actor = self.party[self.hand_col].name
             party[self.hand_col].colour = "yellow"
-            st.bracket = self.party[self.hand_col].at
+            if self.party[self.hand_col].name not in getattr(self, "no_bracket", ()):
+                st.bracket = self.party[self.hand_col].at
             st.hand = (300, 1200)
         elif self.mode == "list" and not self.list:
             st.kind, st.hand = "list", (300, 1232)  # an empty tech list: the MP column only
@@ -322,6 +324,7 @@ async def test_a_tech_when_none_are_learned_yet_stops_and_says_so():
     # as "not a battle" and the agent tried for minutes.
     p = party()
     p[2].techs = []
+    p[0].hp = 300
     game = FakeCT(p, enemies(), ready=(2,))
     out = await executor(game).act(Intent("Marle", "tech", "Aura", "Crono"))
     assert not out.ok
@@ -331,6 +334,7 @@ async def test_a_tech_when_none_are_learned_yet_stops_and_says_so():
 
 async def test_after_a_pause_start_and_the_command_go_in_one_burst():
     game = FakeCT(party(), enemies(), ready=(0, 2))
+    game.party[0].hp = 300
     ex = executor(game)
     await ex.pause()  # the request came in: paused while the model thinks
     game.log.clear()
@@ -527,8 +531,13 @@ async def test_the_agent_pauses_a_ct_fight_and_offers_only_the_battle_tools(monk
             return SimpleNamespace(content="", tool_calls=[call])
 
     class Ex:
+        held = None
+
         def __init__(self):
             self.acts, self.paused, self.ally_at = [], 0, {}
+
+        def new_fight(self):
+            self.ally_at.clear()
 
         async def pause(self, st=None):
             self.paused += 1
@@ -592,6 +601,10 @@ async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
 
     class Ex:
         ally_at: dict = {}
+        held = None
+
+        def new_fight(self):
+            pass
 
         async def pause(self, st=None):
             return spoils
@@ -716,3 +729,188 @@ async def test_a_glove_left_on_an_ally_over_the_windows_is_backed_out_first():
     out = await executor(game).act(Intent("", "attack"))
     assert out.ok, out.text
     assert game.log[0] == "b"
+
+
+async def test_a_heal_glove_opens_on_its_user_so_no_model_is_asked():
+    """Live 2026-11-01: Frog stands behind the windows and was never bracketed, so a glove
+    on him (or on the one healing, before their bracket was seen) asked the model who it
+    was: 3 to 10 s a look, 13 s of a 25 s "heal Crono"."""
+    p = party()
+    p[1].hp = 100
+    game = FakeCT(p, enemies(), ready=(0, 2))
+    game.no_bracket = {"Frog", "Marle"}
+
+    async def identify(_frame, glove, names):
+        raise AssertionError("asked the model")
+
+    ex = executor(game)
+    ex.identify = identify
+    assert (await ex.act(Intent("Crono", "attack"), watch=False, pause_after=False)).ok
+    out = await ex.act(Intent("Marle", "tech", "Cure", "Frog"))
+    assert out.ok, out.text
+    assert p[1].hp == 400 and "Frog HP 100 to 400" in out.text
+    assert {"Marle", "Frog"} <= set(ex.ally_at)  # learnt from the glove for next time
+
+
+async def test_a_heal_on_someone_at_full_health_presses_nothing():
+    """Live: "heal Marle" with Marle at 430/430 had Frog use Slurp on her."""
+    game = FakeCT(party(), enemies(), ready=(1,))
+    ex = executor(game)
+    await ex.pause()  # the request came in: paused while the model thinks
+    game.log.clear()
+    out = await ex.act(Intent("", "tech", "Slurp", "Marle"))
+    assert not out.ok and "Marle is at full HP (430/430)" in out.text
+    assert game.log == [] and game.paused
+    out = await ex.act(Intent("Frog", "tech", "Heal"))
+    assert not out.ok and "everyone standing is at full HP" in out.text
+
+
+async def test_win_doesnt_end_when_the_party_box_drops_out_a_moment():
+    """Live, Guardia Forest: leaves behind the windows hid the party box for 1.5 s and
+    "the fight ended after 1 command", three times on one trip."""
+    game = FakeCT(party(), [(1000, 500, "Imp", 2)], ready=(0,))
+    read = game.read
+    blank = {"n": 0}
+
+    def flaky(frame, full=True):
+        st = read(frame, full)
+        if st.kind == "none" and st.party and blank["n"] < 3:
+            blank["n"] += 1
+            return State(top="r. utvA-,t r")  # nothing read: no party box
+        return read(frame, full)
+
+    game.read = flaky
+    ex = Executor(game.press, game.grab, read=game.read,
+                  tuning=Tuning(**{**FAST.__dict__, "gone_s": 0.5, "poll_s": 0.2}))
+    out = await ex.win()
+    assert out.ok and "Earned 10 ExP." in out.text, out.text
+
+
+async def test_win_with_nothing_to_heal_with_attacks_without_asking_each_turn():
+    """A level 1 party: no techs, no items. Low on HP, it attacks; it looked once."""
+    p = [Fighter("Crono", 20, 70, 8, (1884, 960), []),
+         Fighter("Marle", 65, 65, 12, (1336, 848), [])]
+    game = FakeCT(p, [(1000, 500, "Hetake", 6)], ready=(0, 1), items=["Shelter"])
+    asked = []
+
+    async def decide(st, why):
+        asked.append(why)
+        return Intent(st.actor, "item", "Potion", "Crono")
+
+    out = await executor(game).win(decide)
+    assert out.ok and "won after 6 commands" in out.text, out.text
+    # Once each (Crono's items, Marle's techs): then it knows there's nothing to use.
+    assert len(asked) <= 2
+
+
+@pytest.mark.parametrize(("said", "hp", "ready", "want"), [
+    ("Frog", (780, 100, 430), (2,), ("Marle", "tech", "Cure", "Frog")),
+    ("Frog", (780, 100, 430), (1,), ("Frog", "tech", "Slurp", "Frog")),
+    ("crono", (300, 494, 430), (0,), ("Crono", "item", "Mid-Potion", "Crono")),
+    ("everyone", (300, 100, 430), (1, 2), ("Frog", "tech", "Heal", "")),
+    ("whoever is hurt", (780, 494, 200), (0, 2), ("Marle", "tech", "Cure", "Marle")),
+    ("Marle", (780, 494, 430), (1,), "Marle is at full health already, 430 of 430."),
+    ("everyone up", (780, 494, 430), (1,), "Everyone's at full health already."),
+    ("the castle", (780, 494, 430), (1,), None),
+])
+def test_heal_x_is_chosen_from_the_screen(said, hp, ready, want):
+    names = ("Crono", "Frog", "Marle")
+    st = State(kind="command", columns=list(ready), actor_col=ready[0],
+               actor=names[ready[0]], slots=list(names), party=[
+                   Member(n, h, m, 60, 66, "white") for n, h, m in
+                   zip(names, hp, (780, 494, 430), strict=True)])
+    plan = battle.heal_plan(st, said)
+    if want is None:
+        assert plan is None
+    elif isinstance(want, str):
+        assert plan.say == want and not plan.intents
+    else:
+        first = plan.intents[0]
+        assert (first.actor, first.command, first.name, first.target) == want
+
+
+def test_a_heal_is_said_from_the_hp_it_gave():
+    before = State(party=[Member("Frog", 1, 494, 60, 65, "white")])
+    after = State(party=[Member("Frog", 126, 494, 58, 65, "white")])
+    out = battle.Outcome(True, "Frog: tech Slurp on Frog. Seen: Frog HP 1 to 126", after)
+    assert battle.heal_line(Intent("Frog", "tech", "Slurp", "Frog"), out, before) == \
+        "Frog's Slurp healed Frog: 126 of 494."
+    out = battle.Outcome(True, "Frog: tech Slurp on Frog.", before)
+    assert battle.heal_line(Intent("Frog", "tech", "Slurp", "Frog"), out, before) == \
+        "Frog's Slurp is on its way to Frog."
+
+
+def _muse(replies):
+    import json
+    from types import SimpleNamespace
+
+    class Muse:
+        s = SimpleNamespace(image_max_side=640)
+
+        def __init__(self):
+            self.replies, self.tools_seen = list(replies), []
+
+        async def tools(self, messages, tools, effort=None, max_tokens=0):
+            self.tools_seen.append({t["function"]["name"] for t in tools})
+            name, args = self.replies.pop(0)
+            call = SimpleNamespace(id="c", function=SimpleNamespace(
+                name=name, arguments=json.dumps(args)),
+                model_dump=lambda: {"id": "c", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(args)}})
+            return SimpleNamespace(content="", tool_calls=[call])
+
+    return Muse()
+
+
+def _agent(monkeypatch, game, muse):
+    from PIL import Image
+
+    from playertwo import agent as agent_mod
+    from playertwo.controls import DryRun
+    from playertwo.screen import Frame
+
+    monkeypatch.setattr(agent_mod.ctsteam, "read", lambda img, full=True: game.read(img, full))
+    said = []
+
+    async def grab():
+        return Frame(Image.new("RGB", (1280, 720)), 0)
+
+    async def speak(text):
+        said.append(text)
+
+    ag = agent_mod.Agent(muse, DryRun(), grab, speak, game="Chrono Trigger")
+    ag._executor = executor(game)
+    return ag, said
+
+
+async def test_heal_x_in_a_fight_is_one_command_and_no_model_turn(monkeypatch):
+    """Live: "heal X" passed 7/9 in 13 to 42 s; five runs healed two or three times."""
+    p = party()
+    p[1].hp = 100
+    game = FakeCT(p, enemies(), ready=(0,))
+    muse = _muse([])
+    ag, said = _agent(monkeypatch, game, muse)
+    ag.note_battle(new=True)
+    ag.note_battle(game.read(None))  # the reader saw Crono's turn before the request
+    game.ready, game.hand_col = [2], 2
+    run = await ag.run("heal Frog")
+    assert muse.tools_seen == []  # no model call at all
+    assert p[1].hp == 400
+    assert said == ["Marle's Cure healed Frog: 400 of 494."] and run.outcome == said[0]
+    assert [s.tool for s in run.steps] == ["battle"]
+    run = await ag.run("heal Marle")
+    assert said[-1] == "Marle is at full health already, 430 of 430." and len(run.steps) == 0
+
+
+async def test_the_model_gets_one_battle_command_for_one_asked(monkeypatch):
+    game = FakeCT(party(), enemies(), ready=(0, 2))
+    muse = _muse([("battle", {"command": "attack", "target": "left"}),
+                  ("battle", {"actor": "Marle", "command": "attack"}),
+                  ("finish", {"text": "Crono hit the one on the left."})])
+    ag, said = _agent(monkeypatch, game, muse)
+    run = await ag.run("attack the one on the left")
+    assert "battle" in muse.tools_seen[0]
+    assert muse.tools_seen[1] == {"finish"}
+    assert run.steps[1].result.startswith("not done: the command the player asked for")
+    assert sum(e[3] for e in game.enemies) == 8  # one hit, not two
+    assert said[-1] == "Crono hit the one on the left."
