@@ -15,7 +15,7 @@ its middle across the way it faces), and with `talk = true` pressing a there mus
 text box (the game's memory: [game.ram] dialog, when it's known).
 
 PLAYER_TWO_ROOMS: a folder of rooms to try instead of the game's own (emu_tasks.Box.up
-copies it into each box).
+copies it into each box). ROOMS_FRAMES: a folder to keep each trip's screens in.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -68,12 +69,11 @@ def by_target(box: Box, task: dict, loc: int) -> tuple[bool, str]:
     person = bool(hit) and hit[0].kind != "save point"
     x, y = g.pos()
     ends = rooms.stand_by(room, at, person)
-    from playertwo.rooms import centre
+    from playertwo.rooms import line_up
 
     ok = False
-    for t, (_fx, fy) in ends.items():
-        cx, cy = centre(t)
-        off = abs(cx - x) if fy else abs(cy - y)
+    for t, face in ends.items():
+        off = abs(line_up(t, at, face) - (x if face[1] else y))
         if (int(y) // 16, int(x) // 16) == t and (off <= 6 or not person):
             ok = True
     if task.get("talk") and "dialog" in ram:  # talking: near them is enough (a step on)
@@ -89,17 +89,22 @@ def by_target(box: Box, task: dict, loc: int) -> tuple[bool, str]:
     return ok, why
 
 
-def trip(box: Box, task: dict, states: Path, game: str) -> dict:
+def trip(box: Box, task: dict, states: Path, game: str, run: int = 1) -> dict:
     t0 = time.monotonic()
     box.load(states / f"{task['state']}.state")
+    name = f"frames/{task['id']}-{run}"  # ROOMS_FRAMES: screens kept (the box's home inside)
+    frames = box.home / name
+    keep = ["env", f"ROOMS_FRAMES=/home/sbx/{name}"] if os.environ.get("ROOMS_FRAMES") else []
     out = box.ob("run", "--pass", "PLAYER_TWO_KEYS", "--pass", "PLAYER_TWO_KEYMAP", "--",
-                 PY, str(ROOT / "scripts" / "rooms_walk.py"), game, task["to"],
+                 *keep, PY, str(ROOT / "scripts" / "rooms_walk.py"), game, task["to"],
                  "--limit", str(task.get("walk_s", 90)),
                  *(["--exit", task["exit"]] if task.get("exit") else []),
                  *(["--target", task["target"]] if task.get("target") else []),
                  *(["--talk"] if task.get("talk") else []),
                  timeout=float(task.get("walk_s", 90)) + 90)
     time.sleep(1.5)  # a fade into the last place
+    if keep and frames.exists():
+        shutil.copytree(frames, Path(os.environ["ROOMS_FRAMES"]) / frames.name, dirs_exist_ok=True)
     got = box.location()
     want = task["location"] if isinstance(task["location"], list) else [task["location"]]
     want = [int(w, 16) if isinstance(w, str) else w for w in want]
@@ -155,7 +160,7 @@ def main() -> None:
                 except queue.Empty:
                     return
                 try:
-                    r = trip(box, t, states, game["name"])
+                    r = trip(box, t, states, game["name"], k)
                 except (RuntimeError, OSError) as exc:
                     r = {"id": t["id"], "done": False, "error": str(exc)}
                 r["run"] = k

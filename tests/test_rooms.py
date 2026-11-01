@@ -200,7 +200,11 @@ class Sim:
         f[max(0, py - 24):py, max(0, px - 6):px + 6] = (255, 0, 255)
         if self.talking:  # a text box over the top of the screen
             f[8:80, 8:248] = (40, 40, 160)
+        if self.box_below:  # a scene's text box over the bottom
+            f[168:216, 8:248] = (40, 40, 160)
         return Image.fromarray(f)
+
+    box_below = False
 
 
 async def test_walk_to_talk_across_a_counter(tmp_path):
@@ -292,3 +296,32 @@ async def test_agent_talks_to_someone_by_the_room_map(tmp_path, monkeypatch):
     out = await agent._go_to_exit("talk to the innkeeper")
     assert out.startswith("arrived"), out
     assert sim.pressed and sim.pressed[-1][0] == "a"
+
+
+async def test_a_text_box_stops_the_walk(tmp_path):
+    from playertwo.rooms import walk_out
+
+    rooms, img = two_floors(tmp_path)
+    room = rooms.rooms[2]
+    sim = Sim(img, room.walk, 280.0, 173.0)
+    sim.box_below = True  # the place still shows above it
+    here = rooms.locate(await sim.shoot())
+    assert here is not None and here.loc == 2
+    assert rooms.boxed(await sim.shoot(), here)
+    sim.box_below = False
+    assert not rooms.boxed(await sim.shoot(), here)
+    sim.box_below = True
+    out = await walk_out(rooms, 496, sim.shoot, sim.steer, lambda: _true(), lambda _t: None,
+                         10.0)
+    assert out.startswith("interrupted: a text box"), out
+
+
+def test_line_up_with_someone_off_the_tiles_middle():
+    from playertwo.rooms import line_up
+
+    # A shopkeeper standing on a tile's edge (x 896, between columns 55 and 56): from
+    # column 56 below, as near their x as the tile allows, not its middle (904; the
+    # game answers only within about 10 px).
+    assert line_up((9, 56), (896.0, 118.0), (0, -1)) == 899
+    assert line_up((9, 56), (904.0, 118.0), (0, -1)) == 904
+    assert line_up((7, 54), (896.0, 118.0), (1, 0)) == 118.0

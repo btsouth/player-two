@@ -582,6 +582,32 @@ class Rooms:
             self._steam_pics = pics
         return self._steam_pics
 
+    def boxed(self, frame, here: Here) -> bool:
+        """Whether a text box (or a menu's panel) is over the place: a band across the
+        screen's top or bottom where the place doesn't show, all the way across."""
+        room = self.rooms.get(here.loc)
+        if room is None:
+            return False
+        rgb = np.asarray(frame.convert("RGB")) if isinstance(frame, Image.Image) else frame
+        v = steam_view(rgb) if here.steam else view(rgb)
+        h, w = v.shape[:2]
+        known = under(room.image, here.cam, h, w)[1:h + 1, 1:w + 1].sum(2) > 30
+        cols = known.sum(0) > 0.5 * h  # columns the survey saw most of
+        if cols.sum() < 0.4 * w:
+            return False
+        e = drawn_over(v, room.image, here.cam)[:, cols] > 90
+        band = e.mean(1) > 0.7
+        run, ends = 0, []
+        for i, b in enumerate(band):
+            run = run + 1 if b else 0
+            if run:
+                ends.append((run, i))
+        if not ends:
+            return False
+        run, last = max(ends)
+        first = last - run + 1
+        return run >= 0.15 * h and (first <= 0.15 * h or last >= 0.85 * h)
+
     def _locate_steam(self, rgb: np.ndarray, near: Here | None) -> Here | None:
         """locate() for the Steam port: around the last view first, else every place;
         in colour, else by the edges (the shapes) when Steam changed a place's look.
@@ -1114,6 +1140,17 @@ def centre(t: tuple[int, int]) -> tuple[float, float]:
     return t[1] * TILE + TILE / 2, t[0] * TILE + 13
 
 
+def line_up(t: tuple[int, int], at: tuple[float, float], face: tuple[int, int]) -> float:
+    """Where across the way it faces to stand on tile t to talk to someone at `at`: in
+    line with them (the game answers only within about 10 px of straight on), kept on
+    the tile."""
+    if face[1]:  # facing up or down: an x
+        lo = t[1] * TILE
+        return min(max(at[0], lo + 3), lo + TILE - 3)
+    lo = t[0] * TILE
+    return min(max(at[1], lo + 3), lo + TILE - 3)
+
+
 def angle_to(dx: float, dy: float) -> float:
     return math.degrees(math.atan2(dx, -dy)) % 360
 
@@ -1166,8 +1203,13 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
 
     coming: Here | None = None  # where a way out just taken comes out, to look there first
 
+    shot = None  # the screen last looked at
+    boxes = 0  # looks in a row with a text box (or a menu) over the place
+
     async def look() -> Here | None:
-        return await asyncio.to_thread(rooms.locate, await shoot(), coming or here)
+        nonlocal shot
+        shot = await shoot()
+        return await asyncio.to_thread(rooms.locate, shot, coming or here)
 
     try:
         while time.monotonic() - t0 < limit:
@@ -1221,6 +1263,17 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             "a scene?): look")
                 await asyncio.sleep(0.1)
                 continue
+            if await asyncio.to_thread(rooms.boxed, shot, now):
+                # The place shows, but a text box is over part of it (a scene, someone
+                # who stopped the player): walking can't go on till it's read.
+                steer(None)
+                boxes += 1
+                if boxes >= 3:
+                    return ("interrupted: a text box (or a menu) is up: read it to the "
+                            "player, press a to go on, then go_to_exit again")
+                await asyncio.sleep(0.15)
+                continue
+            boxes = 0
             faded = False
             misses = 0
             coming = None
@@ -1255,9 +1308,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                         break
                 if tile in ends:
                     fx, fy = ends[tile]
-                    cx, cy = centre(tile)
                     # Someone is talked to straight on: lined up across the way it faces.
-                    off = (cx - here.x) if fy else (cy - here.y)
+                    off = line_up(tile, at, (fx, fy)) - (here.x if fy else here.y)
                     if person and abs(off) > 5 and lines < 6:
                         lines += 1
                         steer(angle_to(off, 0) if fy else angle_to(0, off))
