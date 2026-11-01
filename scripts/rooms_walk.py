@@ -62,6 +62,10 @@ async def main() -> int:
     def log(text: str) -> None:
         print(f"{time.monotonic() - t0:6.1f} {text}", flush=True)
 
+    if args.to:  # the era: where it's going says (a place alike in two eras)
+        goal = int(args.to, 16)
+        rooms.world_hint = goal if goal in rooms.worlds else next(
+            (w for w in sorted(rooms.worlds) if rooms.hops(goal, w)), None)
     target = None
     if args.target:
         room = rooms.rooms.get(int(args.to, 16))

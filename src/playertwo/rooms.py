@@ -403,7 +403,7 @@ class Rooms:
         if not scores:
             return None
         scores.sort(reverse=True)
-        best = None
+        fine = []
         for _score, loc, (x, y) in scores[:3]:
             room = self.rooms[loc]
             x0, y0 = max(0, x - 4), max(0, y - 4)
@@ -412,9 +412,14 @@ class Rooms:
                 continue
             r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
             _, s2, _, (dx, dy) = cv2.minMaxLoc(r)
-            if best is None or s2 > best[0]:
-                best = (float(s2), loc, (x0 + dx - EDGE, y0 + dy - EDGE))
-        if best is None or best[0] < 0.6:
+            fine.append((float(s2), loc, (x0 + dx - EDGE, y0 + dy - EDGE)))
+        if not fine:
+            return None
+        top = max(f[0] for f in fine)
+        # One place in two eras matches as well as the other: the likelier era's.
+        best = min((f for f in fine if f[0] >= top - 0.02),
+                   key=lambda f: (self.prefer(f[1], near), -f[0]))
+        if best[0] < 0.6:
             return None
         return self._player(v, self.rooms[best[1]], best[2], best[0], near)
 
