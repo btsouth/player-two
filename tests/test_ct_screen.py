@@ -10,7 +10,7 @@ import cv2
 import pytest
 
 from playertwo import ctscreen
-from playertwo.ctscreen import Look, Reader
+from playertwo.ctscreen import Look, Reader, finished
 
 LIVE = Path(os.environ.get("PLAYER_TWO_CT_LIVE", "~/.cache/player-two/live")).expanduser()
 PARTY = ["Crono", "Frog", "Marle", "Ayla", "Lucca", "Robo"]
@@ -546,3 +546,29 @@ TITLE = LIVE.parent / "night-2026-11-01" / "steam-frames" / "title-menu.png"
 @pytest.mark.skipif(not TITLE.exists(), reason="no title frame")
 def test_the_title_menu_is_its_cursor_not_the_credits():
     assert first_line(TITLE) == ("menu", "Resume.")
+
+
+@needs_frames
+def test_dialogue_from_a_new_game_reads_whole():
+    def text(name):
+        lk = ctscreen.look(cv2.imread(str(FRAMES / f"{name}.jpg")), PARTY)
+        assert lk.kind == "text" and not lk.unsure, (name, lk.parts)
+        return lk.parts["text"]
+
+    assert text("012350-03").endswith("...")  # a second line ending in an ellipsis is kept
+    assert text("011721-10").endswith("of Life.")  # specks on the box frame aren't words
+    assert text("012342-00").endswith("see-") and finished(text("012342-00"))
+    assert not finished(text("012348-02"))  # still typing
+
+
+def test_a_choice_says_its_question_then_the_cursor_in_one_line():
+    r = Reader()
+    box = look("choice", typing=("question",), question='Is "Lucca" correct?',
+               focus="No selected, or Yes")
+    box.order = ("question", "focus", "desc")  # as field_look orders a choice
+    assert r.update(box, now=0) == ""
+    assert r.update(box, now=0.3) == 'Is "Lucca" correct? No selected, or Yes.'
+    moved = look("choice", typing=("question",), question='Is "Lucca" correct?',
+                 focus="Yes selected, or No")
+    moved.order = box.order
+    assert r.update(moved, now=0.6) == "Yes selected, or No."

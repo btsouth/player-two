@@ -46,7 +46,7 @@ def plausible(r: Run) -> bool:
     if not t or r.worst > 30:
         return False
     body = t.replace(" ", "")
-    if re.search(r"['\-,.:]{2,}|^['\-,.]|[\[\]]", t) and t not in VOCAB:
+    if re.search(r"['\-,.:]{2,}|^['\-,.]|[\[\]]", t.replace("...", "")) and t not in VOCAB:
         return False
     alnum = sum(c.isalnum() for c in body)
     if alnum / len(body) < 0.75:
@@ -74,6 +74,8 @@ def misread(text: str) -> bool:
             return True
         if len(w) >= 4 and not re.search(r"[aeiouyAEIOUY]", w) and not w.isupper():
             return True
+        if re.search(r"([aeiouAEIOU])\1\1", w):
+            return True  # "uuuu": icons read as letters (a drawn-out "Ahhh" is consonants)
     return False
 
 
@@ -251,14 +253,16 @@ def _hand_entry(lines: list[list[Run]], tip: tuple[int, int],
         return w, None
     if row:
         w = snap(row[0].text, VOCAB, 0.7)
-        return (w if w in VOCAB else clean(row[0].text)), row[0]
+        if w in VOCAB or not misread(row[0].text):
+            return (w if w in VOCAB else clean(row[0].text)), row[0]
     return "", None
 
 
 def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     """Menus, questions and text boxes (not battle)."""
     hands = find_template(img, ctsteam.templates()["hand"], CANVAS)
-    lines = runs_in(ctsteam.lib(), img, (0, 0, *CANVAS), [h[:4] for h in hands], local=True)
+    lines = _quotes(runs_in(ctsteam.lib(), img, (0, 0, *CANVAS), [h[:4] for h in hands],
+                            local=True))
     lk = Look(lines=lines)
     good = [r for row in lines for r in row if plausible(r)]
     blocks = sorted((r.y, n) for r in good if (n := snap(r.text, ctsteam.NAMES, 0.75))
@@ -367,6 +371,11 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     if hands:
         return lk  # a menu whose highlighted entry doesn't read: the model sees it
     if rows and sum(len(r.text) for row in rows for r in row) >= 12:
+        # Specks on the box's frame, far left or right of the words: not words.
+        ok = [r for row in rows for r in row if plausible(r)]
+        lo, hi = min(r.x0 for r in ok), max(r.x1 for r in ok)
+        rows = [[r for r in row if plausible(r) or len(r.text.strip()) > 3
+                 or lo - 60 <= r.x0 <= hi + 200] for row in rows]
         text = clean(" ".join(r.text for row in rows for r in row))
         lk.kind = "text"
         lk.parts["text"] = text
@@ -375,6 +384,14 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
         lk.unsure = misread(text) or not all(plausible(r) and r.worst <= SURE
                                              for row in rows for r in row)
     return lk
+
+
+def _quotes(lines: list[list[Run]]) -> list[list[Run]]:
+    """A double quote is two ticks, read as two apostrophes."""
+    for row in lines:
+        for r in row:
+            r.text = r.text.replace("''", '"')
+    return lines
 
 
 def _box_rows(lines: list[list[Run]]) -> list[list[Run]]:
@@ -391,7 +408,8 @@ def _dialogue_lines(img: np.ndarray) -> list[list[Run]]:
     out = []
     for y0, y1 in BOX_BANDS:
         band = cv2.resize(img[y0:y1], None, fx=DIALOGUE, fy=DIALOGUE, interpolation=cv2.INTER_AREA)
-        for row in runs_in(ctsteam.lib(), band, (0, 0, band.shape[1], band.shape[0]), local=True):
+        for row in _quotes(runs_in(ctsteam.lib(), band, (0, 0, band.shape[1], band.shape[0]),
+                                   local=True)):
             out.append([Run(r.text, round(r.x0 / DIALOGUE), round(r.x1 / DIALOGUE),
                             y0 + round(r.y / DIALOGUE), r.colour, r.worst) for r in row])
     return out
@@ -414,9 +432,10 @@ def look(image, party: list[str] = ()) -> Look:
 
 
 def finished(text: str) -> bool:
-    """Text that ends like a whole sentence or label, not cut off mid-typing."""
+    """Text that ends like a whole sentence or label, not cut off mid-typing (a dash ends
+    a box that the next one carries on: "you're going to go see-")."""
     t = text.strip()
-    return bool(END.search(t)) or t in VOCAB
+    return bool(END.search(t) or re.search(r"[a-z]-$", t)) or t in VOCAB
 
 
 class Reader:
@@ -550,6 +569,10 @@ class Reader:
                 continue
             if self.said.get(part) == value:
                 continue
+            if (part == "focus" and lk.kind == "choice" and not lk.unsure and not first
+                    and lk.parts.get("question")
+                    and self.said.get("question") != lk.parts["question"]):
+                continue  # the question first, then where the cursor is, in one line
             if part == "danger" and now - self.danger_at.get(value, -1e9) < (
                     20 if lk.kind == "battle" else 120):
                 # The party box was hidden a moment, or the menu page shows the same HP
