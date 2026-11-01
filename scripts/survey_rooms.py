@@ -1022,7 +1022,9 @@ def people(box: Box, g: Field, folder: Path, states: Path, locs: list[int], log)
         pic = np.asarray(Image.open(out.with_suffix(".png")).convert("RGB")).astype(np.int16)
         s = RoomSurvey(g, loc, st, log)
         s.walk = {tuple(t) for t in d["walk"]}
-        first = objects(g)
+        H, W = pic.shape[:2]
+        # (objects off the place's picture are no one: leftovers, the game's own)
+        first = {i: p for i, p in objects(g).items() if p[0] < W and p[1] < H}
         best: dict[int, tuple[int, np.ndarray, np.ndarray]] = {}  # i -> (pixels, crop, mask)
         moved: set[int] = set()
 
@@ -1064,11 +1066,15 @@ def people(box: Box, g: Field, folder: Path, states: Path, locs: list[int], log)
             for i, (x, y) in sorted(first.items()):
                 if i < PARTY_OBJECTS or (i in best and best[i][0] >= 30):
                     continue
-                # A few tiles off (the party beside it would hide it), nearest first.
+                # A few tiles off (the party beside it would hide it), nearest first;
+                # not at all when it's in view from where it is already.
                 goal = (int(y) // TILE, int(x) // TILE)
+                cx, cy = g.scroll()
+                if 12 <= x - cx <= 244 and 24 <= y - cy <= HIGH - 4:
+                    continue
                 near = sorted(s.walk, key=lambda t: abs(abs(t[0] - goal[0]) +
                                                         abs(t[1] - goal[1]) - 3))
-                for t in near[:3]:
+                for t in near[:2]:
                     if s.walk_to(t):
                         break
                 time.sleep(0.4)

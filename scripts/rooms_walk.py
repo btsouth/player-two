@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import time
+from pathlib import Path
 
 from playertwo.controls import keyboard
 from playertwo.rooms import Rooms, Target, describe, walk_out
@@ -36,8 +38,15 @@ async def main() -> int:
     cap = HyprlandCapture("RetroArch")
     t0 = time.monotonic()
 
+    keep = os.environ.get("ROOMS_FRAMES")  # a folder to keep every screen looked at in
+    if keep:
+        Path(keep).mkdir(parents=True, exist_ok=True)
+
     async def shoot():
-        return (await asyncio.to_thread(cap.grab)).image
+        img = (await asyncio.to_thread(cap.grab)).image
+        if keep:
+            img.save(Path(keep) / f"{time.monotonic() - t0:07.2f}.png")
+        return img
 
     if args.where:
         t = time.monotonic()

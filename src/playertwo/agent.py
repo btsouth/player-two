@@ -1610,8 +1610,9 @@ class Agent:
                                      choices, hints)
         if label is None:
             return (f"no single place from here fits {to!r} ({why}). From here: "
-                    f"{'; '.join(choices)}. Ask the player which, or call go_to_exit with "
-                    "an exact name")
+                    f"{'; '.join(choices)}. A place outside on the world map (another "
+                    "building, a town): go_to_place, which walks out of here first. Else "
+                    "ask the player which, or call go_to_exit with an exact name")
         target: Target | None = targets.get(label)
         if talk is None:
             talk = target is not None and (why.startswith("talk:") or bool(TALK.search(to)))

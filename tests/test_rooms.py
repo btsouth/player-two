@@ -54,6 +54,8 @@ def test_pick_words():
     assert pick_words("talk to the innkeeper", choices) == "the innkeeper (in here)"
     assert pick_words("take me to the cat.", choices) == "the cat (the inn, downstairs)"
     assert pick_words("talk to the old man", choices) is None
+    assert pick_words("go upstairs", choices) == "the house, upstairs"
+    assert pick_words("go downstairs", choices) is None
 
 
 def test_world_exits_named_by_their_end(tmp_path):
@@ -182,6 +184,11 @@ class Sim:
 
     def press(self, button, hold_ms=100):
         self.pressed.append((button, self.x, self.y, self.facing))
+        self.talking = self.talking or (button == "a" and self.answers is not None and
+                                        self.answers(self.x, self.y, self.facing))
+
+    talking = False
+    answers = None  # (x, y, facing) -> whether someone's there to talk
 
     async def shoot(self):
         self.update()
@@ -191,6 +198,8 @@ class Sim:
         f = self.img[cy:cy + 224, cx:cx + 256].copy()
         px, py = int(self.x) - cx, int(self.y) - cy
         f[max(0, py - 24):py, max(0, px - 6):px + 6] = (255, 0, 255)
+        if self.talking:  # a text box over the top of the screen
+            f[8:80, 8:248] = (40, 40, 160)
         return Image.fromarray(f)
 
 
@@ -201,6 +210,8 @@ async def test_walk_to_talk_across_a_counter(tmp_path):
     room = rooms.rooms[2]
     sim = Sim(img, room.walk, 280.0, 173.0)  # row 10, col 17
     target = Target(2, (152.0, 77.9), True, "the innkeeper")
+    ends = rooms.stand_by(room, target.at, True)
+    sim.answers = lambda x, y, f: ends.get((int(y) // 16, int(x) // 16)) == f
     out = await walk_out(rooms, 2, sim.shoot, sim.steer, lambda: _true(), lambda _t: None,
                          20.0, spot=target, press=sim.press, talk=True)
     assert out.startswith("arrived"), out
@@ -244,6 +255,8 @@ async def test_agent_talks_to_someone_by_the_room_map(tmp_path, monkeypatch):
 
     rooms, img = two_floors(tmp_path)
     sim = Sim(img, rooms.rooms[2].walk, 280.0, 173.0)
+    ends = rooms.stand_by(rooms.rooms[2], (152.0, 77.9), True)
+    sim.answers = lambda x, y, f: ends.get((int(y) // 16, int(x) // 16)) == f
     said = []
 
     async def grab():
@@ -275,6 +288,7 @@ async def test_agent_talks_to_someone_by_the_room_map(tmp_path, monkeypatch):
     assert all(hints[k] for k in choices)
     # go_to_exit with the player's own words: talks when they say so.
     sim.pressed.clear()
+    sim.talking = False
     out = await agent._go_to_exit("talk to the innkeeper")
     assert out.startswith("arrived"), out
     assert sim.pressed and sim.pressed[-1][0] == "a"

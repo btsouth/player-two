@@ -457,6 +457,24 @@ class Rooms:
         fx, fy = cam[0] + FOLLOW[0], cam[1] + FOLLOW[1]
         follows = (x0 < cam[0] < x1, y0 < cam[1] < y1)
         h, w = v.shape[:2]
+        # By its shape first: the player's cut-outs fit it far better than anyone
+        # else (0.85 and up against 0.45), even pressed up against someone, where the
+        # colours of the two run together.
+        if near is not None and near.loc == room.loc and near.sure:
+            px, py = near.x - cam[0], near.y - cam[1]
+            box = (px - STEAM_NEAR, py - STEAM_NEAR, px + STEAM_NEAR, py + STEAM_NEAR)
+        else:
+            box = None
+        fit = self._steam_feet(v[:200], box, 2) if self.sprites else []
+        if fit:
+            s0, (fx_, fy_) = fit[0]
+            second = fit[1][0] if len(fit) > 1 else 0.0
+            prior = (near.x - cam[0], near.y - cam[1]) if box is not None else FOLLOW
+            # A clear fit, or a fair one standing out from the next (facing up fits
+            # least, ~0.55), or a fair one where it was.
+            if s0 >= 0.65 or (s0 >= 0.45 and (s0 - second >= 0.08 or
+                                              math.dist((fx_, fy_), prior) <= 24)):
+                return Here(room.loc, cam, cam[0] + fx_, cam[1] + fy_, score, True)
         bg = room.image[cam[1]:cam[1] + h, cam[0]:cam[0] + w]
         if bg.shape != v.shape:
             return Here(room.loc, cam, fx, fy, score, all(follows))
@@ -865,18 +883,32 @@ class Rooms:
         """Where to stand to reach something, and the way to face it: (dx, dy). Someone
         is talked to from a tile straight beside them, or across a counter (two tiles
         off, with no ground between); a thing from the nearest walked tile."""
+        out: dict[tuple[int, int], tuple[int, int]] = {}
+        for tier in self.stand_tiers(room, at, person):
+            out.update(tier)
+        return out
+
+    def stand_tiers(self, room: Room, at: tuple[float, float], person: bool
+                    ) -> list[dict[tuple[int, int], tuple[int, int]]]:
+        """stand_by's places, best first: for someone, right beside them; then across a
+        counter in front of them (below: shopkeepers face the room); then across
+        anything else."""
         tr, tc = int(at[1]) // TILE, int(at[0]) // TILE
         out: dict[tuple[int, int], tuple[int, int]] = {}
         if person:
+            beside: dict[tuple[int, int], tuple[int, int]] = {}
+            front: dict[tuple[int, int], tuple[int, int]] = {}
+            across: dict[tuple[int, int], tuple[int, int]] = {}
             for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
                 one = (tr + dy, tc + dx)
                 two = (tr + 2 * dy, tc + 2 * dx)
                 if one in room.walk and one not in room.learned:
-                    out[one] = (-dx, -dy)
+                    beside[one] = (-dx, -dy)
                 elif two in room.walk and two not in room.learned:
-                    out[two] = (-dx, -dy)
-            if out:
-                return out
+                    (front if dy == 1 else across)[two] = (-dx, -dy)
+            tiers = [t for t in (beside, front, across) if t]
+            if tiers:
+                return tiers
         near = sorted(room.walk, key=lambda t: math.dist(centre(t), at))
         if not near:
             return out
@@ -889,7 +921,7 @@ class Rooms:
             dx, dy = at[0] - cx, at[1] - cy
             out[end] = (0, 1 if dy > 0 else -1) if abs(dy) >= abs(dx) else \
                 (1 if dx > 0 else -1, 0)
-        return out
+        return [out] if out else []
 
     def route(self, room: Room, start: tuple[int, int], goals: set[tuple[int, int]]
               ) -> list[tuple[int, int]] | None:
@@ -933,6 +965,15 @@ class Rooms:
                         h = min(abs(v[0] - g[0]) + abs(v[1] - g[1]) for g in goals)
                         heapq.heappush(pq, (c + h, v))
         return None
+
+
+def came_up(before, after) -> bool:
+    """Whether something came up on screen between two screens (a text box, a shop):
+    much of it changed, the character standing still."""
+    a, b = (np.asarray((f if isinstance(f, Image.Image) else Image.fromarray(f))
+                       .convert("L").resize((160, 90))).astype(np.int16)
+            for f in (before, after))
+    return float((np.abs(a - b) > 24).mean()) > 0.06
 
 
 def drawn_over(v: np.ndarray, image: np.ndarray, cam: tuple[int, int]) -> np.ndarray:
@@ -1131,13 +1172,20 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             tap = STEAM_TAP if here.steam else 0.06
             if here.loc == goal and at is not None:
                 # The last of it: to a tile to stand on by it, facing it.
-                ends = rooms.stand_by(room, at, person)
+                tiers = rooms.stand_tiers(room, at, person)
                 tile = here.tile
                 if tile not in room.walk:
                     tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
-                if not ends:
+                if not tiers:
                     steer(None)
                     return f"blocked: nowhere to stand by {target}"
+                # The best places to stand that the way reaches.
+                path, ends = None, tiers[0]
+                for tier in tiers:
+                    path = rooms.route(room, tile, set(tier))
+                    if path is not None:
+                        ends = tier
+                        break
                 if tile in ends:
                     fx, fy = ends[tile]
                     cx, cy = centre(tile)
@@ -1155,15 +1203,28 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     steer(angle_to(fx, fy))
                     await asyncio.sleep(max(0.08, tap))
                     steer(None)
-                    took = time.monotonic() - t0
                     if talk and press is not None:
                         await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
-                        press("a")
+                        for tries in range(3):
+                            before = await shoot()
+                            press("a")
+                            await asyncio.sleep(0.6)
+                            if came_up(before, await shoot()):
+                                break
+                            # Nothing: a step nearer the way it faces (someone without a
+                            # counter between answers only from right beside them).
+                            log(f"rooms: nothing came up ({tries + 1}): a step nearer")
+                            steer(angle_to(fx, fy))
+                            await asyncio.sleep(tap)
+                            steer(None)
+                            await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
+                        else:
+                            return (f"arrived: at {target} ({time.monotonic() - t0:.0f} s), "
+                                    "facing them, but pressing a brought nothing up: look")
                         return (f"arrived: at {target}, facing them, and pressed a to talk "
-                                f"({took:.0f} s): read what's on screen")
-                    return f"arrived: at {target} ({took:.0f} s)"
+                                f"({time.monotonic() - t0:.0f} s): read what's on screen")
+                    return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"
                 goals = set(ends)
-                path = rooms.route(room, tile, goals)
                 if path is None and room.learned:
                     if (said_wait := await wait_for_way(room, blocker, waits, steer, log)):
                         return f"blocked: {said_wait} the way to {target}"
@@ -1318,6 +1379,12 @@ def pick_words(said: str, choices: dict[str, str]) -> str | None:
     for k, v in choices.items():
         if v.lower() == said.lower().strip(" .!?"):
             return k
+    for w in ("upstairs", "downstairs"):  # "go upstairs": the one floor called that
+        if w in q and not q - {w, "go", "take", "me", "back", "please", "the", "let",
+                               "us", "lets", "head", "walk"}:
+            hits = [k for k, v in choices.items() if w in v.lower() and "(" not in v]
+            if len(hits) == 1:
+                return hits[0]
     # Someone or something by its name ("talk to the innkeeper"): when just one fits.
     want = bare(re.sub(r"^\s*(please\s+)?((take|bring|get) me|go|walk|run|head|talk|"
                        r"speak|chat)\s+(over\s+)?(to|with)\s+", "", said.lower()))

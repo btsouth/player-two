@@ -50,7 +50,7 @@ def screens(labels: Path | None) -> list[tuple[str, object, int | None]]:
     frames = LIVE / "steam-2026-11-01/frames"
     # The Mountain of Woe, battles and menus (13:46 to 16:56): no place surveyed then.
     for f in sorted(frames.glob("*.jpg")):
-        if f.name <= "165609-00.jpg":
+        if "134600" <= f.name <= "165609-00.jpg":
             out.append((f.name, f, 0x189 if "135812" <= f.name[:6] <= "135938" else None))
     return out
 

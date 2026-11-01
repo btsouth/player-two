@@ -14,12 +14,14 @@ trip must end standing by them (on a tile rooms.Rooms.stand_by gives, within 6 p
 its middle across the way it faces), and with `talk = true` pressing a there must open a
 text box (the game's memory: [game.ram] dialog, when it's known).
 
-PLAYER_TWO_ROOMS: a folder of rooms to try instead of the game's own (copied into each box).
+PLAYER_TWO_ROOMS: a folder of rooms to try instead of the game's own (emu_tasks.Box.up
+copies it into each box).
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -38,6 +40,7 @@ from survey import Game
 PY = str(ROOT / ".venv" / "bin" / "python")
 
 
+@functools.cache
 def rooms_here():
     from playertwo.atlas import ATLASES
     from playertwo.rooms import Rooms
@@ -73,6 +76,8 @@ def by_target(box: Box, task: dict, loc: int) -> tuple[bool, str]:
         off = abs(cx - x) if fy else abs(cy - y)
         if (int(y) // 16, int(x) // 16) == t and (off <= 6 or not person):
             ok = True
+    if task.get("talk") and "dialog" in ram:  # talking: near them is enough (a step on)
+        ok = math.dist((x, y), at) <= 48
     why = f"at {x:.0f},{y:.0f}, by it" if ok else f"at {x:.0f},{y:.0f}, not by it"
     if task.get("talk"):  # bytes that may say a text box is up (to find which does)
         why += " " + " ".join(f"{a:x}={g.read(a, 1)[0]}" for a in (0x11F, 0x127, 0x134, 0x1EE,
@@ -143,12 +148,6 @@ def main() -> None:
     def worker(n: int) -> None:
         box = Box(n, game)
         box.up()  # after the survey: the box gets the rooms as they are now
-        if os.environ.get("PLAYER_TWO_ROOMS"):  # rooms being tried: in place of the game's
-            import shutil
-
-            dest = box.home / ".config/player-two/atlas/chrono-trigger/rooms"
-            shutil.rmtree(dest, ignore_errors=True)
-            shutil.copytree(os.environ["PLAYER_TWO_ROOMS"], dest)
         try:
             while True:
                 try:
