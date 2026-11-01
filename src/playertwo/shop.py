@@ -300,9 +300,8 @@ class Shop:
             out = await self.leave()
             got = (f"Bought {n} {good.name} for {spent} G (funds {funds0} G to {funds0 - spent}"
                    f" G)")
-            if have is not None:
-                got += f"; the party has {have} now" + (f" (had {have0})" if have0 is not None
-                                                        else "")
+            if have is not None and have0 is not None and have == have0 + n:
+                got += f"; the party has {have} now"  # (only when it adds up: it misreads)
             if n < count:
                 got += f"; only {n} of the {count} asked for: that's what the funds allowed"
             return got + ". " + out
@@ -321,10 +320,22 @@ class Shop:
             v = await self.until(lambda v: v.funds is None, 0.8)
         if v.funds is not None:
             return "The shop screen is still up."
-        lk = await self._box()
-        line = (getattr(lk, "parts", {}) or {}).get("text", "") if lk is not None else ""
-        if getattr(lk, "kind", "none") == "text" and line:
-            return f'Out of the shop; the seller says: "{line}" (a text box is up).'
+        # The seller's goodbye: read, then pressed on, so no box is left over the place
+        # (live: the next "take me outside" stopped on it).
+        said: list[str] = []
+        for _ in range(4):
+            lk = await self._box()
+            line = (getattr(lk, "parts", {}) or {}).get("text", "") if lk is not None else ""
+            if getattr(lk, "kind", "none") != "text" or not line:
+                break
+            if line not in said:
+                said.append(line)
+            await self.tap("a")
+            await asyncio.sleep(0.5)
+            self.frame = await self._grab()
+        if said:
+            return "Out of the shop; the seller said: " + " / ".join(f'"{x}"' for x in said) \
+                + " (pressed on: no box is up)."
         return "Out of the shop."
 
 

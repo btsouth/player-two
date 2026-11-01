@@ -139,7 +139,7 @@ def test_buy_three_from_the_sellers_line_and_back_out():
     out = asyncio.run(make(game).buy("potions", 3))
     assert game.funds == 370 and game.stock == {"Potion": 3}
     assert "Bought 3 Potion for 30 G (funds 400 G to 370 G)" in out
-    assert game.mode == "bye" and "Come again!" in out
+    assert game.mode == "field" and "Come again!" in out  # the goodbye read, pressed on
 
 
 def test_an_item_further_down_and_a_confirm_step():
@@ -158,7 +158,7 @@ def test_something_not_sold_here_stops_backed_out():
     game = FakeShop()
     out = asyncio.run(make(game).buy("Elixir", 1))
     assert out.startswith("stopped: no Elixir here") and "Potion (10 G)" in out
-    assert game.mode == "bye" and game.funds == 400
+    assert game.mode == "field" and game.funds == 400
 
 
 class FakeInn:
