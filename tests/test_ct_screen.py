@@ -183,7 +183,7 @@ async def test_the_session_says_what_the_reader_reads_and_leaves_the_rest_to_the
     s.agent = SimpleNamespace(_ct_steam=lambda f: True)
     looks = iter([look(focus="Equipment"), look(focus="Inventory"), look("none")])
     monkeypatch.setattr(ctscreen, "look", lambda image, party=(): next(looks))
-    img = Image.new("RGB", (64, 36))
+    img = Image.new("RGB", (1920, 1080))  # big enough to read the font from
     for t in (1.0, 2.0):
         await s._read(Frame(img, t))
         await asyncio.sleep(0)

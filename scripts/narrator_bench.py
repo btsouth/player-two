@@ -172,10 +172,18 @@ async def run(args) -> None:
                     from playertwo import ctscreen
 
                     lk = await asyncio.to_thread(ctscreen.look, frame.image, PARTY)
+                    if not ctscreen.sharp(frame.image):
+                        lk = ctscreen.Look()  # too small to read: the model's, as live
+                    reader = ctscreen.Reader()
                     if lk.readable:
-                        text = ctscreen.Reader().update(lk, first=True)
+                        text = reader.update(lk, first=True)
                         first = time.monotonic() - t0
-                    else:
+                    if lk.readable and reader.model_read:
+                        # As the session does: a whole box that reads badly goes to the model.
+                        more, f2 = await narrate_model(narr, frame)
+                        first = first if text else (f2 or 0) + (time.monotonic() - t0 - (f2 or 0))
+                        text = f"{text} {more}".strip()
+                    elif not lk.readable:
                         text, first = await narrate_model(narr, frame)
                 else:
                     text, first = await narrate_model(narr, frame)
@@ -296,7 +304,7 @@ async def ask(args) -> None:
         t0 = time.monotonic()
         via = "agent"
         line = None
-        if args.mode == "fast":
+        if args.mode == "fast" and ctscreen.sharp(img):
             lk = await asyncio.to_thread(ctscreen.look, img, PARTY)
             line = ctscreen.answer(q, lk, PARTY)
             if line:

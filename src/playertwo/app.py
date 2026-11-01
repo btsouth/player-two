@@ -714,7 +714,7 @@ class Session:
     # Reading Chrono Trigger (Steam) screens without the model
 
     def _reads(self, frame: Frame) -> bool:
-        return self.agent._ct_steam(frame)
+        return self.agent._ct_steam(frame) and ctscreen.sharp(frame.image)
 
     def _read_soon(self, frame: Frame) -> None:
         if self.reading is not None and not self.reading.done():

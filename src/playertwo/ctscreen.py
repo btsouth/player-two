@@ -23,6 +23,10 @@ from . import ctsteam
 from .glyphread import Run, find_template, runs_in, snap, to_canvas
 
 CANVAS = ctsteam.CANVAS
+# Below this width the font's pixels are two screen pixels or less and glyphs misread (live
+# 960x540 previews): such frames are left to the model.
+MIN_WIDTH = 1600
+SURE = 20.0  # a run whose worst glyph is further than this from the library may be misread
 DESC_Y = 1220  # field menus' description bars are below this
 # Words that may stand alone as a menu entry or an option.
 OPTIONS = ("Yes", "No", "Empty", "Resume", "New Game", "Load Game", "Extras", "Quit",
@@ -125,7 +129,7 @@ def battle_look(st: ctsteam.State) -> Look:
         if entry in ctsteam.VOCAB or not misread(entry):
             lk.parts["focus"] = entry
     top = clean(st.top)
-    if top and not st.paused and plausible(Run(top, 0, 0, 0, "", 0)):
+    if top and plausible(Run(top, 0, 0, 0, "", 0)):
         lk.parts["top"] = top
         lk.texts.add("top")  # the top bar comes up whole, never typed out
     dz = _danger(st)
@@ -252,7 +256,19 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     if found:
         tip, name, run = found[0]
         lk.focus = name
+        if question is None and name in ("Yes", "No"):
+            # A yes or no whose question didn't read cleanly: the line just above the
+            # options, said by the model once it has typed out.
+            above = [r for row in lines for r in row if 0 < tip[1] - r.y < 400
+                     and abs(r.x0 - tip[0]) < 900 and snap(r.text, VOCAB, 0.7) not in VOCAB]
+            if above:
+                y = max(r.y for r in above)
+                question = Run(" ".join(r.text for r in sorted(above, key=lambda r: r.x0)
+                                        if abs(r.y - y) < 30), min(r.x0 for r in above),
+                               0, y, "white", 99.0)
+                lk.unsure = True
         if question is not None and question.y < tip[1]:
+            lk.unsure = lk.unsure or question.worst > SURE or misread(question.text)
             lk.kind = "choice"
             lk.order = ("question", "focus", "desc")
             lk.parts["question"] = clean(question.text)
@@ -310,8 +326,15 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
         lk.parts["text"] = text
         lk.texts.add("text")
         lk.typing.add("text")
-        lk.unsure = misread(text) or not all(plausible(r) for row in rows for r in row)
+        lk.unsure = misread(text) or not all(plausible(r) and r.worst <= SURE
+                                             for row in rows for r in row)
     return lk
+
+
+def sharp(image) -> bool:
+    """Whether a frame is big enough to read the game's font from."""
+    w = image.shape[1] if isinstance(image, np.ndarray) else image.size[0]
+    return w >= MIN_WIDTH
 
 
 def look(image, party: list[str] = ()) -> Look:
@@ -402,13 +425,14 @@ class Reader:
                 continue
             if part in lk.texts:
                 whole = finished(value)
-                if part in lk.typing and not ((whole and (n >= 2 or first)) or n >= 3):
+                if part in lk.typing and not ((whole and (n >= 2 or first)) or n >= 3
+                                              or (first and lk.unsure)):
                     continue
                 if now - self.texts.get(value, -1e9) < self.forget_s:
                     self.said[part] = value
                     continue
                 self.texts[value] = now
-                if part == "text" and lk.unsure:
+                if part in lk.typing and lk.unsure:
                     self.said[part] = value
                     self.model_read = True  # whole now, but read by the model
                     continue
