@@ -54,6 +54,7 @@ class Tuning:
     playout_min_s: float = 1.0
     playout_quiet_s: float = 0.7  # party HP and the top bar unchanged this long: done
     playout_max_s: float = 3.5
+    spend_playout_s: float = 3.0  # after a tech's MP is spent, the time to see it land
     run_chunk_ms: int = 2500  # L and R held this long between looks
     run_chunks: int = 3
     spoils_wait_s: float = 1.2  # a won fight's message left this long gets an a
@@ -665,11 +666,16 @@ class Executor:
         # off" with Crono's MP already 64 to 62).
         mp0 = _mp(before).get(before.actor) if before and before.actor else None
         tech = intent.command.lower() == "tech"
-        spent = ""
-        while time.monotonic() - t0 < self.t.playout_max_s + (0 if seen_name else 2.5):
+        spent, spent_at, landed = "", None, False
+        while time.monotonic() - t0 < max(
+                self.t.playout_max_s + (0 if seen_name else 2.5),
+                spent_at - t0 + self.t.spend_playout_s if spent_at else 0.0):
             mp = _mp(st).get(before.actor) if mp0 is not None else None
             if tech and mp0 is not None and mp is not None and mp < mp0 and not spent:
+                # MP goes as the tech starts; what it does lands a moment later (live, a
+                # heal reported "no party HP changed" and the model healed twice more).
                 seen_name, spent = True, f" {before.actor} MP {mp0} to {mp}: {named} went off."
+                spent_at = last_change = time.monotonic()
             top = st.top if message(st.top) and st.top != stale else ""
             if top and top not in msgs and st.kind != "target":
                 msgs.append(top)
@@ -682,11 +688,14 @@ class Executor:
                     hp = now
                     break  # the heal or revive landed
                 hp, last_change = now, time.monotonic()
+                landed = landed or spent_at is not None
             if victory(st):
                 break
             el = time.monotonic() - t0
             if el >= self.t.playout_min_s and seen_name and time.monotonic() - last_change \
-                    >= self.t.playout_quiet_s and not top:
+                    >= self.t.playout_quiet_s and not top and (
+                        spent_at is None or landed
+                        or time.monotonic() - spent_at >= self.t.spend_playout_s):
                 break
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()

@@ -3,6 +3,7 @@ model of the battle menus, and each look gets the State the reader would give.""
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import pytest
@@ -635,3 +636,29 @@ async def test_a_tech_whose_name_never_shows_went_off_when_its_mp_is_spent():
     out = await executor(game).act(Intent("Crono", "tech", "Cyclone"))
     assert out.ok, out.text
     assert "hadn't gone off" not in out.text and "Crono MP 64 to 62" in out.text
+
+
+async def test_a_heal_is_watched_from_its_mp_until_the_hp_lands():
+    """Live 2026-11-01: Frog's Heal spent its MP, the watch stopped before the HP moved
+    ("no party HP changed"), and the model healed twice more for one "heal Marle"."""
+    game = FakeCT(party(), enemies(), ready=(1,))
+    game.party[2].hp = 1
+    target, read = game._target, game.read
+    spent_at = []
+
+    def spend(b):
+        if b == "a" and game.cmd == 1:
+            game.party[1].mp -= 2
+            spent_at.append(time.monotonic())
+            game.mode, game.ready = "none", []  # nothing lands at the confirm: see later
+            return
+        target(b)
+
+    def later(frame, full=True):
+        if spent_at and time.monotonic() - spent_at[0] > 0.5 and game.party[2].hp == 1:
+            game.party[2].hp = 200
+        return read(frame, full)
+
+    game._target, game.read = spend, later
+    out = await executor(game).act(Intent("Frog", "tech", "Heal"))
+    assert "Marle HP 1 to 200" in out.text, out.text
