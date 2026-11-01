@@ -277,13 +277,15 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     found = [f for f in found if f[1]]
     pool = good  # where a choice's options are read
     talk = False  # a choice in dialogue: its options and question at dialogue size
-    if tips and not found:
+    known = set(VOCAB) | set(ctsteam.NAMES) | set(ctsteam.ITEMS)
+    if tips and question is None and not any(f[1] in known for f in found):
         # A question in dialogue (the inn's "Would you like to stay for the night?"): the
         # options beside the hand are drawn at dialogue size, and the choice window sits
         # above a box at the bottom, so the question can be below the options.
         rows = [r for row in _dialogue_lines(img) for r in row]
         big = [r for r in rows if plausible(r)]
         asked = next((r for r in big if clean(r.text).endswith("?")), None)
+        talk_found: list = []
         for tip in tips if asked is not None else ():
             # The hand itself reads as specks in front of the option ("' ..t Yes."): the
             # option is the words at the end.
@@ -292,9 +294,9 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
             m = re.search(r"([A-Z][A-Za-z']*(?:[ ,][A-Za-z']+)*)[.!]?\s*$",
                           near[0].text) if near else None
             if m and len(m.group(1)) >= 2 and not misread(m.group(1)):
-                found.append((tip, m.group(1), near[0]))
-        if found:
-            talk, pool, question = True, big, asked
+                talk_found.append((tip, m.group(1), near[0]))
+        if talk_found:
+            found, talk, pool, question = talk_found, True, big, asked
     if question is not None and not talk:
         below = [f for f in found if f[0][1] > question.y and abs(f[0][0] - question.x0) < 900]
         found = below or found

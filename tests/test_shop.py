@@ -203,3 +203,34 @@ def test_rest_says_yes_waits_the_night_and_reads_the_party(monkeypatch):
 
 async def _now():
     return None
+
+
+def test_the_inns_question_with_a_hand_that_doesnt_read_is_answered_yes(monkeypatch):
+    """Live: "Lodging is 10" was read while typing, then the Yes/No read as a menu with
+    "Tut-" under the hand; the inn waited 45 s for a question it had already seen."""
+    monkeypatch.setattr(asyncio, "sleep", lambda s: _now())
+    inn = FakeInn()
+    looks = iter([SimpleNamespace(kind="text", parts={"text": "Lodging is 10"})])
+
+    def dialogue(frame):
+        if inn.mode == "ask":
+            return next(looks, SimpleNamespace(kind="menu", parts={"focus": "Tut-"}))
+        return SimpleNamespace(kind="none", parts={})
+
+    def read(frame):
+        return ([SimpleNamespace(tip=(972, 956))], []) if inn.mode == "ask" else ([], [])
+
+    pressed = []
+
+    async def press(b, ms):
+        pressed.append(b)
+        if b == "a" and len(pressed) >= 2:
+            inn.mode, inn.dark = "night", 2
+
+    sh = Shop(press, inn.grab, read=read, dialogue=dialogue, gap_s=0.0)
+
+    async def vitals():
+        return [(70, 70, 8, 8)], 390
+
+    out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(400))
+    assert pressed == ["a", "a"] and out.startswith("Stayed the night"), out

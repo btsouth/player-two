@@ -395,6 +395,16 @@ class Inn:
                     await asyncio.sleep(0.6)
                     quiet = 0
                     continue
+                if not paid and any(INN_Q.search(h) or "lodging" in h.lower() for h in heard):
+                    hands, _lines = await asyncio.to_thread(sh._read, sh.frame)
+                    if hands:
+                        # The innkeeper asked; the Yes/No beside a hand didn't read as a
+                        # choice (live: the hand's line read "Tut-"). Yes is the first
+                        # option, where the hand starts.
+                        await sh.tap("a")
+                        paid = True
+                        await asyncio.sleep(1.0)
+                        continue
                 if await self._dark():
                     slept = slept or paid
                     quiet = 0

@@ -631,7 +631,8 @@ def test_a_question_in_dialogue_says_where_the_hand_is():
     path = FRAMES / "box-inn-lodging.png"
     if not path.exists():
         pytest.skip("no inn frame")
-    lk = ctscreen.look(cv2.imread(str(path)))
-    assert lk.kind == "choice"
-    assert lk.parts["question"] == "Lodging is 10 G. Would you like to stay for the night?"
-    assert lk.parts["focus"].startswith("Yes selected")
+    for p in (path, FRAMES / "box-inn-lodging-live.jpg"):  # (live: "Tut-" under the hand)
+        lk = ctscreen.look(cv2.imread(str(p)))
+        assert lk.kind == "choice"
+        assert lk.parts["question"] == "Lodging is 10 G. Would you like to stay for the night?"
+        assert lk.parts["focus"].startswith("Yes selected")
