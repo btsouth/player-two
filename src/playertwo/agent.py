@@ -1244,7 +1244,8 @@ class Agent:
                        party=getattr(self, "_party", None))
         gold0 = vit0 = None
         if rest and v.funds is None and lk.kind not in ("text", "choice"):
-            vit0, gold0 = await fm.vitals()  # to say what the night did
+            with contextlib.suppress(Exception):  # to say what the night did
+                vit0, gold0 = await fm.vitals()
         if v.funds is None and lk.kind not in ("text", "choice"):
             if not seller:
                 return ("not done: say who sells it (seller), as this place's people are "

@@ -356,6 +356,18 @@ class Inn:
         a = np.asarray(f.convert("L") if hasattr(f, "convert") else f)
         return float(a.mean()) < 25
 
+    async def vitals(self):
+        """HP, MP and gold from the menu; the morning can hold the controls a moment (the
+        party walks out of bed), so the menu gets a few tries."""
+        for k in range(4):
+            try:
+                return await self.menu.vitals()
+            except Exception:  # noqa: BLE001  MenuStop: the menu didn't open yet
+                if k == 3:
+                    return [], None
+                await asyncio.sleep(1.5)
+        return [], None
+
     async def rest(self, gold0: int | None = None, vit0=None) -> str:
         sh = self.shop
         start = len(sh.presses)
@@ -424,7 +436,7 @@ class Inn:
                 said = " / ".join(heard)
                 raise ShopStop("no question about staying came up" + (f" ({said})" if said
                                                                       else ""))
-            vit, gold = await self.menu.vitals()
+            vit, gold = await self.vitals()
             line, full = vitals_line(self.menu.party, vit)
             out = "Stayed the night"
             if gold0 is not None and gold is not None:

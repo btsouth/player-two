@@ -234,3 +234,19 @@ def test_the_inns_question_with_a_hand_that_doesnt_read_is_answered_yes(monkeypa
 
     out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(400))
     assert pressed == ["a", "a"] and out.startswith("Stayed the night"), out
+
+
+def test_the_menu_after_the_night_gets_a_few_tries(monkeypatch):
+    monkeypatch.setattr(asyncio, "sleep", lambda s: _now())
+    inn = FakeInn()
+    sh = Shop(inn.press, inn.grab, read=lambda f: ([], []), dialogue=inn.dialogue, gap_s=0.0)
+    tries = []
+
+    async def vitals():
+        tries.append(1)
+        if len(tries) < 3:
+            raise RuntimeError("the menu didn't open (y)")
+        return [(70, 70, 8, 8)], 390
+
+    out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(400))
+    assert len(tries) == 3 and "everyone full" in out
