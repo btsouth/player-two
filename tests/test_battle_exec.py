@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import pytest
 
@@ -600,7 +601,7 @@ async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
             return SimpleNamespace(content="", tool_calls=[call])
 
     class Ex:
-        ally_at: dict = {}
+        ally_at: ClassVar[dict] = {}
         held = None
 
         def new_fight(self):

@@ -24,6 +24,7 @@ Game-specific memory comes from the module the task file names in [game.ram] wat
 from __future__ import annotations
 
 import importlib
+import itertools
 import json
 import threading
 import time
@@ -96,7 +97,7 @@ def _events(samples: list[dict]) -> dict:
     """What changed between readings: hits per slot, heals and MP spent per name, items."""
     ev = {"hit": {}, "healed": {}, "mp": {}, "item": 0, "acts": 0}
     before = False  # the reading before showed a change too: the same action going on
-    for a, b in zip(samples, samples[1:]):
+    for a, b in itertools.pairwise(samples):
         if not (a["battle"] or b["battle"]):
             before = False
             continue
@@ -153,7 +154,7 @@ def judge(samples: list[dict], checks: list[str]) -> tuple[bool, str]:
         elif name == "fled":
             good = over and not won
         elif name == "alive":
-            good = not wiped and all(p["hp"] > 0 for s in (fought[-1:] + [last])
+            good = not wiped and all(p["hp"] > 0 for s in [*fought[-1:], last]
                                      for p in s["party"]) and bool(last["party"])
         elif name == "no_ko":
             good = all(p["hp"] > 0 for s in samples for p in s["party"])
