@@ -3,6 +3,15 @@
     python scripts/narrator_bench.py run --gt GT.json --out RUN.jsonl [--mode model|fast] [--ids a,b]
     python scripts/narrator_bench.py score RUN.jsonl --gt GT.json
     python scripts/narrator_bench.py ask --gt GT.json --out ASK.jsonl [--mode model|fast]
+    python scripts/narrator_bench.py looks --gt GT.json --out LOOKS.json
+    python scripts/narrator_bench.py run ... --mode fast --looks LOOKS.json [--feel]
+    python scripts/narrator_bench.py atmos --gt GT.json --out ATMOS.jsonl --ids a,b [--looks ..]
+
+looks does fast mode's own part (the reader and the room survey, all CPU) so it can run on
+another machine; run --looks then only calls the model. --feel narrates each frame as the
+first time in its place: the place's line of what it's like after its name (atmos.json),
+or the model's own for a place not surveyed. atmos asks "what does it look like?" on each
+frame, as the session answers it.
 
 Each frame is narrated as a first look (nothing said before). The ground truth (labelled by
 eye, kept out of the repo since it quotes the game) says what must be said: text to read word
@@ -129,20 +138,87 @@ def score(e: dict, said: str) -> dict:
 _ROOMS: list = []
 
 
-def place_of(image) -> str:
-    """The surveyed place on screen, as Session._place names it (no memory of the last)."""
+def rooms_now():
     from playertwo.rooms import Rooms
 
     if not _ROOMS:
         _ROOMS.append(Rooms.for_game("Chrono Trigger"))
-    rooms = _ROOMS[0]
+    return _ROOMS[0]
+
+
+def where(image) -> dict:
+    """The surveyed place on screen, as Session._arrival takes it (no memory of the last):
+    its name to say ("" when none or unsure), its location, and whether it isn't surveyed
+    at all (no match, not a fade)."""
+    rooms = rooms_now()
+    t0 = time.monotonic()
     here = rooms.locate(image) if rooms else None
-    if here is None or here.loc in rooms.worlds:
-        return ""
-    name = rooms.name(here.loc)
-    if name.startswith("place 0x"):
-        return ""
-    return name.split(",")[0] if len(name.split()) > 4 else name
+    out = {"loc": None, "place": "", "unsurveyed": False, "ms": 0}
+    if here is None:
+        out["unsurveyed"] = bool(rooms) and not getattr(rooms, "dark", False)
+    elif (here.loc not in rooms.worlds and getattr(here, "sure", True)
+          and getattr(here, "score", 1.0) >= 0.75):
+        out["loc"] = here.loc
+        name = rooms.name(here.loc)
+        if not name.startswith("place 0x"):
+            out["place"] = name.split(",")[0] if len(name.split()) > 4 else name
+    out["ms"] = round((time.monotonic() - t0) * 1000)
+    return out
+
+
+def place_of(image) -> str:
+    """The surveyed place on screen, as Session._place names it (no memory of the last)."""
+    return where(image)["place"]
+
+
+def feel_lines() -> dict[int, str]:
+    rooms = rooms_now()
+    return dict(getattr(rooms, "feel", {}) or {}) if rooms else {}
+
+
+def look_frame(e: dict, full: bool) -> dict:
+    """Fast mode's own part for one frame: what the reader says, and where it is."""
+    from playertwo import ctscreen
+
+    img = Image.open(e["path"]).convert("RGB")
+    if full and img.size != (2560, 1440):
+        img = img.resize((2560, 1440), Image.Resampling.LANCZOS)
+    t0 = time.monotonic()
+    sharp = ctscreen.sharp(img)
+    lk = ctscreen.look(img, PARTY) if sharp else ctscreen.Look()
+    reader = ctscreen.Reader()
+    text = reader.update(lk, first=True) if lk.readable else ""
+    out = {"readable": lk.readable, "sharp": sharp, "text": text or "",
+           "model_read": bool(lk.readable and reader.model_read),
+           "first": round(time.monotonic() - t0, 3)}
+    # Where it is, as the session finds it under narration (a screen the reader can't
+    # read) and when asked what it's like (any screen).
+    out.update(where(img))
+    return out
+
+
+def frames_of(args) -> list[dict]:
+    """The frames asked for: by id from the ground truth, and any others by path (their
+    id is the file's name)."""
+    gt = json.loads(Path(args.gt).read_text())
+    if args.ids:
+        keep = args.ids.split(",")
+        by_id = {e["id"]: e for e in gt}
+        gt = [by_id[k] for k in keep if k in by_id]
+    elif getattr(args, "paths", ""):
+        gt = []
+    for path in filter(None, getattr(args, "paths", "").split(",")):
+        gt.append({"id": Path(path).stem, "path": path, "kind": "frame"})
+    return gt
+
+
+def looks(args) -> None:
+    gt = frames_of(args)
+    out = {}
+    for e in gt:
+        out[e["id"]] = look_frame(e, args.full)
+        print(e["id"], out[e["id"]], flush=True)
+    Path(args.out).write_text(json.dumps(out, indent=1))
 
 
 # The party in menu order, as the screens before these showed it (the reader remembers it).
@@ -155,10 +231,11 @@ def settings() -> Settings:
     return s
 
 
-async def narrate_model(narr: Narrator, frame: Frame) -> tuple[str, float | None]:
+async def narrate_model(narr: Narrator, frame: Frame, extra: str = ""
+                        ) -> tuple[str, float | None]:
     t0 = time.monotonic()
     first, text = None, ""
-    async for d in narr.narrate(frame):
+    async for d in narr.narrate(frame, extra):
         if first is None and d.strip():
             first = time.monotonic() - t0
         text += d
@@ -174,9 +251,15 @@ async def run(args) -> None:
         kinds = set(args.kinds.split(","))
         gt = [e for e in gt if e["kind"] in kinds]
     s = settings()
+    s.verbosity = args.verbosity or s.verbosity
     muse = Muse(s)
     sem = asyncio.Semaphore(args.par)
     out = Path(args.out).open("a")  # noqa: SIM115, ASYNC230  appended to as frames finish
+    seen = json.loads(Path(args.looks).read_text()) if args.looks else {}
+    feel = feel_lines() if args.feel else {}
+    if args.feel and args.atmos_lines:
+        feel = {int(k): v for k, v in
+                json.loads(Path(args.atmos_lines).read_text())["lines"].items()}
 
     async def one(e):
         async with sem:
@@ -190,25 +273,32 @@ async def run(args) -> None:
             t0 = time.monotonic()
             try:
                 if args.mode == "fast":
-                    from playertwo import ctscreen
-
-                    lk = await asyncio.to_thread(ctscreen.look, frame.image, PARTY)
-                    if not ctscreen.sharp(frame.image):
-                        lk = ctscreen.Look()  # too small to read: the model's, as live
-                    reader = ctscreen.Reader()
-                    if lk.readable:
-                        text = reader.update(lk, first=True)
-                        first = time.monotonic() - t0
-                    if lk.readable and reader.model_read:
+                    lk = seen.get(e["id"]) or await asyncio.to_thread(look_frame, e, args.full)
+                    text, first = lk["text"], lk["first"]
+                    if lk["model_read"]:
                         # As the session does: a whole box that reads badly goes to the model.
                         more, f2 = await narrate_model(narr, frame)
-                        first = first if text else (f2 or 0) + (time.monotonic() - t0 - (f2 or 0))
+                        first = first if text else lk["first"] + (f2 or 0)
                         text = f"{text} {more}".strip()
-                    elif not lk.readable:
-                        # As the session does: a surveyed place's name first, then the model.
-                        place = await asyncio.to_thread(place_of, frame.image)
-                        text, first = await narrate_model(narr, frame)
-                        text = f"{place}. {text}".strip() if place else text
+                    elif not lk["readable"]:
+                        # As the session does: a surveyed place's name first, then the model;
+                        # with --feel, as the first time there (Session._arrival).
+                        place = lk.get("place", "")
+                        line = feel.get(lk.get("loc"), "") if lk["sharp"] else ""
+                        ask = args.feel and lk["sharp"] and lk.get("unsurveyed")
+                        head = " ".join(x for x in (f"{place}." if place else "", line) if x)
+                        if line:
+                            narr.recent.append(head)
+                        if ask or line:
+                            from playertwo.prompts import PLACE_FEEL, PLACE_SAID
+
+                            more, f2 = await narrate_model(narr, frame,
+                                                           PLACE_FEEL if ask else PLACE_SAID)
+                        else:
+                            more, f2 = await narrate_model(narr, frame)
+                        text = f"{head} {more}".strip()
+                        place_s = lk.get("ms", 0) / 1000
+                        first = place_s if head else (place_s if ask else 0) + (f2 or 0)
                 else:
                     text, first = await narrate_model(narr, frame)
                 err = ""
@@ -400,6 +490,64 @@ def seq_frames(folder: str, start: str, end: str) -> list[tuple[float, Path]]:
     return [(t - t0, p) for t, p in out]
 
 
+_SENTENCE = re.compile(r"[.!?][\"'\u201d\u2019)]*(\s|$)")
+
+
+async def atmos(args) -> None:
+    """"What does it look like?" on frames, answered as the session does: the surveyed
+    place's name (from looks) and the model's picture. Latency to the first word and to
+    the first whole sentence (when speech starts), and cost. Judged by eye."""
+    gt = {e["id"]: e for e in frames_of(args)}
+    ids = list(gt)
+    seen = json.loads(Path(args.looks).read_text()) if args.looks else {}
+    s = settings()
+    s.verbosity = args.verbosity
+    muse = Muse(s)
+    sem = asyncio.Semaphore(args.par)
+    out = Path(args.out).open("a")  # noqa: SIM115, ASYNC230  appended to as answers come
+
+    async def one(fid):
+        async with sem:
+            e = gt[fid]
+            img = Image.open(e["path"]).convert("RGB")
+            if img.size != (2560, 1440):
+                img = img.resize((2560, 1440), Image.Resampling.LANCZOS)
+            narr = Narrator(muse, args.verbosity, "Chrono Trigger")
+            known = (seen.get(fid) or {}).get("place", "")
+            place = "" if args.describe else known  # the tour gets it in the model's prompt
+            place_s = (seen.get(fid) or {}).get("ms", 0) / 1000
+            before = (muse.usage.prompt_tokens, muse.usage.cached_tokens,
+                      muse.usage.completion_tokens)
+            t0 = time.monotonic()
+            first = sent = None
+            text = f"{place[:1].upper()}{place[1:]}. " if place else ""
+            f = Frame(img, t0, fid)
+            gen = narr.describe(f, known) if args.describe else narr.atmosphere(f)
+            async for d in gen:
+                if first is None and d.strip():
+                    first = time.monotonic() - t0
+                text += d
+                if sent is None and _SENTENCE.search(text[len(place) + 2 if place else 0:]):
+                    sent = time.monotonic() - t0
+            u = (muse.usage.prompt_tokens - before[0], muse.usage.cached_tokens - before[1],
+                 muse.usage.completion_tokens - before[2])
+            rec = {"id": fid, "kind": e["kind"], "verbosity": args.verbosity,
+                   "mode": "describe" if args.describe else "atmos", "said": text.strip(),
+                   "first_s": round(place_s if place else (first or 0), 2),
+                   "model_first_s": round(first or 0, 2), "sentence_s": round(sent or 0, 2),
+                   "total_s": round(time.monotonic() - t0, 2), "tokens": u,
+                   "made_up": [n for n in CT_NAMES if n in text and has(text, n)
+                               and norm(n) not in norm(" ".join([*e.get("shown", []), place,
+                                                                 e.get("read", "")]))]}
+            out.write(json.dumps(rec) + "\n")
+            out.flush()
+            print(f"{fid:<28} {e['kind']:<14} {rec['first_s']:>5} {rec['sentence_s']:>5} "
+                  f"{rec['total_s']:>5} {text.strip()!r}", flush=True)
+
+    await asyncio.gather(*(one(f) for f in ids))
+    print(f"cost ${muse.usage.cost_usd():.4f} for {muse.usage.calls} calls")
+
+
 def repeats(lines: list[tuple[float, str]], within: float = 30.0) -> int:
     """Lines that say again what was said in the last `within` seconds."""
     n = 0
@@ -481,6 +629,25 @@ def main() -> None:
     r.add_argument("--kinds", default="")
     r.add_argument("--par", type=int, default=4)
     r.add_argument("--full", action="store_true", help="scale small frames up to 2560x1440")
+    r.add_argument("--looks", default="", help="the reader's part, from looks")
+    r.add_argument("--feel", action="store_true", help="each frame as the first time there")
+    r.add_argument("--atmos-lines", default="", help="atmos.json to use (else the rooms')")
+    r.add_argument("--verbosity", default="")
+    lo = sub.add_parser("looks")
+    lo.add_argument("--gt", required=True)
+    lo.add_argument("--out", required=True)
+    lo.add_argument("--ids", default="")
+    lo.add_argument("--paths", default="", help="more frames, by path")
+    lo.add_argument("--full", action="store_true")
+    at = sub.add_parser("atmos")
+    at.add_argument("--gt", required=True)
+    at.add_argument("--out", required=True)
+    at.add_argument("--ids", default="")
+    at.add_argument("--paths", default="", help="more frames, by path")
+    at.add_argument("--looks", default="")
+    at.add_argument("--verbosity", default="normal")
+    at.add_argument("--describe", action="store_true", help="the tour instead")
+    at.add_argument("--par", type=int, default=4)
     k = sub.add_parser("ask")
     k.add_argument("--gt", required=True)
     k.add_argument("--out", required=True)
@@ -501,6 +668,10 @@ def main() -> None:
     a = ap.parse_args()
     if a.cmd == "run":
         asyncio.run(run(a))
+    elif a.cmd == "looks":
+        looks(a)
+    elif a.cmd == "atmos":
+        asyncio.run(atmos(a))
     elif a.cmd == "ask":
         asyncio.run(ask(a))
     elif a.cmd == "seq":
