@@ -325,3 +325,25 @@ def test_line_up_with_someone_off_the_tiles_middle():
     assert line_up((9, 56), (896.0, 118.0), (0, -1)) == 899
     assert line_up((9, 56), (904.0, 118.0), (0, -1)) == 904
     assert line_up((7, 54), (896.0, 118.0), (1, 0)) == 118.0
+
+
+async def test_a_save_point_is_stood_on_not_pressed_at(tmp_path):
+    from playertwo.rooms import Person, Target, walk_out
+
+    rooms, img = two_floors(tmp_path)
+    room = rooms.rooms[2]
+    room.people.append(Person("the save point", "save point", (232.0, 125.0)))
+    sim = Sim(img, room.walk, 72.0, 173.0)
+    target = Target(2, (232.0, 125.0), False, "the save point", "save point")
+    out = await walk_out(rooms, 2, sim.shoot, sim.steer, lambda: _true(), lambda _t: None,
+                         20.0, spot=target, press=sim.press, talk=True)
+    assert out.startswith("arrived: standing on the save point"), out
+    assert "y opens it" in out and "Don't press a" in out
+    assert not sim.pressed  # a on a save point does nothing; beside a chain it climbs it
+    assert (int(sim.y) // 16, int(sim.x) // 16) == (7, 14)
+    # The survey's kind goes with it as a target.
+    with_people(tmp_path, 2, [{"obj": 8, "at": [232.0, 125.0], "name": "the save point",
+                               "kind": "save point"}])
+    targets = Rooms(tmp_path).targets(2)
+    assert targets["the save point (in here)"].kind == "save point"
+    assert not targets["the save point (in here)"].person

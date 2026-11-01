@@ -98,6 +98,7 @@ class Target:
     at: tuple[float, float]
     person: bool = False  # someone or something standing there: walked up to, faced
     name: str = ""
+    kind: str = ""  # the survey's kind for it (a save point is stood on, not talked to)
 
 
 @dataclass
@@ -963,11 +964,11 @@ class Rooms:
             for p in room.people:
                 key = f"{p.name} ({where})"
                 if key not in out:  # walked up to and faced (stood on: a save point)
-                    out[key] = Target(loc, p.at, p.kind != "save point", p.name)
+                    out[key] = Target(loc, p.at, p.kind != "save point", p.name, p.kind)
             for k, v in room.spots.items():
                 key = f"{k} ({where})"
                 if key not in out:
-                    out[key] = Target(loc, v, False, k)
+                    out[key] = Target(loc, v, False, k, "spot")
         return out
 
     def options(self, here: Here) -> tuple[dict[str, tuple[int, int]], dict[str, Target],
@@ -1288,6 +1289,10 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     a (`press`) facing them, to talk (or to open, search, use)."""
     t0 = time.monotonic()
     person = isinstance(spot, Target) and spot.person
+    # A save point is stood on. Pressing a there does nothing in Chrono Trigger (live on
+    # Steam: a on the Mountain of Woe's sparkle brought nothing up, a step away it
+    # climbed the chain beside it, 232 s and no save): saving is the menu's Save.
+    saving = isinstance(spot, Target) and spot.kind == "save point"
     at = (spot.at if isinstance(spot, Target) else spot) if spot is not None else None
     # Someone who walks about (behind a counter): found on screen at the end, a was
     # pressed when they come across from the player.
@@ -1439,6 +1444,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     await asyncio.sleep(STEAM_LEAD if here.steam else 0.15)
                     trail.clear()
                     continue
+                if tile in ends and saving:
+                    steer(None)
+                    return SAVE_POINT.format(secs=f"{time.monotonic() - t0:.0f}")
                 if tile in ends:
                     fx, fy = ends[tile]
                     aim, seen = at, None
@@ -1681,6 +1689,11 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     return f"timeout: still in {where}, on the way to {target}"
 
 
+SAVE_POINT = ("arrived: standing on the save point ({secs} s). Don't press a here: a save "
+              "point doesn't answer a in this game, and a by something beside it uses that "
+              "instead (a chain is climbed). To save, the menu: y opens it, and its Save is "
+              "lit while standing on a save point; then a slot, picked by the player. Only "
+              "if they asked to save; else tell them we're on it and how to save")
 WORDS_OUT = {"out", "outside", "exit", "leave", "outdoors", "world"}
 NEAREST_OUT = "outside, the nearest way out"
 
