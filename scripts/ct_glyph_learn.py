@@ -16,13 +16,18 @@ import sys
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from playertwo import ctsteam  # noqa: E402
-from playertwo.glyphread import (  # noqa: E402
-    GlyphLib, find_template, glyphs_in_line, text_lines, text_mask, to_canvas)
+from playertwo import ctsteam
+from playertwo.glyphread import (
+    GlyphLib,
+    find_template,
+    glyphs_in_line,
+    text_lines,
+    text_mask,
+    to_canvas,
+)
 
 
 def lines_of(img, box, blank, local):
@@ -40,7 +45,7 @@ def lines_of(img, box, blank, local):
 
 
 def main() -> None:
-    labels = json.load(open(sys.argv[1]))
+    labels = json.loads(Path(sys.argv[1]).read_text())
     lib = ctsteam.lib()
     new = GlyphLib(lib.X.copy(), list(lib.y))
     added, skipped = 0, 0
@@ -67,7 +72,7 @@ def main() -> None:
                       f"{len(chars)} in {text!r}; reads {got!r}")
                 skipped += 1
                 continue
-            before, worst = lib.read(xs)
+            before, _worst = lib.read(xs)
             for g, ch in zip(xs, chars, strict=True):
                 new.add(g, ch)
                 added += 1

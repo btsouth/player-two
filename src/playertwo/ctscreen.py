@@ -68,6 +68,7 @@ class Look:
     focus: str = ""
     ms: int = 0
     order: tuple[str, ...] = ()
+    names: list[str] = field(default_factory=list)  # characters in order (party blocks)
 
     @property
     def readable(self) -> bool:
@@ -106,6 +107,7 @@ def battle_look(st: ctsteam.State) -> Look:
     dz = _danger(st)
     if dz:
         lk.parts["danger"] = dz
+    lk.names = [m.name for m in st.party]
     lk.focus = lk.parts.get("focus", "")
     # A message ("Combo Attack: Reduces HP to 1") is what just happened, so it comes
     # first; in a list the top bar describes the entry under the hand, so after it.
@@ -208,6 +210,9 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     lines = runs_in(ctsteam.lib(), img, (0, 0, *CANVAS), [h[:4] for h in hands], local=True)
     lk = Look(lines=lines)
     good = [r for row in lines for r in row if plausible(r)]
+    blocks = sorted((r.y, n) for r in good if (n := snap(r.text, ctsteam.NAMES, 0.75))
+                    in ctsteam.NAMES and 400 < r.x0 < 1700)
+    lk.names = [n for _y, n in blocks]
     question = next((r for r in good if clean(r.text).endswith("?")), None)
     tips = [(h[0] + h[2], h[1] + h[3] // 2) for h in hands]
     found = [(tip, *_hand_entry(lines, tip, party)) for tip in tips]
@@ -287,10 +292,7 @@ def look(image, party: list[str] = ()) -> Look:
     t0 = time.perf_counter()
     img = to_canvas(image if isinstance(image, np.ndarray) else ctsteam._bgr(image), CANVAS)
     st = ctsteam.read(img)
-    if st.in_battle or st.paused:
-        lk = battle_look(st)
-    else:
-        lk = field_look(img, party)
+    lk = battle_look(st) if st.in_battle or st.paused else field_look(img, party)
     lk.ms = round((time.perf_counter() - t0) * 1e3)
     return lk
 
@@ -312,6 +314,8 @@ class Reader:
 
     def __init__(self, forget_s: float = 30.0):
         self.forget_s = forget_s
+        self.party: list[str] = []  # characters in menu order, as screens have shown them
+        self.last: list[str] = []  # the parts said by the last update
         self.kind = "none"
         self.said: dict[str, str] = {}
         self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
@@ -320,10 +324,33 @@ class Reader:
     def reset(self) -> None:
         self.kind, self.said, self.seen = "none", {}, {}
 
+    @property
+    def waiting(self) -> bool:
+        """Text on screen not said yet: another look may find it whole."""
+        return any(v and self.said.get(p) != v and n < 3 for p, (v, n) in self.seen.items())
+
+    def learn_party(self, names: list[str]) -> None:
+        """Merge an order of characters seen on screen into the party order."""
+        names = list(dict.fromkeys(names))
+        if len(names) < 2:
+            return
+        if all(n in self.party for n in names):
+            return
+        if all(n in names for n in self.party):
+            self.party = names
+            return
+        for i, n in enumerate(names):
+            if n not in self.party:
+                before = names[i - 1] if i else None
+                at = self.party.index(before) + 1 if before in self.party else len(self.party)
+                self.party.insert(at, n)
+
     def update(self, lk: Look, now: float | None = None, first: bool = False) -> str:
         """What to say for this look ('' for nothing). `first` reads the look as the only
         one there will be: text counts as whole when it ends like a sentence."""
         now = time.monotonic() if now is None else now
+        self.learn_party(lk.names)
+        self.last = []
         opened = lk.kind != self.kind
         if opened:
             self.said, self.seen = {}, {}
@@ -353,6 +380,7 @@ class Reader:
             self.said[part] = value
             out.append(value)
         self.texts = {t: w for t, w in self.texts.items() if now - w < self.forget_s}
+        self.last = [p for p in (lk.order or ORDER) if self.said.get(p) and lk.parts.get(p) in out]
         if out and lk.kind == "menu" and lk.focus in MAIN and opened:
             out.insert(0, "Menu")
         return " ".join(s if s[-1] in ".?!" else s + "." for s in out)

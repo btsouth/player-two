@@ -23,10 +23,10 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from playertwo.config import Settings  # noqa: E402
-from playertwo.muse import Muse  # noqa: E402
-from playertwo.narrator import Narrator  # noqa: E402
-from playertwo.screen import Frame  # noqa: E402
+from playertwo.config import Settings
+from playertwo.muse import Muse
+from playertwo.narrator import Narrator
+from playertwo.screen import Frame
 
 # Proper nouns a narration could make up: places, people, eras, monsters.
 CT_NAMES = [
@@ -145,7 +145,7 @@ async def narrate_model(narr: Narrator, frame: Frame) -> tuple[str, float | None
 
 
 async def run(args) -> None:
-    gt = json.load(open(args.gt))
+    gt = json.loads(Path(args.gt).read_text())
     if args.ids:
         keep = set(args.ids.split(","))
         gt = [e for e in gt if e["id"] in keep]
@@ -155,7 +155,7 @@ async def run(args) -> None:
     s = settings()
     muse = Muse(s)
     sem = asyncio.Semaphore(args.par)
-    out = open(args.out, "a")
+    out = Path(args.out).open("a")  # noqa: SIM115, ASYNC230  appended to as frames finish
 
     async def one(e):
         async with sem:
@@ -198,9 +198,9 @@ async def run(args) -> None:
 
 
 def summarize(args) -> None:
-    gt = {e["id"]: e for e in json.load(open(args.gt))}
+    gt = {e["id"]: e for e in json.loads(Path(args.gt).read_text())}
     recs = {}
-    for line in open(args.run):
+    for line in Path(args.run).read_text().splitlines():
         r = json.loads(line)
         recs[r["id"]] = r  # the last run of a frame counts
     rows = []

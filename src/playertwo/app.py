@@ -12,6 +12,9 @@ import time
 from collections import deque
 from pathlib import Path
 
+import numpy as np
+
+from . import ctscreen
 from .ack import ack
 from .agent import Agent
 from .audio import Mixer
@@ -231,6 +234,15 @@ class Session:
             self.problems.append(SOUND_PROBLEM)
         self.narrator = Narrator(self.muse, settings.verbosity, settings.game,
                                  settings.language, settings.team_up)
+        # Chrono Trigger on Steam: battles, menus, choices and text boxes read from pixels
+        # (ctscreen), said the moment they change; the model narrates the rest.
+        self.reader = ctscreen.Reader()
+        self.reading: asyncio.Task | None = None
+        self.read_t = 0.0  # when the frame the reader last looked at was grabbed
+        self.read_owned = False  # whether the reader could read that frame
+        self.read_thumb = None
+        self.read_prime = False  # take in the next look without saying it
+        self.read_last_parts: set[str] = set()
         self.watcher = ChangeWatcher()
         self.events = Events()
         self.latest: Frame | None = None
@@ -591,6 +603,12 @@ class Session:
         if time.monotonic() < self.error_until:
             return
         frame, change = self.pending
+        if self._reads(frame):
+            if self.read_t < frame.t:
+                return  # the reader hasn't seen this screen yet
+            if self.read_owned:
+                self.pending = None  # the reader says what this screen needs
+                return
         cut = change >= self.SCENE_CUT and time.monotonic() >= self.soft_until
         if not cut and not self.voice.idle():
             return  # let the last line finish; we'll narrate the newest screen after
@@ -688,8 +706,59 @@ class Session:
                              change=round(self.watcher.last_change, 3))
             self.show(frame, force=True)
             self.pending = (frame, self.watcher.last_change)
+        if not self.paused and not busy and self._reads(frame):
+            self._read_soon(frame)
         if not self.paused and not busy:
             self._maybe_narrate()
+
+    # Reading Chrono Trigger (Steam) screens without the model
+
+    def _reads(self, frame: Frame) -> bool:
+        return self.agent._ct_steam(frame)
+
+    def _read_soon(self, frame: Frame) -> None:
+        if self.reading is not None and not self.reading.done():
+            return
+        from .screen import thumb
+
+        th = thumb(frame.image)
+        if (self.read_thumb is not None and not self.reader.waiting
+                and float(np.abs(th - self.read_thumb).mean()) < 0.003
+                and time.monotonic() - self.read_t < 2.0):
+            self.read_t = frame.t  # nothing moved: the last verdict stands
+            return
+        self.read_thumb = th
+        self.reading = asyncio.create_task(self._read(frame))
+
+    async def _read(self, frame: Frame) -> None:
+        try:
+            lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
+        except Exception as exc:  # noqa: BLE001  the model narrates what can't be read
+            self.events.emit("error", where="reader", message=str(exc)[:300])
+            self.read_owned, self.read_t = False, frame.t
+            return
+        busy = self.agent_task is not None and not self.agent_task.done()
+        if self.paused or busy or self.listening():
+            return  # said later, once they're done (nothing is marked as said)
+        line = self.reader.update(lk)
+        self.read_owned, self.read_t = lk.readable, frame.t
+        if self.read_prime:
+            self.read_prime, line = False, ""
+        if lk.readable and self.narrating is not None and not self.narrating.done():
+            self.narrating.cancel()  # the model's line is about a screen that's gone
+        if not line:
+            return
+        parts = set(self.reader.last)
+        # Moving the cursor cuts off the last cursor line, as screen readers do; text
+        # (a message, a description, dialogue) is never cut off by anything but text.
+        cursor = {"focus", "turn"}
+        interrupt = (parts <= cursor and self.read_last_parts <= cursor) or (
+            bool(parts & {"text", "question"}) and bool(self.read_last_parts & {"text", "question"}))
+        self.read_last_parts = parts
+        self.narrator.recent.append(line)
+        self.events.emit("say", text=line, source="reader", screen=lk.kind, ms=lk.ms,
+                         latency=round(time.monotonic() - frame.t, 2))
+        self.spawn(self.voice.say(line, interrupt=interrupt))
 
     # Talking
 
@@ -1050,6 +1119,7 @@ class Session:
             self.watcher.accept(frame)
             self.silent_streak, self.quiet_until = 0, 0.0
             self.pending = (frame, 0.0)
+            self.read_prime = True  # the reader starts from here, quietly
 
     async def _working_ticks(self) -> None:
         """A soft tick every few seconds while acting, so a long silence isn't a mystery."""
@@ -1322,6 +1392,9 @@ class Session:
             # The player asked for the next line: read it once it has typed out, now,
             # whatever the back-off after quiet screens says.
             self.silent_streak, self.quiet_until, self.pending = 0, 0.0, None
+            latest = getattr(self, "latest", None)
+            if latest is not None and getattr(self, "reader", None) and self._reads(latest):
+                return  # the reader reads the new line the moment it has typed out
             with contextlib.suppress(Exception):
                 self._start_narration(await self._typed_out(), describe=self.paused)
         elif action == "describe":
