@@ -222,6 +222,38 @@ class FieldMenu:
             await self.tap("b")
             await asyncio.sleep(0.15)
 
+    async def vitals(self) -> tuple[list[tuple[int, int, int, int]], int | None]:
+        """The party's HP and MP as the main menu page shows them ([(hp, top, mp, top)],
+        the active party then the rest), and the gold; the menu is closed after."""
+        await self.open()
+        _tips, lines = await self.look()
+        await self.close()
+        out: list[tuple[int, int, int, int]] = []
+        cells = []
+        for row in lines:
+            # A label and its numbers can be one run ("HP : 455/ 494") or two.
+            runs = sorted(row, key=lambda r: r.x0)
+            for k, r in enumerate(runs):
+                text = r.text if re.search(r"\d+\s*/\s*\S", r.text) or k + 1 >= len(runs) \
+                    else f"{r.text} {runs[k + 1].text}"
+                m = re.match(r"\s*(H[PF]|M[PpF])\s*[:;l1]?\s*(\S+)\s*/\s*(\S+)", text)
+                if m:
+                    a, b = ctsteam.numfix(m.group(2)), ctsteam.numfix(m.group(3))
+                    if a.isdigit() and b.isdigit():
+                        cells.append((r.x0 // 700, r.y, m.group(1)[0], int(a), int(b)))
+        for col, y, kind, a, b in sorted(cells):
+            if kind != "H":
+                continue
+            mp = next(((c, d) for col2, y2, k2, c, d in cells
+                       if k2 == "M" and col2 == col and 0 < y2 - y < 150), None)
+            if mp is not None:
+                out.append((a, b, *mp))
+            else:
+                out.append((a, b, -1, -1))  # MP unread
+        gold = next((int(m.group(1)) for row in lines for r in row
+                     if (m := re.fullmatch(r"(\d{1,7})\s*G", r.text.strip()))), None)
+        return out, gold
+
     async def to_main(self, item: str) -> None:
         await self.open()
         await self.walk(MAIN, item, lambda tips: min(tips, key=lambda t: t[0]))

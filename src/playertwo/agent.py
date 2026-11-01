@@ -306,6 +306,23 @@ CT_TOOLS = [
             "target": {"type": "string", "description": "Who it's used on; for a setting, "
                        "the value wanted (Wait, Active, slowest, fastest)."},
         }, "required": ["action", "name"]}}},
+    {"type": "function", "function": {
+        "name": "shop",
+        "description": "Chrono Trigger, outside battle: buy from a seller, or rest at an "
+                       "inn, done for you. buy walks to the seller (or uses the shop or "
+                       "their words already on screen), talks, opens Buy, picks the item, "
+                       "sets the count, buys, checks the gold and backs out. rest talks to "
+                       "the innkeeper, pays, sleeps and checks the party's HP and MP. Call "
+                       "it straight away, without walking or pressing first.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["buy", "rest"]},
+            "item": {"type": "string", "description": "For buy: the item as the game "
+                     "spells it (Potion, Ether, Athenian Water)."},
+            "count": {"type": "integer", "description": "For buy: how many (default 1)."},
+            "seller": {"type": "string", "description": "Who sells it or runs the inn, as "
+                       "the place's people are named (the item seller at the purple tent, "
+                       "the shopkeeper, the innkeeper). Empty when the shop is already up."},
+        }, "required": ["action"]}}},
 ]
 FIELD_MENU = True  # the field_menu tool is offered (menu.py)
 BATTLE_TOOLS = [*CT_TOOLS[:2], *(t for t in TOOLS if t["function"]["name"] in (
@@ -826,6 +843,8 @@ class Agent:
             if not FIELD_MENU:
                 return "no field_menu yet: use press"
             return await self._field_menu(a)
+        if name == "shop":
+            return await self._shop(a)
         if name not in TOOL_NAMES:
             return f"no tool called {name}; use one of {', '.join(sorted(TOOL_NAMES))}"
         if name in ("walk_to", "talk_to", "travel", "walk_to_map", "keep_walking") and \
@@ -1126,7 +1145,8 @@ class Agent:
         if self._battle is not None:
             return BATTLE_TOOLS
         if self._ct_steam(frame) and FIELD_MENU:
-            return [*TOOLS[:-1], CT_TOOLS[2], TOOLS[-1]]  # field_menu, finish still last
+            # field_menu and shop; finish still last
+            return [*TOOLS[:-1], CT_TOOLS[2], CT_TOOLS[3], TOOLS[-1]]
         return TOOLS
 
     async def _battle_tool(self, name: str, a: dict) -> str:
@@ -1190,6 +1210,66 @@ class Agent:
             out = await fm.use(action, str(a.get("name") or ""), str(a.get("user") or ""),
                                str(a.get("target") or ""))
         return out
+
+    async def _shop(self, a: dict) -> str:
+        """Buy at a shop or rest at an inn (shop.py), walking to the seller first when
+        neither their words nor the shop are on screen."""
+        await self.go.wait()
+        if self.cancelled:
+            return "stopped by the player"
+        frame = await self.grab()
+        if not self._ct_steam(frame):
+            return "no shop tool here: it's for Chrono Trigger on Steam; use press"
+        if self._battle is not None:
+            return "in a fight: use battle"
+        from . import ctscreen
+        from .menu import FieldMenu
+        from .shop import Shop
+
+        async def press(button: str, ms: int) -> None:
+            await self.go.wait()
+            await asyncio.to_thread(self.controls.press, button, ms)
+
+        async def grab():
+            return (await self.grab()).image
+
+        action = str(a.get("action") or "buy").lower()
+        rest = action.startswith(("rest", "inn", "sleep", "stay"))
+        seller = str(a.get("seller") or "").strip() or ("the innkeeper" if rest else "")
+        sh = Shop(press, grab, cancelled=lambda: self.cancelled)
+        v = await sh.look()
+        lk = await asyncio.to_thread(ctscreen.look, sh.frame)
+        walked = ""
+        fm = FieldMenu(press, grab, cancelled=lambda: self.cancelled,
+                       party=getattr(self, "_party", None))
+        gold0 = vit0 = None
+        if rest and v.funds is None and lk.kind not in ("text", "choice"):
+            vit0, gold0 = await fm.vitals()  # to say what the night did
+        if v.funds is None and lk.kind not in ("text", "choice"):
+            if not seller:
+                return ("not done: say who sells it (seller), as this place's people are "
+                        "named; where_am_i lists them")
+            walked = await self._act("go_to_exit", {"to": seller, "talk": True})
+            if not walked.startswith("arrived"):
+                return f"couldn't get to {seller}: {walked}"
+            walked = f"Walked to {seller} and talked. "
+        if rest:
+            from .shop import Inn, vitals_line
+
+            out = await Inn(sh, fm).rest(gold0, vit0)
+            if vit0:
+                out += f" Before: {vitals_line(fm.party, vit0)[0]}."
+            return walked + out
+        item = str(a.get("item") or "").strip()
+        if not item:
+            return "not done: say which item to buy"
+        try:
+            count = int(a.get("count") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        out = await sh.buy(item, count)
+        said = " ".join(f'"{x}"' for x in sh.said)
+        return walked + (f"The seller said: {said}. " if said else "") + out
 
     def _progress(self):
         from .quests import Progress
