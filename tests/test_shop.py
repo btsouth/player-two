@@ -538,3 +538,83 @@ def test_the_fair_item_sellers_goods_and_the_reader_on_them():
     assert lk.parts == {"focus": "Potion, 10 G", "desc": "Restores 50 HP."}
     lk = ctscreen.look(Image.open(FRAMES / "shop-fair-item-seller-main.png"))
     assert lk.parts == {"focus": "Buy", "desc": "Funds 276 G"}
+
+
+def _shop_agent(monkeypatch, walked: str):
+    """The agent's shop tool with the walk to the seller answering `walked`; what the
+    shop and inn were asked to do is noted."""
+    from playertwo import ctscreen
+    from playertwo.agent import Agent
+    from playertwo.menu import FieldMenu
+    from playertwo.screen import Frame
+
+    async def grab():
+        return Frame(Image.new("RGB", (64, 36)), 0.0)
+
+    async def speak(text):
+        pass
+
+    agent = Agent(SimpleNamespace(), SimpleNamespace(press=lambda b, ms: None), grab, speak,
+                  game="Chrono Trigger")
+    agent._ct_steam = lambda frame: True
+    done = []
+
+    async def act(name, a):
+        done.append((name, a))
+        return walked
+
+    async def look(self):
+        self.frame = Image.new("RGB", (64, 36))
+        return shop.View()
+
+    async def buy(self, item, count=1):
+        done.append(("buy", item))
+        return "Bought"
+
+    async def rest(self, gold0=None, vit0=None):
+        done.append(("rest",))
+        return "Stayed the night"
+
+    async def vitals(self):
+        return [(70, 70, 8, 8)], 400
+
+    agent._act = act
+    monkeypatch.setattr(shop.Shop, "look", look)
+    monkeypatch.setattr(shop.Shop, "buy", buy)
+    monkeypatch.setattr(shop.Inn, "rest", rest)
+    monkeypatch.setattr(FieldMenu, "vitals", vitals)
+    monkeypatch.setattr(ctscreen, "look", lambda image, party=(): ctscreen.Look())
+    return agent, done
+
+
+def test_the_shop_tool_says_what_the_walk_to_the_seller_did(monkeypatch):
+    """Live review: any failed walk was "no innkeeper here, go to Truce Inn", even inside
+    the inn; any arrival was "talked", and the purchase then waited ~13 s for a shop."""
+    nothing = ("arrived: at the innkeeper (12 s), facing them, but pressing a brought "
+               "nothing up: look")
+    agent, done = _shop_agent(monkeypatch, nothing)
+    out = asyncio.run(agent._shop({"action": "rest"}))
+    assert out.startswith("not done: got to the innkeeper, but talking to them brought "
+                          "nothing up") and "brought nothing up: look" in out, out
+    assert ("rest",) not in done
+    agent, done = _shop_agent(monkeypatch, nothing.replace("innkeeper", "item seller"))
+    out = asyncio.run(agent._shop({"action": "buy", "item": "Potion",
+                                   "seller": "the item seller"}))
+    assert out.startswith("not done: got to the item seller") and ("buy", "Potion") not in done
+
+    boxed = ("interrupted: a text box (or a menu) is up: read it to the player, press a to "
+             "go on, then go_to_exit again")
+    agent, done = _shop_agent(monkeypatch, boxed)
+    out = asyncio.run(agent._shop({"action": "rest"}))
+    assert "no innkeeper here" not in out and "interrupted: a text box" in out, out
+
+    elsewhere = "no single place from here fits 'the innkeeper' (no innkeeper listed nearby)"
+    agent, done = _shop_agent(monkeypatch, elsewhere)
+    out = asyncio.run(agent._shop({"action": "rest"}))
+    assert out.startswith("not done: no innkeeper here. Go to an inn"), out
+
+    talked = ("arrived: at the innkeeper, facing them, and pressed a to talk (5 s): read "
+              "their line to the player word for word")
+    agent, done = _shop_agent(monkeypatch, talked)
+    out = asyncio.run(agent._shop({"action": "rest"}))
+    assert out.startswith("Walked to the innkeeper and talked. Stayed the night"), out

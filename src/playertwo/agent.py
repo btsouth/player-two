@@ -1469,15 +1469,29 @@ class Agent:
                 return ("not done: say who sells it (seller), as this place's people are "
                         "named; where_am_i lists them")
             walked = await self._act("go_to_exit", {"to": seller, "talk": True})
+            # Not known in this place at all (not a surveyed place, or no one here fits):
+            # another place. Anything else (a box in the way, a walk that failed) is said
+            # as it was, not as "no innkeeper here".
+            nobody = walked.startswith(("this place isn't in the room survey",
+                                        "no single place from here fits"))
             if not walked.startswith("arrived"):
-                if rest:
+                if rest and nobody:
                     return ("not done: no innkeeper here. Go to an inn with go_to_place "
                             "(Truce Inn in 1000 A.D.), then call shop with action rest "
                             "again: it talks, pays, sleeps and checks HP and MP. Don't talk "
                             "to the innkeeper yourself.")
-                return (f"not done: couldn't get to {seller} from here ({walked[:160]}). Go "
-                        "into the seller's place with go_to_place first, then call shop "
-                        "again; don't talk to the seller yourself.")
+                if nobody:
+                    return (f"not done: couldn't get to {seller} from here ({walked[:160]})."
+                            " Go into the seller's place with go_to_place first, then call "
+                            "shop again; don't talk to the seller yourself.")
+                return (f"not done: the walk to {seller} didn't get there: {walked[:240]}. "
+                        "Nothing was paid or bought.")
+            if "pressed a to talk" not in walked:
+                # There, but no line came up: the shop wouldn't open (it waited ~13 s on
+                # camera for one before).
+                return (f"not done: got to {seller}, but talking to them brought nothing "
+                        f"up: {walked[:240]}. Nothing was paid or bought; look at the "
+                        "screen before trying again.")
             walked = f"Walked to {seller} and talked. "
         if rest:
             from .shop import Inn, vitals_line
