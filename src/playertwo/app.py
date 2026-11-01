@@ -577,7 +577,9 @@ class Session:
         if not self.rooms:
             return ""
         here = await asyncio.to_thread(self.rooms.locate, frame.image)
-        if here is None or here.loc in self.rooms.worlds:
+        if here is None or here.loc in self.rooms.worlds or not getattr(here, "sure", True) \
+                or getattr(here, "score", 1.0) < 0.75:
+            # (A weak match names a place it isn't: "Residence." on the world map, live.)
             return ""
         name = self.rooms.name(here.loc)
         if name.startswith("place 0x"):
