@@ -606,8 +606,9 @@ class Rooms:
         cols = known.sum(0) > 0.5 * h  # columns the survey saw most of
         if cols.sum() < 0.4 * w:
             return False
-        e = drawn_over(v, room.image, here.cam)[:, cols] > 90
-        band = e.mean(1) > 0.7
+        # (Where the ground drifts, mist differs all over: only a box far off it.)
+        e = drawn_over(v, room.image, here.cam)[:, cols] > (90 if room.moving else 45)
+        band = e.mean(1) > (0.8 if room.moving else 0.7)
         run, ends = 0, []
         for i, b in enumerate(band):
             run = run + 1 if b else 0
@@ -1281,6 +1282,13 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     shot = None  # the screen last looked at
     boxes = 0  # looks in a row with a text box (or a menu) over the place
 
+    async def answered(before) -> bool:
+        """Whether pressing a brought something up (a text box can take a moment)."""
+        if came_up(before, await shoot()):
+            return True
+        await asyncio.sleep(0.5)
+        return came_up(before, await shoot())
+
     async def look() -> Here | None:
         nonlocal shot
         shot = await shoot()
@@ -1398,10 +1406,11 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             aim = (seen, at[1])
                     # Someone is talked to straight on: lined up across the way it faces.
                     off = line_up(tile, aim, (fx, fy)) - (here.x if fy else here.y)
-                    if person and abs(off) > 5 and lines < 6:
+                    if person and abs(off) > (3 if pressed else 5) and lines < 8:
                         lines += 1
                         steer(angle_to(off, 0) if fy else angle_to(0, off))
-                        await asyncio.sleep(tap)
+                        # (on the emulator, half a step when it's close)
+                        await asyncio.sleep(tap / 2 if abs(off) < 8 and not here.steam else tap)
                         steer(None)
                         if here.steam:  # till the step shows
                             await asyncio.sleep(STEAM_LEAD)
@@ -1419,7 +1428,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                         before = await shoot()
                         press("a")
                         await asyncio.sleep(0.6)
-                        if came_up(before, await shoot()):
+                        if await answered(before):
                             return (f"arrived: at {target}, facing them, and pressed a to "
                                     f"talk ({time.monotonic() - t0:.0f} s): read their line "
                                     "to the player word for word; a question in it (rest? "
@@ -1435,22 +1444,26 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                         continue
                     if talk and press is not None:
                         await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
-                        for tries in range(3):
-                            before = await shoot()
-                            press("a")
-                            await asyncio.sleep(0.6)
-                            if came_up(before, await shoot()):
-                                break
+                        before = await shoot()
+                        press("a")
+                        await asyncio.sleep(0.6)
+                        if not await answered(before):
+                            pressed += 1
+                            if pressed >= 3:
+                                return (f"arrived: at {target} ({time.monotonic() - t0:.0f} "
+                                        "s), facing them, but pressing a brought nothing up: "
+                                        "look")
                             # Nothing: a step nearer the way it faces (someone without a
-                            # counter between answers only from right beside them).
-                            log(f"rooms: nothing came up ({tries + 1}): a step nearer")
+                            # counter between answers only from right beside them), and
+                            # lined up again, closer (the game answers only straight on).
+                            log(f"rooms: nothing came up ({pressed}): a step nearer, "
+                                "lining up again")
                             steer(angle_to(fx, fy))
                             await asyncio.sleep(tap)
                             steer(None)
                             await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
-                        else:
-                            return (f"arrived: at {target} ({time.monotonic() - t0:.0f} s), "
-                                    "facing them, but pressing a brought nothing up: look")
+                            lines = 0
+                            continue
                         return (f"arrived: at {target}, facing them, and pressed a to talk "
                                 f"({time.monotonic() - t0:.0f} s): read their line to the "
                                 "player word for word; a question in it (rest? buy?) is "
@@ -1538,8 +1551,16 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 if math.dist((px, py), c) > 12:
                     aim = c
                     break
+            last = here.loc == goal and at is not None and len(path) == 2
+            if last:  # onto where to stand: its nearest part (along a counter, not past)
+                x0, y0 = path[1][1] * TILE, path[1][0] * TILE
+                aim = (min(max(px, x0 + 4), x0 + TILE - 4), min(max(py, y0 + 4), y0 + TILE - 4))
             a = angle_to(aim[0] - px, aim[1] - py)
             steer(a)
+            if last:
+                # A short step at a time: walking on, it would slide past while it looks.
+                await asyncio.sleep(tap)
+                steer(None)
             if time.monotonic() - said > 1.0:
                 said = time.monotonic()
                 log(f"rooms: at {here.x:.0f},{here.y:.0f} {tile}{'' if here.sure else '?'} "

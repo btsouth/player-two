@@ -465,3 +465,24 @@ request = "get me out of the castle"
 to = "0x1F1"
 location = "0x1F1"
 limit_s = 240
+
+# The first time in, the queen comes down the stairs and talks (her text box over the
+# hall): the walk waits it out, not pushing into people and calling it blocked.
+[[task]]
+id = "r-castle600-scene"
+category = "rooms"
+state = "rooms/door-78-scene"
+request = "take me to the treasury"
+to = "0x1E0"
+location = "0x1E0"
+limit_s = 180
+
+# Toma and the headman talk as you come in; you can walk while they do.
+[[task]]
+id = "r-elder-scene"
+category = "rooms"
+state = "rooms/door-89-scene"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180

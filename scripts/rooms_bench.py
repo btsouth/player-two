@@ -16,6 +16,7 @@ text box (the game's memory: [game.ram] dialog, when it's known).
 
 PLAYER_TWO_ROOMS: a folder of rooms to try instead of the game's own (emu_tasks.Box.up
 copies it into each box). ROOMS_FRAMES: a folder to keep each trip's screens in.
+`expect = "interrupted"`: the walk must say that (a scene comes up on the way).
 """
 
 from __future__ import annotations
@@ -120,6 +121,8 @@ def trip(box: Box, task: dict, states: Path, game: str, run: int = 1) -> dict:
             got = None
     result = next((ln.split("RESULT", 1)[1].strip() for ln in out.splitlines()
                    if "RESULT" in ln), out.strip().splitlines()[-1] if out.strip() else "")
+    if task.get("expect"):  # what it must say (a scene in the way: that it stopped)
+        got = got if result.startswith(task["expect"]) else None
     return {"id": task["id"], "done": got in want, "location": None if got is None else hex(got),
             "seconds": round(time.monotonic() - t0, 1), "result": result[:200], "at": at,
             "log": out[-3000:]}
