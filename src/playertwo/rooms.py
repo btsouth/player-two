@@ -16,6 +16,9 @@ screens are found on the same pictures (see STEAM_VIEW).
 <atlas folder>/rooms/:
     loc-002.json, loc-002.png   one place: its tiles, ways out and picture (survey_rooms.py)
     names.json                  {"names": {"2": "Crono's house, upstairs"}, "worlds": [496]}
+    atmos.json                  {"lines": {"2": "A snug wooden bedroom, sunlit..."}}: what a
+                                place is like in a sentence, said the first time it's entered
+                                (scripts/atmos_rooms.py drafts them from the pictures)
     player-down.png ...         the player's character facing each way, and player.json:
                                 {"anchor": {"down": [x, y]}} where its feet are on each
 """
@@ -252,6 +255,11 @@ class Rooms:
             meta = json.loads((folder / "names.json").read_text())
         self.names: dict[int, str] = {int(k): v for k, v in meta.get("names", {}).items()}
         self.worlds: set[int] = set(meta.get("worlds", []))
+        self.feel: dict[int, str] = {}
+        if (folder / "atmos.json").exists():
+            lines = json.loads((folder / "atmos.json").read_text()).get("lines", {})
+            self.feel = {int(k): " ".join(str(v).split()) for k, v in lines.items()
+                         if str(v).strip()}
         self.rooms: dict[int, Room] = {}
         for f in sorted(folder.glob("loc-*.json")):
             d = json.loads(f.read_text())

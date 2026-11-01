@@ -9,7 +9,17 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from .muse import Muse, image_part
-from .prompts import DESCRIBE, GAME_CONTEXT, LANGUAGE, NARRATOR, TEAM_UP, VERBOSITY
+from .prompts import (
+    ATMOSPHERE,
+    ATMOSPHERE_LENGTH,
+    DESCRIBE,
+    DESCRIBE_HERE,
+    GAME_CONTEXT,
+    LANGUAGE,
+    NARRATOR,
+    TEAM_UP,
+    VERBOSITY,
+)
 from .screen import Frame
 
 _SENTENCE_END = re.compile(r"[.!?][\"'\u201d\u2019)]*(\s|$)")
@@ -172,11 +182,23 @@ class Narrator:
         self.log.append(Line("" if silent else text, time.time(), time.monotonic() - t,
                              frame.label))
 
-    async def describe(self, frame: Frame) -> AsyncIterator[str]:
-        """A full spoken tour of the screen, on request."""
-        msgs = self.messages(frame, DESCRIBE)
+    async def describe(self, frame: Frame, place: str = "") -> AsyncIterator[str]:
+        """A full spoken tour of the screen, on request. place: where this is, when the
+        room survey knows."""
+        ask = DESCRIBE + (DESCRIBE_HERE.format(place=place) if place else "")
+        async for delta in self._answer(frame, ask):
+            yield delta
+
+    async def atmosphere(self, frame: Frame) -> AsyncIterator[str]:
+        """What it's like here, on request ("what does it look like?"): the setting,
+        light, colours and mood, not the tour."""
+        length = ATMOSPHERE_LENGTH.get(self.verbosity, ATMOSPHERE_LENGTH["normal"])
+        async for delta in self._answer(frame, ATMOSPHERE.format(length=length)):
+            yield delta
+
+    async def _answer(self, frame: Frame, ask: str) -> AsyncIterator[str]:
         text = ""
-        async for delta in self.muse.stream(msgs):
+        async for delta in self.muse.stream(self.messages(frame, ask)):
             text += delta
             yield delta
         self.recent.append(text.strip())

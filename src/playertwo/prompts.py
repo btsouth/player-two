@@ -89,14 +89,54 @@ or option lists (reply <silent> on those screens). Cover what it doesn't: dialog
 scenes, story text, battles, and the world around the player."""
 
 DESCRIBE = """\
-The player asked you to describe the whole screen. Give a clear spoken tour, nearest and \
-most useful first: what kind of screen this is and where they are; who and what is \
-around, said from the player's own character when one is on screen ("just above you", \
-"to your right") and otherwise by screen side; the ways out (doors, stairs, paths off an \
-edge) and which way they are; all readable text that matters; and what they can do next. \
-Up to six short sentences. No preamble, no "gameplay", and nothing about what isn't \
-there. The same rules apply: labels before meanings, highlights only when visible, teams \
-only when marked, names only when shown or clearly recognized."""
+The player asked you to describe the whole screen. Open with one short sentence of what \
+it's like, from the picture: the setting, its light and its mood ("A sunlit stone plaza, \
+busy and bright."), not the art style; a menu or a title screen gets none. Then a clear \
+spoken tour, nearest and most useful first: what kind of screen this is and where they \
+are; who and what is around, said from the player's own character when one is on screen \
+("just above you", "to your right") and otherwise by screen side; the ways out (doors, \
+stairs, paths off an edge) and which way they are; all readable text that matters; and \
+what they can do next. Up to seven short sentences in all. No preamble, no "gameplay", and nothing about what \
+isn't there. The same rules apply: labels before meanings, highlights only when visible, \
+teams only when marked, names only when shown or clearly recognized."""
+DESCRIBE_HERE = " The room survey knows this place: it's {place}. Call it that."
+
+# "What does it look like?": the feel of the scene, not the tour. {length}: how long,
+# by verbosity.
+ATMOSPHERE = """\
+The player asked what it's like here: paint the scene for someone who can't see it, in \
+{length}, vivid but plain. From the picture only: the setting (indoors or out, what kind \
+of place), the light, the main colours, the mood, and what the people or creatures are \
+doing; the time of day or the weather only when the picture clearly shows it (a black \
+backdrop isn't night). When the scene clearly suggests a sound (a crowded fair, a storm, \
+a fight), you may end on it, in your own words, as an impression: you see the picture, \
+you never hear the game. In a fight: the backdrop and what the enemies look like; no HP, \
+menus or turns. With a text box or a menu up: the scene behind it, not the text. People \
+as the rules above say: "you" only for the one you're sure is the player's own \
+character, others by a name shown or clearly recognized, or by how they look. No place \
+names unless the screen shows them, no story, nothing that isn't in the picture, no \
+preamble, nothing about the art style ("pixel", "sprite"). Scenery, colours and light are \
+exactly what's wanted here, whatever the rules above say."""
+ATMOSPHERE_LENGTH = {"terse": "two short sentences, about 25 words",
+                     "quiet": "two short sentences, about 25 words",
+                     "normal": "two to four short sentences, about 50 words",
+                     "detailed": "four or five sentences, about 80 words"}
+
+# The first time Player Two sees a place it has no line ready for (not surveyed).
+PLACE_FEEL = """\
+The player has just arrived somewhere new to them. If this screen is a place they're \
+walking in (not a menu, a text box, a fight or a title), say what kind of place it is in \
+a few words, then one short sentence of what it's like, from the picture: the light, \
+colours and mood ("A rocky mountain ledge. Grey crags in a pale haze."). Only what you're \
+sure of: leave out anything you can't make out, and the time of day, weather or sky \
+unless the picture clearly shows them (a dark backdrop isn't night). At most twenty \
+words; no names unless shown. Anything else on screen is said as usual."""
+
+# Just after Player Two said a surveyed place's name and what it's like.
+PLACE_SAID = """\
+Your last line said where this is and what it's like. Don't describe the place again, \
+not even what kind of place it is: say only something else on screen that matters now \
+(someone talking, a prompt, danger), or reply <silent>."""
 
 AGENT = """\
 You are Player Two, a friendly co-op partner who plays alongside a player who can't see \

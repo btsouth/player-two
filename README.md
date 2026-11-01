@@ -117,7 +117,8 @@ In any game:
 |---|---|
 | anything about the game | Player Two looks and answers, or does it |
 | "Player Two" first (hands-free) | the same, with no key; "Player Two" alone, then the request, works too |
-| "what's on the screen?" / "describe" / "look around" | a spoken tour of the screen: who and what is around you, and the ways out |
+| "what's on the screen?" / "describe" / "look around" | a spoken tour of the screen: one line of what it's like, then who and what is around you, and the ways out |
+| "what does it look like?" / "describe the atmosphere" / "paint me a picture" / "what's the mood?" | what it's like here, in a few sentences: the setting, light, colours, mood and what people are doing (in a fight, the backdrop and the enemies) |
 | "where is the door?" | says where it is from your character, with a short sound from that side |
 | "take me to the stairs" / "go talk to her" | walks your character there (2D games) |
 | "next" | presses A and reads the next line of dialogue, without waiting for the model |
@@ -159,7 +160,10 @@ In Chrono Trigger on Steam, these were measured live (Battle Mode set to Wait):
 
 - **Narrates new screens on its own.** Dialogue read word for word with the speaker's name, what's
   highlighted in a menu or a Yes/No choice, whose turn it is, when your health is low. It stays
-  quiet when nothing changed, and silent while it's carrying out what you asked.
+  quiet when nothing changed, and silent while it's carrying out what you asked. In Chrono
+  Trigger on Steam, the first time you walk into a place it says what the place is like in a line
+  ("Leene Square. A bright, festive fairground: striped stalls, round tents and a fountain."),
+  never again that session, and not in terse mode.
 - **Answers questions.** "What's on screen?" "Who's here?" "Which enemy is hurt?"
 - **Plays when you ask.** "Skip to the battle and hit the left one with Zio." It looks, moves the
   cursor, checks the highlight, confirms, then looks again to make sure it worked. In Chrono

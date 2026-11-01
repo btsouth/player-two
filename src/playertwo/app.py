@@ -23,7 +23,7 @@ from .controls import BUTTONS, ControlsError, open_controls
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
-from .prompts import BATTLE_START
+from .prompts import BATTLE_START, PLACE_FEEL, PLACE_SAID
 from .screen import (
     Capture,
     CaptureError,
@@ -45,6 +45,20 @@ LOCAL = [
       r"|she) say|again|come again|what|what was that|sorry|pardon|huh"), "repeat"),
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
       r"|what do you see|what'?s (going on|happening)"), "describe"),
+    # What it's like, not the tour: the setting, light, colours and mood.
+    ((r"describe (the |this )?(atmosphere|mood|scene|scenery|setting|surroundings|vibe|view"
+      r"|place|area|room)( (here|around (me|us)|for me))?"
+      r"|what('?s| is) the (atmosphere|mood|vibe|feel|feeling|scene|scenery|setting)"
+      r"( like)?( (here|in here|around here|out here))?"
+      r"|what('?s| is) it like( (here|in here|around here|out here|there))?"
+      r"|what does it feel like( (here|in here))?"
+      r"|what (does|do) (it|this|this place|the place|this room|the room|this area|the area"
+      r"|everything|the scene|things|the world) look like( (here|now|right now|in here))?"
+      r"|what'?s (it|this|this place|the place|everything) look like( (here|now))?"
+      r"|how does (it|this|this place|the place|everything|the scene) look( (here|now))?"
+      r"|(tell me )?what it looks like( (here|now|in here))?"
+      r"|paint (me |us )?(a|the) picture( (of (it|this|this place|the scene|where (i|we) am"
+      r"|where (we|i) are)))?|set the scene"), "atmosphere"),
     # Inside a place the room survey knows: who and what is round the player, from the
     # survey (no model); elsewhere, the screen described.
     ((r"who'?s (here|in here|around( here| me| us)?|nearby|near me|close by|close)"
@@ -98,9 +112,9 @@ def local_action(text: str) -> str | None:
 
 HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
         "open the menu, or: use a potion on Yosuke. You can also say: next, to press A and "
-        "hear the next line, describe, who's here, repeat, stop, help, what's wrong, terse, "
-        "more detail, slower, faster, pause narration, resume narration, watch my health, or "
-        "goodbye.")
+        "hear the next line, describe, what does it look like, who's here, repeat, stop, "
+        "help, what's wrong, terse, more detail, slower, faster, pause narration, resume "
+        "narration, watch my health, or goodbye.")
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
                "window, where you can type to me instead.")
@@ -137,6 +151,27 @@ SETTABLE: dict[str, tuple] = {
 }
 SPEECH_RATES = (0.8, 2.0)
 FOES_GAP_S = 6.0  # a fight the player plays: enemies counted again at most this often
+# Verbosities that get a line of what a place is like the first time it's entered.
+FEEL_VERBOSITY = ("normal", "detailed")
+# Two screens whose colours share this much are taken for one place not surveyed (its
+# first look got a line of what it's like; the next don't).
+SAME_LOOK = 0.7
+
+
+def palette(image) -> np.ndarray:
+    """A screen's colours in brief: a histogram of a small copy, four levels a channel.
+    Screens of one place (scrolled, people walking) share most of theirs; a forest, a
+    castle hall and a mountain path don't."""
+    from PIL import Image
+
+    a = np.asarray(image.convert("RGB").resize((64, 36), Image.Resampling.BILINEAR)) // 64
+    h = np.bincount((a[..., 0] * 16 + a[..., 1] * 4 + a[..., 2]).ravel(),
+                    minlength=64).astype(np.float32)
+    return h / max(1.0, float(h.sum()))
+
+
+def same_look(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.minimum(a, b).sum())
 
 
 def parse_setting(key: str, raw: str):
@@ -576,37 +611,79 @@ class Session:
     # Narration
 
     async def _place(self, frame: Frame) -> str:
-        """The surveyed place this screen shows, when it's a different one from the last
-        named (Chrono Trigger on Steam: the room survey knows it in about 0.3 s). The
-        game never shows these names, and the model must never make one up. (Room matching
-        works on small frames too, unlike reading the font.)"""
+        """The surveyed place's name to say with this screen's narration (see _arrival)."""
+        return (await self._arrival(frame, feel=False))[0]
+
+    async def _arrival(self, frame: Frame, feel: bool = True, asked: bool = False
+                       ) -> tuple[str, str, bool]:
+        """What to say of the place this screen shows (Chrono Trigger on Steam: the room
+        survey knows it in about 0.3 s): its name, when it's a different one from the
+        last named; with feel, its line of what it's like, the first time this session;
+        and whether the model should say what it's like instead (a place not surveyed,
+        new to the player by its colours). The game never shows these names, and the
+        model must never make one up. (Room matching works on small frames too, unlike
+        reading the font.) asked: the player asked what it's like here: the name, said
+        whenever it's known, and no first-time line after this."""
+        none = ("", "", False)
         if not self.agent._ct_steam(frame):
-            return ""
+            return none
         from .rooms import Rooms
 
         if getattr(self, "rooms", None) is None:
             self.rooms = await asyncio.to_thread(Rooms.for_game, self.agent.game or "") or False
         if not self.rooms:
-            return ""
+            return none
         here = await asyncio.to_thread(self.rooms.locate, frame.image)
-        if here is None or here.loc in self.rooms.worlds or not getattr(here, "sure", True) \
+        if here is None:
+            if (feel or asked) and not getattr(self.rooms, "dark", False):
+                # Not surveyed: what it's like is the model's to say, once a place.
+                looks = self.__dict__.setdefault("felt_looks", [])
+                look = palette(frame.image)
+                if all(same_look(look, old) < SAME_LOOK for old in looks):
+                    looks.append(look)
+                    return "", "", not asked
+            return none
+        if here.loc in self.rooms.worlds or not getattr(here, "sure", True) \
                 or getattr(here, "score", 1.0) < 0.75:
             # (A weak match names a place it isn't: "Residence." on the world map, live.)
-            return ""
+            return none
         name = self.rooms.name(here.loc)
-        if name.startswith("place 0x"):
-            return ""
+        named = not name.startswith("place 0x")
         # "Mountain of Woe, the ledges round the chain bridge": the place, not the spot.
-        short = name.split(",")[0] if len(name.split()) > 4 else name
+        short = (name.split(",")[0] if len(name.split()) > 4 else name) if named else ""
+        line = ""
+        felt = self.__dict__.setdefault("felt", set())
+        key = short or f"place {here.loc:#x}"
+        if (feel or asked) and key not in felt:
+            line = "" if asked else getattr(self.rooms, "feel", {}).get(here.loc, "")
+            if line or asked:
+                felt.add(key)
+                # Screens like it the survey can't place are taken for this place too
+                # (a stretch of Mountain of Woe not surveyed): no model line there.
+                self.__dict__.setdefault("felt_looks", []).append(palette(frame.image))
+        if not short:
+            return "", line, False
         last, when = getattr(self, "place_said", ("", 0.0))
-        if short == last and time.monotonic() - when < 120:
-            return ""
+        if not asked and short == last and time.monotonic() - when < 120:
+            return "", line, False
         self.place_said = (short, time.monotonic())
+        if asked:
+            return short, "", False
         recent = getattr(getattr(self, "narrator", None), "recent", ())
         base = short.split(",")[0].lower()  # "Crono's house, downstairs": the house
         if any(base in r.lower() for r in recent):
-            return ""  # just said, by Player Two ("We're at Leene Square.") or a narration
-        return short
+            # Just said, by Player Two ("We're at Leene Square.") or a narration; what
+            # it's like is still news the first time.
+            return "", line, False
+        return short, line, False
+
+    def _feel_ok(self, frame: Frame) -> bool:
+        """Whether a line of what a place is like may go with this screen's narration: not
+        in terse or quiet, and only over the place itself (the reader looked and found
+        nothing to read: no text box, menu or fight)."""
+        verbosity = getattr(getattr(self, "narrator", None), "verbosity", "normal")
+        return (verbosity in FEEL_VERBOSITY and self._reads(frame)
+                and not getattr(self, "read_owned", False))
 
     async def _narrate(self, frame: Frame, interrupt: bool = False, extra: str = "") -> None:
         t = time.monotonic()
@@ -615,19 +692,38 @@ class Session:
 
         async def deltas():
             gen = self.narrator.narrate(frame, extra) if extra else self.narrator.narrate(frame)
-            # The model starts at once; the place's name (if this is a new one) goes first.
+            # The model starts at once; the place's name (if this is a new one) goes first,
+            # and the first time there, what it's like.
             first = asyncio.ensure_future(anext(gen, None))
+            feel = False
+            with contextlib.suppress(Exception):
+                feel = not extra and self._feel_ok(frame)
             try:
-                place = "" if extra else await self._place(frame)
+                place, line, ask = ("", "", False) if extra else await self._arrival(frame, feel)
             except asyncio.CancelledError:
                 first.cancel()
                 raise
             except Exception:  # noqa: BLE001  no name is better than no narration
-                place = ""
+                place, line, ask = "", "", False
             try:
-                if place:
-                    self.narrating_text += f"{place}. "
-                    yield f"{place}. "
+                head = " ".join(x for x in (f"{place[:1].upper()}{place[1:]}." if place else "",
+                                            line) if x)
+                if head:
+                    self.narrating_text += f"{head} "
+                    yield f"{head} "
+                if line or ask:
+                    # The model was asked before that: ask again, knowing what was just
+                    # said (so only what's new follows the place's line), or asking what
+                    # this new place is like.
+                    first.cancel()
+                    await asyncio.wait([first])
+                    with contextlib.suppress(BaseException):
+                        first.result()  # taken: a failed first call is asked again below
+                    await gen.aclose()
+                    if line:
+                        self.narrator.recent.append(head)
+                    gen = self.narrator.narrate(frame, PLACE_FEEL if ask else PLACE_SAID)
+                    first = asyncio.ensure_future(anext(gen, None))
                 d = await first
                 while d is not None:
                     self.narrating_text += d
@@ -710,20 +806,62 @@ class Session:
                 return cur
         return seen[-1][1]
 
-    def _start_narration(self, frame: Frame, describe: bool = False) -> None:
+    async def _atmosphere(self, frame: Frame):
+        """What it's like here, asked for: the surveyed place's name at once, then the
+        model's picture of the scene (started at the same time). The place's first-time
+        line isn't said after this."""
+        gen = self.narrator.atmosphere(frame)
+        first = asyncio.ensure_future(anext(gen, None))
+        try:
+            place = (await self._arrival(frame, feel=False, asked=True))[0]
+        except asyncio.CancelledError:
+            first.cancel()
+            raise
+        except Exception:  # noqa: BLE001  the picture without the name
+            place = ""
+        try:
+            if place:
+                yield f"{place[:1].upper()}{place[1:]}. "
+            d = await first
+            while d is not None:
+                yield d
+                d = await anext(gen, None)
+        finally:
+            first.cancel()
+            await gen.aclose()
+
+    async def _describe(self, frame: Frame):
+        """The tour of the screen, asked for, with the surveyed place's name (about 0.3 s
+        to find) given to the model, so it doesn't guess where this is."""
+        try:
+            place = (await self._arrival(frame, feel=False, asked=True))[0]
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001  the tour without the name
+            place = ""
+        async for d in self.narrator.describe(frame, place):
+            yield d
+
+    def _start_narration(self, frame: Frame, describe: bool = False,
+                         atmosphere: bool = False) -> None:
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
-        if describe:
+        if describe or atmosphere:
+            source = "atmosphere" if atmosphere else "describe"
+
             async def run():
                 self.voice.stop()
+                t = time.monotonic()
                 try:
-                    text = await self.voice.say_stream(self.narrator.describe(frame))
+                    text = await self.voice.say_stream(
+                        self._atmosphere(frame) if atmosphere else self._describe(frame))
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    self.trouble(exc, "describe", answer=True)
+                    self.trouble(exc, source, answer=True)
                     return
-                self.events.emit("say", text=text, source="describe")
+                self.events.emit("say", text=text, source=source,
+                                 latency=round(time.monotonic() - t, 2))
             self.narrating = self.describing = asyncio.create_task(run())
         else:
             self.narrating = asyncio.create_task(self._narrate(frame))
@@ -1618,13 +1756,14 @@ class Session:
                 await self.announce(text, interrupt=True)
                 return
             await self._local("describe")
-        elif action == "describe":
+        elif action in ("describe", "atmosphere"):
             try:
                 frame = await self.grab_now()
             except Exception as exc:  # noqa: BLE001
-                self.trouble(exc, "describe", answer=True)
+                self.trouble(exc, action, answer=True)
                 return
-            self._start_narration(frame, describe=True)
+            self._start_narration(frame, describe=action == "describe",
+                                  atmosphere=action == "atmosphere")
         elif action == "check":
             await self.announce(self.self_check())
         elif action == "help":
@@ -1735,10 +1874,9 @@ class Session:
         elif cmd == "do" and arg:
             self.events.emit("heard", text=arg, typed=True)
             self.spawn(self.handle(arg))
-        elif cmd in ("stop", "repeat", "describe", "terse", "quiet", "normal", "detailed",
-                     "team_up", "solo", "pause", "resume", "hud", "hud_off", "quit", "help",
-                     "check",
-                     "slower", "faster"):
+        elif cmd in ("stop", "repeat", "describe", "atmosphere", "terse", "quiet", "normal",
+                     "detailed", "team_up", "solo", "pause", "resume", "hud", "hud_off", "quit",
+                     "help", "check", "slower", "faster"):
             self.spawn(self.local(cmd))
         elif cmd == "press" and arg:
             # For scripted setups (tests, a known start for a task): no model involved.

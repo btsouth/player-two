@@ -458,10 +458,10 @@ async def test_narration_says_the_place_then_the_model_line():
 
     s.voice = SimpleNamespace(say_stream=say_stream)
 
-    async def place(frame):
-        return "Truce Inn"
+    async def arrival(frame, feel=True, asked=False):
+        return "Truce Inn", "", False
 
-    s._place = place
+    s._arrival = arrival
     await s._narrate(Frame(Image.new("RGB", (8, 8)), time.monotonic()))
     said = [k["text"] for kind, k in events if kind == "say"]
     assert said == ["Truce Inn. A cozy inn with a counter."]
