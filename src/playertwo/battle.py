@@ -702,8 +702,8 @@ class Executor:
         seen = changes(before, st, msgs) + spent
         if spent and not landed and not victory(st):
             # (live: a heal's MP went, a combo played first, the model healed again)
-            seen += (" What it does hadn't shown yet (it lands after what's playing): don't "
-                     "use it again.")
+            seen += (f" {named} is on its way (it lands after what's playing): this command "
+                     "is done; finish now, and send no other command for it (no second heal).")
         if intent.command.lower() == "attack" and seen.startswith("No party HP"):
             # Enemies' HP isn't on screen: "nothing changed" sounded like a miss (live,
             # "Crono attacked but nothing changed").
