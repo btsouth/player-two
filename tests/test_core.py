@@ -997,3 +997,26 @@ class TestOnTopic:
                                              "baking pan."})]], [False, False])
         result = run(agent.run("what's the battle mode set to?"))
         assert said == [LOST_THREAD] and result.outcome == LOST_THREAD
+
+
+def test_a_closing_line_that_only_says_it_again_isnt_said():
+    """Live 3: "We're inside the Truce Inn." after the walk's "We're at Truce Inn.", and
+    "It's set to Active." after "It's Active, closing the menu."."""
+    agent, _pad, said, _asked, _muse = TestAgent().make([
+        [("say", {"text": "It's Active, closing the menu."})],
+        [("press", {"buttons": ["b"]})],
+        [("finish", {"text": "It's set to Active."})]])
+    run(agent.run("what's the battle mode set to?"))
+    assert said == ["It's Active, closing the menu."]
+    agent, _pad, said, _asked, _muse = TestAgent().make([
+        [("say", {"text": "We're at Truce Inn."})],
+        [("press", {"buttons": ["up"]})],
+        [("finish", {"text": "We're inside the Truce Inn, and it's 10 gold a night."})]])
+    run(agent.run("take me to the inn"))
+    assert said[-1] == "We're inside the Truce Inn, and it's 10 gold a night."  # news
+    agent, _pad, said, _asked, _muse = TestAgent().make([
+        [("say", {"text": "Going to the inn."})],
+        [("press", {"buttons": ["up"]})],
+        [("finish", {"text": "The inn isn't open."})]])
+    run(agent.run("take me to the inn"))
+    assert said[-1] == "The inn isn't open."  # a "not" is news

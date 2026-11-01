@@ -61,6 +61,11 @@ PROGRESS_GAP_S = 8.0
 # Walking around by trial and error in one request stops after this long: wandering on
 # camera looks lost, and an honest "I don't know the way here yet" is better.
 FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
+# Words that add nothing to a closing line ("We're inside the Truce Inn." after "We're at
+# Truce Inn."), as ontopic.content stems them.
+FILLER = {ontopic.stem(w) for w in (
+    "inside", "outside", "here", "now", "arrived", "made", "there", "finally", "right",
+    "safely", "safe", "back", "all", "set", "done", "ready", "got", "okay", "standing")}
 # Said when the model's lines were off the point twice in one request (ontopic.py).
 LOST_THREAD = "Sorry, I lost my train of thought there. Could you ask me that again?"
 WANDER_LIMIT_S = 40.0
@@ -694,6 +699,20 @@ class Agent:
         if negations(now) != negations(before):
             return False
         return now <= before or len(now & before) / len(now | before) >= 0.5
+
+    def _adds_nothing(self, text: str) -> bool:
+        """Whether a closing line only says again what this request has said already
+        (live 3: "We're inside the Truce Inn." after the walk's "We're at Truce Inn.";
+        "It's set to Active." after "It's Active, closing the menu."): every word of it
+        that matters was in those lines (numbers too), and it says no "not"."""
+        if not self.said:
+            return False
+        words = [w for w in ontopic.content(text) if w not in FILLER]
+        if not words or re.search(r"\b(not|no|never|can't|couldn't|won't|isn't|didn't)\b|"
+                                  r"n't\b", text.lower().replace("\u2019", "'")):
+            return False
+        before = {w for line in self.said for w in ontopic.content(line)}
+        return all(w in before for w in words)
 
     async def _on_topic(self, text: str) -> bool:
         """Whether a line the model wrote may be said: most are about what they were given
@@ -2644,7 +2663,8 @@ class Agent:
                     msgs.append({"role": "user", "content": self._not_on_topic()})
                     continue
                 if text.strip():
-                    await self._speak(text)
+                    if not self._adds_nothing(text):
+                        await self._speak(text)
                     run.outcome = text
                     out_of_turns = False
                     break
@@ -2779,7 +2799,8 @@ class Agent:
                 if not finished and last_turn and len(self.said) <= self._said_before_act:
                     finished = ("I stopped there after a lot of steps. Say describe to hear "
                                 "where things stand.")
-                if finished and not self._already_said(finished):
+                if finished and not self._already_said(finished) \
+                        and not self._adds_nothing(finished):
                     await self._speak(finished)
                 # Kept for the next request's history even when say already said it.
                 run.outcome = finished or (self.said[-1] if self.said else "done")
