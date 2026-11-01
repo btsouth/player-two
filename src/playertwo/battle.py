@@ -711,7 +711,8 @@ class Executor:
                     "party HP changed")
         if not seen_name:
             seen += (f" {intent.name} is chosen but hadn't gone off yet (it waits its turn "
-                     "behind what's playing); it goes off once the fight runs again.")
+                     "behind what's playing); it goes off once the fight runs again: this "
+                     "command is done, so send no other command for it.")
         return st, seen
 
     # -- whole fights ----------------------------------------------------------------------
