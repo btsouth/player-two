@@ -2244,8 +2244,9 @@ class Agent:
         # The player's answer to a question sets a new course: it gets turns of its own.
         budget, _turn, out_of_turns = self.max_turns, -1, True
         # A fight: as many battle commands as the player named, then only finish (live:
-        # "heal Frog" became three heals in five runs of nine, up to 42 s).
-        asked = max(1, len(COMMANDS.findall(" ".join(request.lower().split()))))
+        # "heal Frog" became three heals in five runs of nine, up to 42 s). A request that
+        # names none ("take me to Guardia Castle", fights on the way) has no such limit.
+        asked = len(COMMANDS.findall(" ".join(request.lower().split())))
         commanded = sum(1 for st in run.steps if st.tool == "battle"
                         and st.result.startswith("done:"))
         while _turn + 1 < budget:
@@ -2256,7 +2257,7 @@ class Agent:
                 break
             t_model = time.monotonic()
             last_turn = _turn == budget - 1
-            done_fighting = self._battle is not None and commanded >= asked
+            done_fighting = bool(asked) and self._battle is not None and commanded >= asked
             msg = await self.muse.tools(trim_images(msgs), self._tools(frame)
                                         if not last_turn and not done_fighting
                                         else FINISH_ONLY if done_fighting or not self.ask
@@ -2310,7 +2311,7 @@ class Agent:
                     result = ("not done: you're out of steps; ask_player whether to keep "
                               "going, or finish" if self.ask else
                               "not done: only finish is left now")
-                elif c.function.name == "battle" and commanded >= asked:
+                elif c.function.name == "battle" and asked and commanded >= asked:
                     result = ("not done: the command the player asked for is done already "
                               "(one battle command each); finish with what it did")
                 elif c.function.name == "finish" and acted:
@@ -2367,7 +2368,7 @@ class Agent:
                     self._said_before_act = len(self.said)
                     if c.function.name == "battle" and result.startswith("done:"):
                         commanded += 1
-                        if commanded >= asked:
+                        if asked and commanded >= asked:
                             result += (" That was the command asked for: finish now, saying "
                                        "what it did (no other command).")
                     result = self._check_walk(c.function.name, result)

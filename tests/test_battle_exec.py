@@ -916,6 +916,18 @@ async def test_the_model_gets_one_battle_command_for_one_asked(monkeypatch):
     assert said[-1] == "Crono hit the one on the left."
 
 
+async def test_a_request_naming_no_command_isnt_held_to_one(monkeypatch):
+    """A trip's fights ("take me to Guardia Castle") or "deal with them": no limit."""
+    game = FakeCT(party(), enemies(), ready=(0, 2))
+    muse = _muse([("battle", {"command": "attack", "target": "left"}),
+                  ("battle", {"actor": "Marle", "command": "attack"}),
+                  ("finish", {"text": "Two hits."})])
+    ag, _said = _agent(monkeypatch, game, muse)
+    run = await ag.run("deal with these monsters")
+    assert "battle" in muse.tools_seen[1]
+    assert run.steps[1].result.startswith("done:")
+
+
 def _counting_muse(counts):
     """A model that answers each enemy count in turn (None: a failed look)."""
     from types import SimpleNamespace
