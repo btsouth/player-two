@@ -562,15 +562,60 @@ class Session:
 
     # Narration
 
+    async def _place(self, frame: Frame) -> str:
+        """The surveyed place this screen shows, when it's a different one from the last
+        named (Chrono Trigger on Steam: the room survey knows it in about 0.3 s). The
+        game never shows these names, and the model must never make one up."""
+        if not self._reads(frame):
+            return ""
+        from .rooms import Rooms
+
+        if getattr(self, "rooms", None) is None:
+            self.rooms = await asyncio.to_thread(Rooms.for_game, self.agent.game or "") or False
+        if not self.rooms:
+            return ""
+        here = await asyncio.to_thread(self.rooms.locate, frame.image)
+        if here is None or here.loc in self.rooms.worlds:
+            return ""
+        name = self.rooms.name(here.loc)
+        if name.startswith("place 0x"):
+            return ""
+        # "Mountain of Woe, the ledges round the chain bridge": the place, not the spot.
+        short = name.split(",")[0] if len(name.split()) > 4 else name
+        last, when = getattr(self, "place_said", ("", 0.0))
+        if short == last and time.monotonic() - when < 120:
+            return ""
+        self.place_said = (short, time.monotonic())
+        return short
+
     async def _narrate(self, frame: Frame, interrupt: bool = False) -> None:
         t = time.monotonic()
 
         self.narrating_text = ""
 
         async def deltas():
-            async for d in self.narrator.narrate(frame):
-                self.narrating_text += d
-                yield d
+            gen = self.narrator.narrate(frame)
+            # The model starts at once; the place's name (if this is a new one) goes first.
+            first = asyncio.ensure_future(anext(gen, None))
+            try:
+                place = await self._place(frame)
+            except asyncio.CancelledError:
+                first.cancel()
+                raise
+            except Exception:  # noqa: BLE001  no name is better than no narration
+                place = ""
+            try:
+                if place:
+                    self.narrating_text += f"{place}. "
+                    yield f"{place}. "
+                d = await first
+                while d is not None:
+                    self.narrating_text += d
+                    yield d
+                    d = await anext(gen, None)
+            finally:
+                first.cancel()
+                await gen.aclose()
 
         try:
             text = await self.voice.say_stream(deltas(), interrupt=interrupt)

@@ -355,3 +355,60 @@ def test_screen_answers_never_guess():
     r = Reader()
     r.update(lk)
     assert r.active == ["Crono", "Frog"]
+
+
+async def test_a_new_surveyed_place_is_named_once_before_the_model_speaks():
+    import time
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    s.agent = SimpleNamespace(_ct_steam=lambda f: True, game="Chrono Trigger")
+    names = {0x0C: "Truce Inn", 0x189: "Mountain of Woe, the ledges round the chain bridge"}
+    where = iter([0x0C, 0x0C, 0x189, None])
+    s.rooms = SimpleNamespace(worlds={0x1F0}, name=lambda loc: names[loc],
+                              locate=lambda image: (lambda w: w and SimpleNamespace(loc=w))(
+                                  next(where)))
+    frame = Frame(Image.new("RGB", (1920, 1080)), time.monotonic())
+    assert await s._place(frame) == "Truce Inn"
+    assert await s._place(frame) == ""  # still there: not again
+    assert await s._place(frame) == "Mountain of Woe"
+    assert await s._place(frame) == ""  # not a surveyed place: no name at all
+
+
+async def test_narration_says_the_place_then_the_model_line():
+    import time
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    events = []
+    s.events = SimpleNamespace(emit=lambda kind, **k: events.append((kind, k)))
+    s.recovered = lambda: None
+
+    async def narrate(frame):
+        for d in ("A cozy inn", " with a counter."):
+            yield d
+
+    s.narrator = SimpleNamespace(narrate=narrate)
+
+    async def say_stream(deltas, interrupt=False):
+        return "".join([d async for d in deltas])
+
+    s.voice = SimpleNamespace(say_stream=say_stream)
+
+    async def place(frame):
+        return "Truce Inn"
+
+    s._place = place
+    await s._narrate(Frame(Image.new("RGB", (8, 8)), time.monotonic()))
+    said = [k["text"] for kind, k in events if kind == "say"]
+    assert said == ["Truce Inn. A cozy inn with a counter."]
