@@ -466,8 +466,8 @@ class Reader:
             if part == "danger" and hits:
                 out.append(hits)
             value = lk.parts.get(part, "")
-            if (self.verbosity == "quiet" and part in ("top", "desc", "title")
-                    or self.team_up and lk.kind in ("menu", "choice")):
+            if ((self.verbosity == "quiet" and part in ("top", "desc", "title"))
+                    or (self.team_up and lk.kind in ("menu", "choice"))):
                 value = ""  # the game's own narrator reads its menus (team up)
             old_value, n = self.seen.get(part, ("", 0))
             n = n + 1 if value == old_value else 1

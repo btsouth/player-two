@@ -370,9 +370,11 @@ async def test_a_new_surveyed_place_is_named_once_before_the_model_speaks():
     s.agent = SimpleNamespace(_ct_steam=lambda f: True, game="Chrono Trigger")
     names = {0x0C: "Truce Inn", 0x189: "Mountain of Woe, the ledges round the chain bridge"}
     where = iter([0x0C, 0x0C, 0x189, None])
-    s.rooms = SimpleNamespace(worlds={0x1F0}, name=lambda loc: names[loc],
-                              locate=lambda image: (lambda w: w and SimpleNamespace(loc=w))(
-                                  next(where)))
+    def locate(image):
+        w = next(where)
+        return w and SimpleNamespace(loc=w)
+
+    s.rooms = SimpleNamespace(worlds={0x1F0}, name=lambda loc: names[loc], locate=locate)
     frame = Frame(Image.new("RGB", (1920, 1080)), time.monotonic())
     assert await s._place(frame) == "Truce Inn"
     assert await s._place(frame) == ""  # still there: not again
