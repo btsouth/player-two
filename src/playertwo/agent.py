@@ -1252,9 +1252,11 @@ class Agent:
                         "named; where_am_i lists them")
             walked = await self._act("go_to_exit", {"to": seller, "talk": True})
             if not walked.startswith("arrived"):
-                if rest and "fits" in walked:
-                    return ("no innkeeper in this place: go_to_place an inn first (Truce Inn "
-                            "in 1000 A.D.), then call shop rest again")
+                if rest:
+                    return ("not done: no innkeeper here. Go to an inn with go_to_place "
+                            "(Truce Inn in 1000 A.D.), then call shop with action rest "
+                            "again: it talks, pays, sleeps and checks HP and MP. Don't talk "
+                            "to the innkeeper yourself.")
                 return f"couldn't get to {seller}: {walked}"
             walked = f"Walked to {seller} and talked. "
         if rest:
