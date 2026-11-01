@@ -622,3 +622,16 @@ def test_hp_changes_while_player_two_acted_are_not_said_after_it():
     assert r.update(fight(101), now=10.6) == ""
     r.update(fight(500), now=11.0)
     assert r.update(fight(500), now=11.3) == "Crono healed 399."  # news again after that
+
+
+@needs_frames
+def test_a_question_in_dialogue_says_where_the_hand_is():
+    """The inn's Yes/No sits in a window above the text box, at dialogue size: it was
+    read as plain text, so the cursor was never said."""
+    path = FRAMES / "box-inn-lodging.png"
+    if not path.exists():
+        pytest.skip("no inn frame")
+    lk = ctscreen.look(cv2.imread(str(path)))
+    assert lk.kind == "choice"
+    assert lk.parts["question"] == "Lodging is 10 G. Would you like to stay for the night?"
+    assert lk.parts["focus"].startswith("Yes selected")

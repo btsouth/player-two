@@ -275,7 +275,27 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     tips = [(h[0] + h[2], h[1] + h[3] // 2) for h in hands]
     found = [(tip, *_hand_entry(lines, tip, party, img)) for tip in tips]
     found = [f for f in found if f[1]]
-    if question is not None:
+    pool = good  # where a choice's options are read
+    talk = False  # a choice in dialogue: its options and question at dialogue size
+    if tips and not found:
+        # A question in dialogue (the inn's "Would you like to stay for the night?"): the
+        # options beside the hand are drawn at dialogue size, and the choice window sits
+        # above a box at the bottom, so the question can be below the options.
+        rows = [r for row in _dialogue_lines(img) for r in row]
+        big = [r for r in rows if plausible(r)]
+        asked = next((r for r in big if clean(r.text).endswith("?")), None)
+        for tip in tips if asked is not None else ():
+            # The hand itself reads as specks in front of the option ("' ..t Yes."): the
+            # option is the words at the end.
+            near = sorted((r for r in rows if abs(r.y - tip[1]) < 45
+                           and -260 <= r.x0 - tip[0] < 200), key=lambda r: r.x0)
+            m = re.search(r"([A-Z][A-Za-z']*(?:[ ,][A-Za-z']+)*)[.!]?\s*$",
+                          near[0].text) if near else None
+            if m and len(m.group(1)) >= 2 and not misread(m.group(1)):
+                found.append((tip, m.group(1), near[0]))
+        if found:
+            talk, pool, question = True, big, asked
+    if question is not None and not talk:
         below = [f for f in found if f[0][1] > question.y and abs(f[0][0] - question.x0) < 900]
         found = below or found
     blocks = [f for f in found if f[1] in ctsteam.NAMES and f[2] is None]
@@ -297,7 +317,7 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
                                         if abs(r.y - y) < 30), min(r.x0 for r in above),
                                0, y, "white", 99.0)
                 lk.unsure = True
-        if question is not None and question.y < tip[1]:
+        if question is not None and (question.y < tip[1] or talk):
             lk.unsure = lk.unsure or question.worst > SURE or misread(question.text)
             lk.kind = "choice"
             lk.order = ("question", "focus", "desc")
@@ -305,12 +325,13 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
             lk.texts.add("question")
             lk.typing.add("question")
             x = run.x0 if run is not None else tip[0]
-            opts = [r for r in good if r.y > question.y and abs(r.x0 - x) < 160
-                    and r is not question and r.y - question.y < 700]
+            opts = [r for r in pool if r is not question and abs(r.x0 - x) < 160 and (
+                abs(r.y - tip[1]) < 300 if talk else
+                r.y > question.y and r.y - question.y < 700)]
             names = []
             for r in sorted(opts, key=lambda r: r.y):
                 w = snap(r.text, VOCAB, 0.7)
-                names.append(w if w in VOCAB else clean(r.text))
+                names.append(w if w in VOCAB else clean(r.text).rstrip("." if talk else ""))
             others = [n for n in names if n != name]
             lk.parts["focus"] = f"{name} selected" + (f", or {', '.join(others)}"
                                                        if others else "")
