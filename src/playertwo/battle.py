@@ -660,7 +660,16 @@ class Executor:
         stale = before.top if before else ""  # a message from before the command
         named = intent.name.strip()
         seen_name = not named  # a tech or item shows its name in the bar as it goes off
+        # A tech costs MP as it goes off: the one using it spending MP shows it went off
+        # when its name was never caught on the bar (live, Cyclone 2 of 2 "hadn't gone
+        # off" with Crono's MP already 64 to 62).
+        mp0 = _mp(before).get(before.actor) if before and before.actor else None
+        tech = intent.command.lower() == "tech"
+        spent = ""
         while time.monotonic() - t0 < self.t.playout_max_s + (0 if seen_name else 2.5):
+            mp = _mp(st).get(before.actor) if mp0 is not None else None
+            if tech and mp0 is not None and mp is not None and mp < mp0 and not spent:
+                seen_name, spent = True, f" {before.actor} MP {mp0} to {mp}: {named} went off."
             top = st.top if message(st.top) and st.top != stale else ""
             if top and top not in msgs and st.kind != "target":
                 msgs.append(top)
@@ -681,7 +690,7 @@ class Executor:
                 break
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()
-        seen = changes(before, st, msgs)
+        seen = changes(before, st, msgs) + spent
         if not seen_name:
             seen += (f" {intent.name} is chosen but hadn't gone off yet (it waits its turn "
                      "behind what's playing); it goes off once the fight runs again.")
@@ -824,6 +833,10 @@ def progress(st: State, done: Intent) -> str:
         f" on {done.target}" if done.target else "")
     hp = ", ".join(f"{m.name} {m.hp}" for m in st.party if m.hp is not None)
     return f"{done.actor} {what}." + (f" HP: {hp}." if hp else "")
+
+
+def _mp(st: State | None) -> dict[str, int | None]:
+    return {m.name: m.mp for m in st.party} if st and st.party else {}
 
 
 def _hp(st: State | None) -> dict[str, int | None]:

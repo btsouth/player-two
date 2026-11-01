@@ -612,3 +612,20 @@ def test_specks_on_the_bar_are_not_a_message():
 
     assert not message("-") and not message("- .") and not message("Q") and not message("")
     assert message("Heal") and message("Combo Attack: Reduces HP to 1")
+
+
+async def test_a_tech_whose_name_never_shows_went_off_when_its_mp_is_spent():
+    """Live 2026-11-01: "Crono, use Cyclone" twice reported "hadn't gone off yet" while
+    Crono's MP had gone 64 to 62 and the imps were gone: the name never showed on the bar."""
+    game = FakeCT(party(), enemies(), ready=(0,))
+    target = game._target
+
+    def spend(b):
+        if b == "a" and game.cmd == 1:
+            game.party[0].mp -= 2
+        target(b)
+
+    game._target = spend
+    out = await executor(game).act(Intent("Crono", "tech", "Cyclone"))
+    assert out.ok, out.text
+    assert "hadn't gone off" not in out.text and "Crono MP 64 to 62" in out.text
