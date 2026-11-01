@@ -502,6 +502,11 @@ class Reader:
                 out.append(f"{name} healed {hp - old}")
         return ", ".join(out)
 
+    def prime(self) -> None:
+        """Player Two just acted and said what came of it: HP read before that isn't the
+        baseline any more ("Crono took 779" after "the combo dropped Crono to 1 HP")."""
+        self.hp, self.hp_new = {}, {}
+
     @property
     def waiting(self) -> bool:
         """Text on screen not said yet: another look may find it whole."""

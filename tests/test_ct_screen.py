@@ -580,3 +580,25 @@ def test_letters_that_come_apart_on_the_battle_bar_are_put_back():
     assert ctscreen.clean("Doublehand Attacki - Dark Plasma") == "Doublehand Attack - Dark Plasma"
     assert ctscreen.clean("Defense arri restores head!") == "Defense arm restores head!"
     assert ctscreen.clean("Barrier Sphere") == "Barrier Sphere"
+
+
+def test_hp_changes_while_player_two_acted_are_not_said_after_it():
+    """Live 2026-11-01: "Crono hit the left one, but their combo dropped Crono to 1 HP"
+    was followed by the reader's "Crono took 779." The agent's report covers what
+    happened while it acted; the reader starts over from the screen it left."""
+    from playertwo.ctsteam import Member, State
+
+    def fight(crono):
+        st = State(kind="none", party=[Member("Crono", crono, 780, 64, 64, "white"),
+                                       Member("Frog", 494, 494, 65, 65, "white")])
+        return ctscreen.battle_look(st)
+
+    r = Reader()
+    r.update(fight(780), now=0)
+    r.update(fight(780), now=0.3)  # the baseline before the agent acted
+    r.prime()
+    r.update(fight(101), now=10.0)  # the first look after it, said by nobody
+    assert r.update(fight(101), now=10.3) == ""
+    assert r.update(fight(101), now=10.6) == ""
+    r.update(fight(500), now=11.0)
+    assert r.update(fight(500), now=11.3) == "Crono healed 399."  # news again after that

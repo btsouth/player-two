@@ -812,6 +812,7 @@ class Session:
         if self.read_prime:
             self.read_prime, line = False, ""
             self.reader.model_read = False
+            self.reader.prime()
         if ((line or opened) and self.narrating is not None and not self.narrating.done()
                 and self.narrating is not self.read_model
                 and self.narrating is not self.describing):
