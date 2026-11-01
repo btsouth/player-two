@@ -639,6 +639,13 @@ class Session:
         if not self.rooms:
             return none
         here = await asyncio.to_thread(self.rooms.locate, frame.image)
+        if here is None or here.loc in self.rooms.worlds:
+            # A world map the atlas knows: where on it, in a few words ("World map, 1000
+            # A.D., at Leene Square"), as a place's name (live 3 said only "World map."
+            # or "1000 A.D.", or what the woods looked like, never where).
+            world = await self._world_arrival(frame, asked)
+            if world is not None:
+                return world
         if here is None:
             if (feel or asked) and not getattr(self.rooms, "dark", False):
                 # Not surveyed: what it's like is the model's to say, once a place.
@@ -682,6 +689,34 @@ class Session:
             return "", line, False
         return short, line, False
 
+    async def _world_arrival(self, frame: Frame, asked: bool
+                             ) -> tuple[str, str, bool] | None:
+        """_arrival on a world map: where on it, when the atlas places the screen surely
+        (said when it's new, like a place's name); None when it isn't a world map the atlas
+        knows."""
+        where = ""
+        look = palette(frame.image)
+        miss = getattr(self, "world_miss", None)
+        if miss is not None and same_look(look, miss) >= SAME_LOOK:
+            return None  # a screen like the last the atlas didn't know (0.3 s a look)
+        if hasattr(self.agent, "world_where"):
+            with contextlib.suppress(Exception):
+                where = await self.agent.world_where(frame.image)
+        if not where:
+            self.world_miss = look
+            return None
+        self.world_miss = None
+        self.world_head = where  # (the narration after it says only what's new)
+        last, when = getattr(self, "place_said", ("", 0.0))
+        if not asked and where == last and time.monotonic() - when < 120:
+            return "", "", False
+        self.place_said = (where, time.monotonic())
+        recent = getattr(getattr(self, "narrator", None), "recent", ())
+        spot = where.split(", ")[-1].lower()  # "at leene square": Player Two just said it
+        if not asked and len(where.split(", ")) > 2 and any(spot in r.lower() for r in recent):
+            return "", "", False
+        return where, "", False
+
     def _feel_ok(self, frame: Frame) -> bool:
         """Whether a line of what a place is like may go with this screen's narration: not
         in terse or quiet, and only over the place itself (the reader looked and found
@@ -716,7 +751,8 @@ class Session:
                 if head:
                     self.narrating_text += f"{head} "
                     yield f"{head} "
-                if line or ask:
+                world = bool(place) and place == getattr(self, "world_head", None)
+                if line or ask or world:
                     # The model was asked before that: ask again, knowing what was just
                     # said (so only what's new follows the place's line), or asking what
                     # this new place is like.
@@ -725,7 +761,7 @@ class Session:
                     with contextlib.suppress(BaseException):
                         first.result()  # taken: a failed first call is asked again below
                     await gen.aclose()
-                    if line:
+                    if line or world:
                         self.narrator.recent.append(head)
                     gen = self.narrator.narrate(frame, PLACE_FEEL if ask else PLACE_SAID)
                     first = asyncio.ensure_future(anext(gen, None))

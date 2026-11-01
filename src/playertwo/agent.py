@@ -1662,6 +1662,19 @@ class Agent:
             progress.save(self.notes.folder, self.game or "")
         return f"{text} Places on this map for go_to_place: {', '.join(m.places)}."
 
+    async def world_where(self, image) -> str:
+        """Where a world-map screen is, in a few words ("World map, 1000 A.D., at Leene
+        Square"), when the atlas places it surely; '' otherwise."""
+        from . import atlas as atlas_mod
+        from .quests import where_short
+
+        atlas = await self._the_atlas()
+        spot = await self._spot(atlas, image) if atlas is not None else None
+        if spot is None or spot.margin < 0.1:
+            return ""
+        return where_short(atlas.map(spot.map), spot.x, spot.y, getattr(atlas_mod, "CELL", 8),
+                           getattr(atlas_mod, "RISE", 0))
+
     async def _where_line(self) -> str:
         """"Where am I?" as said to the player, from the atlas on a world map or the room
         survey inside a place ('' when neither knows: the model answers from the screen)."""
@@ -2511,7 +2524,13 @@ class Agent:
                                   result))
             if result.startswith("arrived") or self.cancelled:
                 if result.startswith("arrived"):
-                    await self._speak("We're outside.")
+                    # Where outside, when the atlas knows (live 3: "We're outside." then
+                    # the narrator's "World map.").
+                    where = ""
+                    with contextlib.suppress(Exception):
+                        where = await self.world_where((await self.grab()).image)
+                    await self._speak(f"We're outside: {where[:1].lower()}{where[1:]}."
+                                      if where else "We're outside.")
                 run.outcome = self.said[-1] if self.said else result
                 run.seconds = time.monotonic() - t0
                 self.history.append(f"{request} -> {run.outcome}")

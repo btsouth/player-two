@@ -231,6 +231,14 @@ def test_where_said_is_the_same_plain_line_from_the_atlas():
     assert where_said(other, 0, 0)[0] == "On the Overworld map, right at the west Truce Residence."
 
 
+def test_where_short_for_a_line_on_arriving():
+    from playertwo.quests import where_short
+
+    assert where_short(world(), 424, 214) == "World map, 1000 A.D., at Leene Square"
+    assert where_short(world(), 424, 214 - 4 * 8) == "World map, 1000 A.D., north of Leene Square"
+    assert where_short(world(), 900, 900) == "World map, 1000 A.D."
+
+
 def test_pick_place_exact_names_and_aliases_need_no_model():
     muse = JsonMuse([])
     m = world()

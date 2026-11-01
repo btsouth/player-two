@@ -475,7 +475,7 @@ def where_text(m, x: float, y: float, step: float = 8.0, rise: float = 0.0) -> t
     px, py = x, y - rise
     if not m.places:
         return f"On the {m.name} map; no places are named on it yet.", ""
-    near = sorted(m.places.items(), key=lambda kv: (kv[1][0] - px) ** 2 + (kv[1][1] - py) ** 2)
+    near = [(n, (ox, oy)) for _d, n, ox, oy in _nearest(m, px, py, step)]
     name, (nx, ny) = near[0]
     steps = ((nx - px) ** 2 + (ny - py) ** 2) ** 0.5 / step
     if steps < 1:
@@ -494,6 +494,26 @@ def where_text(m, x: float, y: float, step: float = 8.0, rise: float = 0.0) -> t
     return out + ".", name if steps <= 3 else ""
 
 
+def _nearest(m, px: float, py: float, step: float) -> list[tuple[float, str, float, float]]:
+    """Places by how far the character is from them: (distance, name, x, y), measured to
+    the place's door on the map when the survey found it (an icon is big: standing at
+    Leene Square's entrance is nearer the east Truce Residence's mark than the fair's),
+    else to where it's named."""
+    out = []
+    for name, (nx, ny) in m.places.items():
+        cells = None
+        if hasattr(m, "entrance"):
+            try:
+                cells = m.entrance(name)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                cells = None
+        pts = [((c[1] + 0.5) * step, (c[0] + 0.5) * step) for c in cells] if cells else []
+        pts.append((nx, ny))
+        bx, by = min(pts, key=lambda q: math.dist(q, (px, py)))
+        out.append((math.dist((bx, by), (px, py)), name, bx, by))
+    return sorted(out)
+
+
 def where_said(m, x: float, y: float, step: float = 8.0, rise: float = 0.0,
                aliases: dict[str, set[str]] | None = None) -> tuple[str, str]:
     """"Where am I?" on a world map, as Player Two says it, the same way every time and
@@ -509,15 +529,15 @@ def where_said(m, x: float, y: float, step: float = 8.0, rise: float = 0.0,
     if not m.places:
         return head + ".", ""
     px, py = x, y - rise
-    near = sorted(m.places.items(), key=lambda kv: (kv[1][0] - px) ** 2 + (kv[1][1] - py) ** 2)
-    name, (nx, ny) = near[0]
+    near = _nearest(m, px, py, step)
+    d, name, nx, ny = near[0]
 
     def called(n: str) -> str:
         # "Leene Square, the fair": the name the player may know it by, once.
         other = sorted(a for a in (aliases or {}).get(n, ()) if a.lower().startswith("the "))
         return f"{plain_name(n)}, {other[0]}" if other else plain_name(n)
 
-    steps = math.dist((nx, ny), (px, py)) / step
+    steps = d / step
     if steps < 1.5:
         out = f"{head}, right at {called(name)}."
     elif steps <= 4:
@@ -525,10 +545,30 @@ def where_said(m, x: float, y: float, step: float = 8.0, rise: float = 0.0,
     else:
         out = f"{head}, {compass(px - nx, py - ny)} of {called(name)}, a little way off."
     others = [f"{plain_name(n)} is {compass(ox - px, oy - py)}"
-              for n, (ox, oy) in near[1:3] if math.dist((ox, oy), (px, py)) / step <= 30]
+              for dd, n, ox, oy in near[1:3] if dd / step <= 30]
     if others:
-        out += " " + " and ".join(others) + "."
+        more = " and ".join(others)
+        out += f" {more[:1].upper()}{more[1:]}."
     return out, name if steps <= 3 else ""
+
+
+def where_short(m, x: float, y: float, step: float = 8.0, rise: float = 0.0) -> str:
+    """Where on a world map in a few words, for a line said on arriving there: "World map,
+    1000 A.D., at Leene Square" (live 3 said only "World map." or "1000 A.D.")."""
+    from .atlas import compass
+
+    era = bool(re.search(r"\b(A\.D\.|B\.C\.)", m.name))
+    head = f"World map, {m.name}" if era else f"{m.name} map"
+    if not m.places:
+        return head
+    px, py = x, y - rise
+    d, name, nx, ny = _nearest(m, px, py, step)[0]
+    steps = d / step
+    if steps < 1.5:
+        return f"{head}, at {plain_name(name)}"
+    if steps <= 6:
+        return f"{head}, {compass(px - nx, py - ny)} of {plain_name(name)}"
+    return head
 
 
 def plain_name(name: str) -> str:
