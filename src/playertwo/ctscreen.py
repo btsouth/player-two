@@ -298,7 +298,7 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
                 # A setting's value is centred under it in capitals: "WAIT", "5 (NORMAL)".
                 mid = (run.x0 + run.x1) / 2
                 val = [r for r in good if 40 < r.y - run.y < 160 and abs((r.x0 + r.x1) / 2 - mid) < 40
-                       and re.fullmatch(r"[A-Z0-9][A-Z0-9 ()/%.:-]*", r.text.strip())]
+                       and re.fullmatch(r"[A-Z0-9][A-Z0-9 ()/%.-]*[A-Z)]", r.text.strip())]
                 if val:
                     v = re.sub(r"[()]", "", val[0].text).split()
                     lk.parts["focus"] += ", " + " ".join(w if w.isdigit() else w.capitalize()
@@ -506,6 +506,7 @@ class Reader:
                 # It never reads the same twice (misreads vary): the model reads it now.
                 self.said["text"] = lk.parts.get("text", "") or "?"
                 self.model_read = self.text_handed = True
+                self.heard = ""  # what it says is the model's to tell
         else:
             self.text_since, self.text_handed = None, False
         out = []
@@ -548,6 +549,8 @@ class Reader:
                     if not self.text_handed:
                         self.model_read = True  # whole now, but read by the model
                         self.text_handed = part == "text"
+                        if part == "text":
+                            self.heard = ""
                     continue
             before = self.said.get(part, "")
             self.said[part] = value

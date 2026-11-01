@@ -509,3 +509,16 @@ def test_low_hp_on_the_menu_page_is_said_once_not_on_every_return():
     assert b.update(look("battle", danger="Frog 1 HP"), now=10) == ""
     b.update(look("battle"), now=15)
     assert b.update(look("battle", danger="Frog 1 HP"), now=30) == "Frog 1 HP."
+
+
+def test_what_did_he_say_never_repeats_an_older_box_after_one_the_model_read():
+    r = Reader()
+    box = look("text", typing=("text",), text="Frog: We must hurry.")
+    r.update(box, now=0)
+    r.update(box, now=0.3)
+    bad = look("text", typing=("text",), text="Lucca: Hey, Cr0no! Over here!")
+    bad.unsure = True
+    for t in (1.0, 1.3, 1.6):
+        r.update(bad, now=t)
+    assert r.model_read and r.heard == ""
+    assert ctscreen.answer("what did she say", look("none"), heard=r.heard) is None
