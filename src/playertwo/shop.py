@@ -329,7 +329,14 @@ class Shop:
             raise ShopStop(f"the count reads {v.count}, more than the {count} asked for")
         return v
 
-    async def buy(self, item: str, count: int = 1) -> str:
+    async def buy(self, item: str, count: int = 1,
+                  priced: Callable[[int, str, int | None], Awaitable[None]] | None = None,
+                  bought: Callable[[int, str, int, int], Awaitable[None]] | None = None
+                  ) -> str:
+        """Buy `count` of `item` with the shop screen up (or the seller's words, pressed
+        on). priced(n, name, total): told what the count screen shows, before the last
+        a; bought(n, name, spent, funds): told as soon as the gold shows the purchase,
+        before leaving (both to say it at once, not after the goodbye)."""
         count = max(1, min(int(count or 1), 99))
         start = len(self.presses)
         try:
@@ -351,6 +358,8 @@ class Shop:
                 # The last a buys what the count shows: never another good. (A name that
                 # reads as nothing known is a misread: "Brohze Blade", live.)
                 raise ShopStop(f"the count shows {other}, not {good.name}")
+            if priced is not None:
+                await priced(n, good.name, v.total)
             await self.tap("a")
             v = await self.until(lambda v: v.funds is not None and v.funds != funds0, 2.5)
             if v.funds == funds0 and v.kind == "count":
@@ -376,6 +385,8 @@ class Shop:
                     note = (f" ({spent} G doesn't fit {n} {good.name} at {good.price} G: "
                             "what was bought is unsure; look at the inventory)")
             have = v.stock
+            if bought is not None and not note:
+                await bought(n, good.name, spent, v.funds)
             out = await self.leave()
             got = (f"Bought {n} {good.name} for {spent} G (funds {funds0} G to {v.funds}"
                    f" G){note}")

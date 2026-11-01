@@ -62,6 +62,11 @@ class Tuning:
     run_chunks: int = 3
     spoils_wait_s: float = 1.2  # a won fight's message left this long gets an a
     win_max_s: float = 240.0
+    # "Win this fight": a surprise (someone low or knocked out) is met by the standing
+    # fallbacks (revive, heal, attack) at once. With this on, the model picks instead,
+    # the fight paused while it thinks: 3 to 7 s a pick live (live 3, take B: 17 s of a
+    # 55 s fight), and twice it picked what wasn't in the list (Arise, Cure II).
+    model_decides: bool = False
     gone_s: float = 3.0  # no party box this long, with no spoils seen: the fight is over
     low_share: float = 0.34  # under this share of most HP, someone needs healing
 
@@ -204,6 +209,12 @@ class Executor:
         self.landed = False  # whether the last watched heal's HP showed
         self.after: State | None = None  # the last command's screen once it played out
         self.after_frame: object = None  # and its picture
+        self.before: State | None = None  # the actor's command window, the last command
+        self.went_off = False  # whether the last watched tech or item was seen going off
+        self.acted_at = 0.0  # when the last command was confirmed (monotonic)
+        # Told of each command as its confirm takes, before it plays out: a line can be
+        # said over the animation instead of after it.
+        self.on_confirm: Callable[[Intent], None] | None = None
 
     def lacks(self, intent: Intent, actor: str) -> bool:
         """Whether this command was found missing in this fight (not in the list, or the
@@ -396,6 +407,9 @@ class Executor:
                 st = await self._pick_entry(st, intent, actor)
             st = await self._pick_target(st, intent)
             st = await self._confirm(st)
+            self.before, self.acted_at = before, time.monotonic()
+            if self.on_confirm is not None:
+                self.on_confirm(Intent(actor, intent.command, intent.name, intent.target))
             text = str(Intent(actor, intent.command, intent.name, intent.target))
             if watch:
                 st, seen = await self._watch(before, intent)
@@ -816,6 +830,7 @@ class Executor:
                      "behind what's playing); it goes off once the fight runs again: this "
                      "command is done, so send no other command for it.")
         self.landed = landed
+        self.went_off = seen_name
         return st, seen
 
     # -- whole fights ----------------------------------------------------------------------
@@ -865,9 +880,13 @@ class Executor:
 
     async def win(self, decide: Callable[[State, str], Awaitable[Intent | None]] | None = None,
                   say: Callable[[str], None] | None = None,
-                  turn: Callable[[State], None] | None = None) -> Outcome:
+                  turn: Callable[[State], None] | None = None,
+                  chose: Callable[[Intent], None] | None = None) -> Outcome:
         """Fight until it's won, lost or the player stops it. `turn`: told of each new
-        turn (the screen after the last turn's hits), to count the enemies left."""
+        turn (the screen after the last turn's hits), to count the enemies left. `chose`:
+        told of each command other than an attack once it's put in (a heal, a revive),
+        to say it; attacks go to `say` now and then. With no `decide`, a surprise gets the
+        standing fallbacks, in order, with no pause."""
         start = len(self.presses)
         t0 = time.monotonic()
         turns: list[str] = []
@@ -933,7 +952,9 @@ class Executor:
                         st = out.state or await self.look()
                         if out.ok:
                             turns.append(str(option))
-                            if say:
+                            if chose is not None and option.command != "attack":
+                                chose(option)
+                            elif say:
                                 say(progress(seen, option))
                             break
                         self.log(f"{option} didn't go: {out.stopped}")
@@ -1184,9 +1205,11 @@ def heal_plan(st: State, said: str, actor: str = "",
 
 
 def heal_line(intent: Intent, out: Outcome, before: State | None,
-              after: State | None = None) -> str:
+              after: State | None = None, told: bool = False) -> str:
     """What a heal did, in a sentence, from what the screen showed (`after`: the last
-    look before the fight was paused again; a paused screen reads less)."""
+    look before the fight was paused again; a paused screen reads less). told: who used
+    what on whom was said as it was put in ("Frog: Slurp on Frog."), so only what came
+    of it is said."""
     st = after if after is not None and after.party else out.state
     actor = intent.actor or (out.text.split(":")[0] if ":" in out.text else "")
     what = f"{actor}'s {intent.name}" if actor else intent.name
@@ -1201,10 +1224,18 @@ def heal_line(intent: Intent, out: Outcome, before: State | None,
         top = tops.get(intent.target)
         if any(n == intent.target for n, _h in up) and hp is not None:
             full = " (full)" if top and hp >= top else ""
+            if told:
+                return f"{intent.target} is up to {hp} of {top}{full}."
             return f"{what} healed {intent.target}: {hp} of {top}{full}."
+        if told:
+            return "It hasn't landed yet: it goes off once the fight runs again."
         return f"{what} is on its way to {intent.target}."
     if up:
+        if told:
+            return ", ".join(f"{n} up to {h}" for n, h in up).capitalize() + "."
         return f"{what}: " + ", ".join(f"{n} up to {h}" for n, h in up) + "."
+    if told:
+        return "It hasn't landed yet: it goes off once the fight runs again."
     return f"{what} is on its way."
 
 

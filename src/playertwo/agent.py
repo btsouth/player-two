@@ -56,6 +56,11 @@ from .walk import Walker, small
 # Never the guide button: it opens the Steam overlay or the system menu, not the game.
 # Seconds of silence in a run before the model's own line about its plan is spoken.
 PROGRESS_GAP_S = 8.0
+# "Win this fight": an attack's line ("Crono attacks.") after this long with nothing said
+# (live 3: lines 8 s apart at most left silences of 4 to 14 s in a fight).
+FIGHT_LINE_GAP_S = 4.0
+# Tools that press nothing: after them the screen is looked at once, not waited on.
+STILL_TOOLS = {"where_am_i", "next_goal", "guide", "exits", "area_map", "remember"}
 # Walking around by trial and error in one request stops after this long: wandering on
 # camera looks lost, and an honest "I don't know the way here yet" is better.
 FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
@@ -1184,12 +1189,9 @@ class Agent:
             if self.on_action:
                 self.on_action("battle_note", {"text": f"decide failed: {exc}"})
             return None
-        intent = parse_intent(d, st.actor)
-        if intent is not None and intent.command != "attack":
-            line = f"{st.actor}: {intent.name or intent.command}" + (
-                f" on {intent.target}" if intent.target else "") + "."
-            asyncio.get_running_loop().create_task(self._speak(line))
-        return intent
+        # Said once it's put in (Executor.win's chose): a pick that isn't in the list
+        # isn't said (live 3: "Marle: Arise on Crono." and no Arise to cast).
+        return parse_intent(d, st.actor)
 
     async def count_foes(self, image, party: list[str] = ()) -> Foes | None:
         """The enemies standing, counted by a look (one model call, about 2 s; 25/27
@@ -1288,19 +1290,34 @@ class Agent:
         if plan.say:
             await self._speak(plan.say)
             return plan.say
+        told: list[str] = []
+
+        def confirmed(done: Intent) -> None:
+            # The heal is in: said now, over its animation (it can take up to 9 s to
+            # land behind what's playing; live 3, 8 to 11.6 s of silence).
+            line = f"{done.actor}: {done.name} on {done.target}." if done.target else \
+                f"{done.actor}: {done.name}."
+            told.append(line)
+            self._spoke_at = time.monotonic()
+            asyncio.get_running_loop().create_task(self._speak(line))
+
         for intent in plan.intents[:4]:
             await self.go.wait()
             if self.cancelled:
                 return "cancelled"
             before = ex.held or held
-            out = await ex.act(intent)
+            ex.on_confirm = confirmed
+            try:
+                out = await ex.act(intent)
+            finally:
+                ex.on_confirm = None
             args = {"actor": intent.actor, "command": intent.command, "name": intent.name,
                     "target": intent.target}
             now = ctsteam.describe(out.state) if out.state is not None else "unreadable"
             run.steps.append(Step("battle", args, time.monotonic() - t0,
                                   f"{'done' if out.ok else 'stopped'}: {out.text}. Now: {now}"))
             if out.ok:
-                line = heal_line(intent, out, before, ex.after)
+                line = heal_line(intent, out, before, ex.after, told=bool(told))
                 await self._speak(line)
                 return line
             if self.cancelled or "player" in out.stopped:
@@ -1350,7 +1367,7 @@ class Agent:
             else:
                 def now_and_then(line: str) -> None:
                     # A long fight isn't a silent one: a turn's line after a quiet spell.
-                    if time.monotonic() - getattr(self, "_spoke_at", 0.0) >= PROGRESS_GAP_S:
+                    if time.monotonic() - getattr(self, "_spoke_at", 0.0) >= FIGHT_LINE_GAP_S:
                         self._spoke_at = time.monotonic()
                         asyncio.get_running_loop().create_task(self._speak(line))
 
@@ -1360,7 +1377,17 @@ class Agent:
                     if ex.frame is not None:
                         self.recount(ex.frame, [m.name for m in st.party])
 
-                out = await ex.win(self._decide, say=now_and_then, turn=turn)
+                def chose(intent: Intent) -> None:
+                    # A heal or a revive, said as it's put in ("Marle: Cure on Frog."),
+                    # over its animation.
+                    self._spoke_at = time.monotonic()
+                    line = f"{intent.actor}: {intent.name or intent.command}" + (
+                        f" on {intent.target}" if intent.target else "") + "."
+                    asyncio.get_running_loop().create_task(self._speak(line))
+
+                out = await ex.win(self._decide if getattr(getattr(ex, "t", None), "model_decides", False)
+                                   else None,
+                                   say=now_and_then, turn=turn, chose=chose)
         else:
             intent = Intent(str(a.get("actor") or ""), str(a.get("command") or "attack"),
                             str(a.get("name") or ""), str(a.get("target") or ""))
@@ -1369,6 +1396,7 @@ class Agent:
             if out.ok and ex.after_frame is not None and not (heals(intent) or revives(intent)):
                 self.recount(ex.after_frame, [m.name for m in out.state.party]
                              if out.state is not None else [])
+        self._fought = out
         st = out.state
         now = ctsteam.describe(st) if st is not None else "the screen can't be read"
         pressed = f" (pressed {' '.join(out.presses)})" if out.presses else ""
@@ -1511,7 +1539,8 @@ class Agent:
             count = int(a.get("count") or 1)
         except (TypeError, ValueError):
             count = 1
-        out = await sh.buy(item, count)
+        hooks = getattr(self, "_shop_hooks", None) or (None, None)
+        out = await sh.buy(item, count, priced=hooks[0], bought=hooks[1])
         said = " ".join(f'"{x}"' for x in sh.said)
         return walked + (f"The seller said: {said}. " if said else "") + out
 
@@ -2448,20 +2477,53 @@ class Agent:
                 run.seconds = time.monotonic() - t0
                 self.history.append(f"{request} -> {run.outcome}")
                 return run
+            line = re.search(r'Their line, typed out in full: "(.+)" \(say it once', result)
+            if not (there and talk_to and not self.cancelled):
+                line = None
+            if line:
+                # Their line, said as soon as it has typed out, not after a model turn
+                # (live 3: Melchior's line 3 s after it was read). The model goes on from
+                # there (a question in it is the player's), while it's said.
+                from .fast import talk_line
+
+                await self._speak(talk_line(who, line.group(1)))
+                result = result.replace("(say it once, as is; don't say part of it)",
+                                        "(said to the player already, word for word: don't "
+                                        "say it again)")
             frame = await self.grab()
             tried += f"go_to_exit({a}) was done already: {result}\n"
             if there and not only:
                 tried += "Now the rest of what they asked; don't walk to them again.\n"
+            elif there and "pressed a" in result and line:
+                tried += ("Their line is said; now only what's needed (a question in it is "
+                          "the player's to answer); don't walk again.\n")
             elif there and "pressed a" in result:
                 tried += ("Say their line as it says, then only what's needed (a question in "
                           "it is the player's to answer); don't walk again.\n")
             tried += "\n"
+        # Plain requests whose words settle them ("buy three potions", "Crono, use
+        # Cyclone", "where am I?"): done and said with no model turn (fast.py).
+        from .fast import try_fast
+
+        fast_tried = ""
+        if not tried:
+            done, fast_tried = await try_fast(self, request, frame, run, t0)
+            if done:
+                run.outcome = run.outcome or (self.said[-1] if self.said else "done")
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
+            if fast_tried:
+                frame = await self.grab()
+                tried += fast_tried
         # Chrono Trigger on Steam in a fight: pause it while the model thinks.
         self._battle = await self._battle_on(frame)
         if self._battle is not None:
             self._battle = await self._hold_fight(self._battle)
             said = " ".join(request.lower().split())
             mode = "win" if FIGHT.search(said) else "run" if RUN.search(said) else ""
+            if fast_tried:
+                mode = ""  # tried already, without the model: its result is in tried
             if mode:
                 # "Win this fight", "run": no model turn needed to start it.
                 result = await self._act("fight", {"mode": mode})
@@ -2479,7 +2541,7 @@ class Agent:
                 tried += (f"fight({mode}) was done already: {result}\nTell the player how "
                           "it went in a sentence, from that result, and finish.\n\n")
             heal = HEAL.fullmatch(said.strip(" .!?"))
-            if heal and not mode:
+            if heal and not mode and not fast_tried:
                 line = await self._heal_now(heal.group("actor") or "", heal.group("who"),
                                             run, t0)
                 if line is not None:
@@ -2678,7 +2740,12 @@ class Agent:
             turn["act_s"] = round(time.monotonic() - t_act, 2)
             t_look = time.monotonic()
             # After a say too: the model may be waiting for text still typing out.
-            if self._battle is not None:
+            if noise is None and calls and all(c.function.name in STILL_TOOLS
+                                               for c in calls):
+                # Nothing was pressed (where_am_i, guide): the screen is as it was, and
+                # on an animated scene waiting for it to settle costs the full 1.5 s.
+                frame = await self.grab()
+            elif self._battle is not None:
                 # A fight never sits still; the executor has already waited for what
                 # it needed, and left it paused.
                 frame = await self.grab()

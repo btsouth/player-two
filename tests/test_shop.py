@@ -640,3 +640,21 @@ def test_the_shop_tool_says_what_the_walk_to_the_seller_did(monkeypatch):
     agent, done = _shop_agent(monkeypatch, talked)
     out = asyncio.run(agent._shop({"action": "rest"}))
     assert out.startswith("Walked to the innkeeper and talked. Stayed the night"), out
+
+
+def test_the_price_and_the_purchase_are_told_before_the_goodbye():
+    """So they're said as the gold shows them, not after the seller's goodbye (live 3:
+    the goodbye typed out for 2.5 s before anything was said)."""
+    game = FakeShop()
+    told = []
+
+    async def priced(n, name, total):
+        told.append(("price", n, name, total, game.mode))
+
+    async def bought(n, name, spent, funds):
+        told.append(("bought", n, name, spent, funds, game.mode))
+
+    out = asyncio.run(make(game).buy("Potion", 3, priced=priced, bought=bought))
+    assert out.startswith("Bought 3 Potion for 30 G (funds 400 G to 370 G)"), out
+    assert told == [("price", 3, "Potion", 30, "count"),
+                    ("bought", 3, "Potion", 30, 370, "list")]  # still in the shop

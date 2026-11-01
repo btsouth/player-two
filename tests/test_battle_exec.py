@@ -559,7 +559,9 @@ async def test_the_agent_pauses_a_ct_fight_and_offers_only_the_battle_tools(monk
                  ("finish", {"text": "Crono hit it."})])
     ag = agent_mod.Agent(muse, DryRun(), grab, speak, game="Chrono Trigger")
     ag._executor = ex = Ex()
-    run = await ag.run("Crono, attack the one on the left")
+    # (Words that don't settle the target: the model's. "Crono, attack the one on the
+    # left" is done without it: see test_a_plain_command_needs_no_model_turn.)
+    run = await ag.run("Crono, attack whichever is on the left")
     assert ex.paused >= 1  # paused before the model thought
     assert "battle" in muse.tools_seen[0] and "press" not in muse.tools_seen[0]
     assert "Crono HP 780/780" in muse.texts[0]
@@ -568,9 +570,10 @@ async def test_the_agent_pauses_a_ct_fight_and_offers_only_the_battle_tools(monk
     assert run.steps[1].result.startswith("done: Crono: attack")
 
 
-async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
+async def test_a_won_fight_is_said_from_its_result_with_no_model_turn(monkeypatch):
     # Live, Woe 2026-11-01: "win this fight" won, the spoils screen still read as a fight,
-    # and the model called fight again (2 of 6), then said there was no fight.
+    # and the model called fight again (2 of 6), then said there was no fight. Now the
+    # result is said as it reads (live 3: the model's line came 1.2 to 1.8 s after it).
     import json
     from types import SimpleNamespace
 
@@ -610,21 +613,32 @@ async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
         async def pause(self, st=None):
             return spoils
 
-        async def win(self, decide, say=None, turn=None):
-            return Outcome(True, "won after 9 commands. Earned 648 EXP.", spoils)
+        async def win(self, decide, say=None, turn=None, chose=None):
+            assert decide is None  # the standing fallbacks, no model turn per surprise
+            return Outcome(self.won, "won after 9 commands. Earned 648 EXP." if self.won
+                           else "stopped by a scene after 3 commands", spoils)
 
     async def grab():
         return Frame(Image.new("RGB", (1280, 720)), 0)
 
-    async def speak(_text):
-        pass
+    said = []
+
+    async def speak(text):
+        said.append(text)
 
     muse = Muse()
     ag = agent_mod.Agent(muse, DryRun(), grab, speak, game="Chrono Trigger")
-    ag._executor = Ex()
+    ag._executor = ex = Ex()
+    ex.won = True
     run = await ag.run("win this fight for me")
     assert run.steps[0].tool == "fight" and run.steps[0].result.startswith("done: won")
-    assert "fight" not in muse.tools_seen[0] and "battle" not in muse.tools_seen[0]
+    assert muse.tools_seen == []
+    assert said == ["Won the fight: 648 experience. Crono's at 653 of 780."]
+    assert run.outcome == said[0]
+    # Not won: the model says how it went, from the result.
+    ex.won = False
+    run = await ag.run("win this fight for me")
+    assert run.steps[0].tool == "fight" and len(muse.texts) == 1
     assert "fight(win) was done already" in muse.texts[0]
 
 
@@ -849,10 +863,11 @@ def _muse(replies):
         s = SimpleNamespace(image_max_side=640)
 
         def __init__(self):
-            self.replies, self.tools_seen = list(replies), []
+            self.replies, self.tools_seen, self.texts = list(replies), [], []
 
         async def tools(self, messages, tools, effort=None, max_tokens=0):
             self.tools_seen.append({t["function"]["name"] for t in tools})
+            self.texts.append(json.dumps(messages[-1]["content"], default=str))
             name, args = self.replies.pop(0)
             call = SimpleNamespace(id="c", function=SimpleNamespace(
                 name=name, arguments=json.dumps(args)),
@@ -897,7 +912,9 @@ async def test_heal_x_in_a_fight_is_one_command_and_no_model_turn(monkeypatch):
     run = await ag.run("heal Frog")
     assert muse.tools_seen == []  # no model call at all
     assert p[1].hp == 400
-    assert said == ["Marle's Cure healed Frog: 400 of 494."] and run.outcome == said[0]
+    # Who heals whom as it's put in (over its animation), then what it did.
+    assert said == ["Marle: Cure on Frog.", "Frog is up to 400 of 494."]
+    assert run.outcome == said[-1]
     assert [s.tool for s in run.steps] == ["battle"]
     run = await ag.run("heal Marle")
     assert said[-1] == "Marle is at full health already, 430 of 430." and len(run.steps) == 0
@@ -909,7 +926,7 @@ async def test_the_model_gets_one_battle_command_for_one_asked(monkeypatch):
                   ("battle", {"actor": "Marle", "command": "attack"}),
                   ("finish", {"text": "Crono hit the one on the left."})])
     ag, said = _agent(monkeypatch, game, muse)
-    run = await ag.run("attack the one on the left")
+    run = await ag.run("attack whichever one is on the left")
     assert "battle" in muse.tools_seen[0]
     assert muse.tools_seen[1] == {"finish"}
     assert run.steps[1].result.startswith("not done: the command the player asked for")
@@ -1019,3 +1036,84 @@ def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
     st = FakeCT(p, enemies()).read(None)
     assert progress(st, Intent("Crono", "attack")) == "Crono attacks. Frog 1 HP, Marle is down."
     assert party_brief(st) == "Crono's full, Frog's at 1 of 494, Marle's down."
+
+
+async def test_a_plain_command_needs_no_model_turn(monkeypatch):
+    """Live 3: "attack the one on the left" 6.1 to 9.2 s and "Crono, use Cyclone" 9.5 to
+    12.2 s, of which the pause, two model turns and a look were 2.5 to 3.5 s. Words that
+    settle the command: done at once, unpaused, and said from what the screen showed."""
+    game = FakeCT(party(), enemies(), ready=(0, 2))
+    muse = _muse([])
+    ag, said = _agent(monkeypatch, game, muse)
+    run = await ag.run("Attack the one on the left.")
+    assert muse.tools_seen == []
+    assert game.log[0] != "start"  # no pause first: nothing to think about
+    assert sum(e[3] for e in game.enemies) == 8 and game.enemies[0][3] == 2
+    assert said == ["Crono attacked the one on the left."] and run.outcome == said[0]
+    assert [s.tool for s in run.steps] == ["battle"]
+
+
+async def test_a_tech_by_name_and_what_hit_the_party_meanwhile(monkeypatch):
+    game = FakeCT(party(), enemies(), ready=(0,))
+    target = game._target
+
+    def combo(b):
+        if b == "a" and game.cmd == 1:  # the confirm: Cyclone goes off, the imps hit back
+            game.party[0].mp -= 2
+            game.party[1].hp = 1
+            game.party[2].hp = 1
+        target(b)
+
+    game._target = combo
+    muse = _muse([])
+    ag, said = _agent(monkeypatch, game, muse)
+    run = await ag.run("Crono, use Cyclone")
+    assert muse.tools_seen == []
+    assert said == ["Crono used Cyclone. Frog dropped to 1 HP and Marle dropped to 1 HP."]
+    assert run.steps[0].args == {"actor": "Crono", "command": "tech", "name": "Cyclone",
+                                 "target": ""}
+
+
+async def test_a_command_that_cant_be_done_is_said_plainly(monkeypatch):
+    game = FakeCT(party(), enemies(), ready=(2,))
+    game.party[0].hp = 0
+    muse = _muse([])
+    ag, said = _agent(monkeypatch, game, muse)
+    await ag.run("Crono, use Cyclone")
+    assert muse.tools_seen == []
+    assert said == ["Crono's knocked out, so they can't use Cyclone."]
+
+
+async def test_a_tech_not_in_the_list_is_said_plainly(monkeypatch):
+    game = FakeCT(party(), enemies(), ready=(0,))
+    muse = _muse([])
+    ag, said = _agent(monkeypatch, game, muse)
+    await ag.run("Crono, use Luminaire")
+    assert muse.tools_seen == [] and said == ["Crono doesn't have Luminaire yet."]
+
+
+async def test_a_stop_the_words_dont_cover_goes_to_the_model(monkeypatch):
+    p = party()
+    p[0].techs = []
+    game = FakeCT(p, enemies(), ready=(0,))
+    muse = _muse([("finish", {"text": "Crono has no techs yet."})])
+    ag, said = _agent(monkeypatch, game, muse)
+    run = await ag.run("Crono, use Cyclone")
+    assert muse.tools_seen and "battle(" in muse.texts[0]
+    assert run.steps[0].tool == "battle" and run.steps[0].result.startswith("stopped")
+    assert said[-1] == "Crono has no techs yet."
+
+
+async def test_win_meets_a_surprise_with_the_fallbacks_and_says_the_heal():
+    """No model turn per surprise (live 3, take B: 3 to 7 s each, the fight paused, 17 s
+    of 55): a low ally gets the healer's heal, said as it's put in."""
+    p = party()
+    p[1].hp = 100  # Frog low
+    game = FakeCT(p, enemies(), ready=(0,))
+    ex = executor(game)
+    await ex.look()  # Crono's turn seen: where he stands
+    game.ready, game.hand_col = [2], 2
+    chosen, said = [], []
+    out = await ex.win(None, say=said.append, chose=chosen.append)
+    assert chosen and chosen[0] == Intent("Marle", "tech", "Cure", "Frog")
+    assert out.ok or "commands" in out.text
