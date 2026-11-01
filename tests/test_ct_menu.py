@@ -176,3 +176,16 @@ def test_a_highlighted_block_is_the_one_name_missing():
     hands, lines = ctsteam.menu_read(cv2.imread(str(LIVE / "frames" / "170907-10.jpg")))
     tip = max(h.tip for h in hands)
     assert (fm.who(lines, tip), FieldMenu.hp_near(lines, tip)) == ("Crono", "175/811")
+
+
+@pytest.mark.skipif(not (LIVE / "frames" / "005930-01.jpg").exists(),
+                    reason="no live heal picker frame")
+def test_every_blocks_hp_in_the_heal_picker_even_crono_beside_his_portrait():
+    # Live 2026-11-01: Crono's bright portrait merged his block's lines, his HP never read,
+    # and "heal everyone up" stopped with him at 395/811 saying everyone was full.
+    frame = cv2.imread(str(LIVE / "frames" / "005930-01.jpg"))
+    fm = FieldMenu(None, None, party=PARTY)
+    fm.frame = frame
+    hands, lines = ctsteam.menu_read(frame)
+    got = {fm.who(lines, h.tip): fm.hp_at(lines, h.tip) for h in hands}
+    assert got == {"Crono": "395/811", "Frog": "494/494", "Marle": "430/430"}

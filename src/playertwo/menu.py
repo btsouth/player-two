@@ -20,6 +20,9 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 
+import numpy as np
+from PIL import Image
+
 from . import ctsteam
 from .glyphread import Run, snap
 
@@ -56,10 +59,25 @@ class FieldMenu:
         self.wait_s = wait_s
         self.presses: list[str] = []
         self.party: list[str] = list(party or [])  # the active party, as battles read it
+        self.frame: object = None  # the last frame looked at
 
     async def look(self) -> tuple[list[tuple[int, int]], list[list[Run]]]:
-        hands, lines = await asyncio.to_thread(self._read, await self._grab())
+        self.frame = await self._grab()
+        hands, lines = await asyncio.to_thread(self._read, self.frame)
         return [h.tip for h in hands], lines
+
+    def hp_at(self, lines, tip) -> str | None:
+        """A block's HP: from the screen's lines, else read again in the block's own text
+        column. A bright portrait (Crono's hair) in the same rows can merge the screen's
+        lines there so the HP line never reads (live, 2026-11-01)."""
+        got = self.hp_near(lines, tip)
+        if got or not isinstance(self.frame, (np.ndarray, Image.Image)):
+            return got
+        img = ctsteam.to_canvas(self.frame if isinstance(self.frame, np.ndarray)
+                                else ctsteam._bgr(self.frame), ctsteam.CANVAS)
+        box = (tip[0] + 180, max(0, tip[1] - 60), min(ctsteam.CANVAS[0], tip[0] + 1000),
+               min(ctsteam.CANVAS[1], tip[1] + 40))
+        return self.hp_near(ctsteam.runs_in(ctsteam.lib(), img, box, local=True), tip)
 
     async def tap(self, button: str, times: int = 1) -> None:
         for _ in range(times):
@@ -251,7 +269,7 @@ class FieldMenu:
         if len(on_blocks) >= 2:  # everyone at once
             # The picker stays open after a cast, so a again casts again: keep going until
             # everyone's HP is full (or nothing changes: out of MP), up to 8 casts.
-            hp = lambda ls: [self.hp_near(ls, t) for t in on_blocks]
+            hp = lambda ls: [self.hp_at(ls, t) for t in on_blocks]
             def full(v: list) -> bool:
                 return all(x and x.split("/")[0] == x.split("/")[1] for x in v)
             first = hp(lines)
@@ -267,8 +285,11 @@ class FieldMenu:
                 now = after
             names = [self.who(lines, t) for t in on_blocks]
             shown = ", ".join(f"{n} {v}" for n, v in zip(names, now, strict=False) if n and v)
+            unread = [n or "someone" for n, v in zip(names, now, strict=False) if not v]
             return (f"used {what} on everyone, {casts} time{'s' if casts > 1 else ''}"
                     + (f"; HP now {shown}" if shown else "")
+                    + (f"; couldn't read {', '.join(unread)}'s HP, so don't say they're "
+                       "full" if unread else "")
                     + (" (everyone full)" if full(now) else ""))
         if not on_blocks:
             return f"used {what} (no one to pick: it went off at once)"
@@ -277,11 +298,11 @@ class FieldMenu:
             raise MenuStop(f"say who {what} is for")
         tip, lines = await self.blocks(
             who, lambda tips: max(tips, key=lambda t: t[0]) if tips else None)
-        before = self.hp_near(lines, tip)
+        before = self.hp_at(lines, tip)
         await self.tap("a")
         await asyncio.sleep(0.6)
         _tips, lines = await self.look()
-        after = self.hp_near(lines, tip)
+        after = self.hp_at(lines, tip)
         seen = f": {who} HP {before} to {after}" if before and after and before != after else ""
         return f"used {what} on {who}{seen}"
 
