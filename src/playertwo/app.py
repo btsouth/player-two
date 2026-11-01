@@ -33,6 +33,7 @@ from .screen import (
     auto_capture,
 )
 from .screenreader import open_voice
+from .voice import clean_for_speech
 
 # Short commands handled without the model. They must be the whole utterance: "keep going,
 # but don't leave" or "stop attacking and heal" are requests for the agent, not commands.
@@ -244,6 +245,8 @@ class Session:
         self.read_thumb = None
         self.read_prime = False  # take in the next look without saying it
         self.read_model: asyncio.Task | None = None  # the model reading a box for it
+        self.read_last_line = ""
+        self.describing: asyncio.Task | None = None  # a description the player asked for
         self.read_last_parts: set[str] = set()
         self.watcher = ChangeWatcher()
         self.events = Events()
@@ -656,7 +659,7 @@ class Session:
                     self.trouble(exc, "describe", answer=True)
                     return
                 self.events.emit("say", text=text, source="describe")
-            self.narrating = asyncio.create_task(run())
+            self.narrating = self.describing = asyncio.create_task(run())
         else:
             self.narrating = asyncio.create_task(self._narrate(frame))
 
@@ -725,10 +728,12 @@ class Session:
 
         th = thumb(frame.image)
         now = time.monotonic()
-        if (self.read_thumb is not None and not self.reader.waiting
+        if (self.read_thumb is not None and not self.reader.waiting and not self.read_owned
                 and float(np.abs(th - self.read_thumb).mean()) < 0.003
                 and now - self.read_at < 2.0):
-            self.read_t = frame.t  # nothing moved: the last verdict stands
+            # Nothing moved on a screen the reader can't read: the verdict stands. (On a
+            # menu, a cursor move barely changes a thumbnail: those are always looked at.)
+            self.read_t = frame.t
             return
         settled = self.pending is not None and self.pending[0].t > self.read_t
         if not self.read_owned and not settled and now - self.read_at < 0.8:
@@ -748,7 +753,10 @@ class Session:
             return
         busy = self.agent_task is not None and not self.agent_task.done()
         if self.paused or busy or self.listening():
-            return  # said later, once they're done (nothing is marked as said)
+            # Said later, once they're done (nothing is marked as said); this look doesn't
+            # count, so the next frame gets a fresh one.
+            self.read_thumb = None
+            return
         line = self.reader.update(lk)
         opened = lk.readable and not self.read_owned
         self.read_owned, self.read_t = lk.readable, frame.t
@@ -756,7 +764,8 @@ class Session:
             self.read_prime, line = False, ""
             self.reader.model_read = False
         if ((line or opened) and self.narrating is not None and not self.narrating.done()
-                and self.narrating is not self.read_model):
+                and self.narrating is not self.read_model
+                and self.narrating is not self.describing):
             self.narrating.cancel()  # the model's line is about a screen that's gone
         if self.reader.model_read:
             # A text box that has finished typing but doesn't read cleanly: the model
@@ -772,7 +781,12 @@ class Session:
         cursor = {"focus", "turn"}
         interrupt = (parts <= cursor and self.read_last_parts <= cursor) or (
             bool(parts & {"text", "question"}) and bool(self.read_last_parts & {"text", "question"}))
-        self.read_last_parts = parts
+        # Only the reader's own line is cut off: an answer, the agent or a description
+        # the player asked for plays out.
+        playing = getattr(self.voice, "last_spoken", None)
+        if not self.voice.idle() and playing is not None and playing != self.read_last_line:
+            interrupt = False
+        self.read_last_parts, self.read_last_line = parts, clean_for_speech(line)
         self.narrator.recent.append(line)
         self.events.emit("say", text=line, source="reader", screen=lk.kind, ms=lk.ms,
                          latency=round(time.monotonic() - frame.t, 2))
@@ -1115,7 +1129,7 @@ class Session:
         try:
             frame = await self.grab_now()
             lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
-            line = ctscreen.answer(text, lk, self.reader.party)
+            line = ctscreen.answer(text, lk, self.reader.active or self.reader.party)
         except Exception as exc:  # noqa: BLE001  the agent answers instead
             self.events.emit("error", where="screen_answer", message=str(exc)[:300])
             return False
@@ -1440,7 +1454,8 @@ class Session:
             # whatever the back-off after quiet screens says.
             self.silent_streak, self.quiet_until, self.pending = 0, 0.0, None
             latest = getattr(self, "latest", None)
-            if latest is not None and getattr(self, "reader", None) and self._reads(latest):
+            if (not self.paused and latest is not None and getattr(self, "reader", None)
+                    and self._reads(latest)):
                 return  # the reader reads the new line the moment it has typed out
             with contextlib.suppress(Exception):
                 self._start_narration(await self._typed_out(), describe=self.paused)

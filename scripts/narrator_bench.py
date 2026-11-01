@@ -433,9 +433,8 @@ async def seq(args) -> None:
           f"({sum(w == 'reader' for *_x, w in said)} by the reader), {nw} words "
           f"({nw / max(span, 1) * 60:.0f} a minute), repeats {rep}, "
           f"cost ${muse.usage.cost_usd():.3f}")
-    with Path(args.out).open("w") as fh:
-        for t, x, who in said:
-            fh.write(json.dumps({"t": round(t, 2), "who": who, "said": x}) + "\n")
+    Path(args.out).write_text("".join(json.dumps({"t": round(t, 2), "who": who, "said": x}) + "\n"
+                                      for t, x, who in said))
 
 
 def main() -> None:

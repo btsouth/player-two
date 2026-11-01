@@ -365,10 +365,13 @@ class Reader:
     def __init__(self, forget_s: float = 30.0):
         self.forget_s = forget_s
         self.party: list[str] = []  # characters in menu order, as screens have shown them
+        self.active: list[str] = []  # the three in the party now, as a battle showed them
         self.last: list[str] = []  # the parts said by the last update
         self.model_read = False  # a whole text box that doesn't read cleanly: ask the model
         self.hp: dict[str, tuple[int, int]] = {}  # party HP as last read steadily
         self.hp_new: dict[str, tuple[int, int]] = {}  # and as the last look read it
+        self.text_since: float | None = None  # when a box that doesn't read cleanly came up
+        self.text_handed = False  # and whether the model has been asked to read it
         self.kind = "none"
         self.said: dict[str, str] = {}
         self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
@@ -432,6 +435,8 @@ class Reader:
         one there will be: text counts as whole when it ends like a sentence."""
         now = time.monotonic() if now is None else now
         self.learn_party(lk.names)
+        if lk.kind == "battle" and len(lk.names) >= 2:
+            self.active = list(lk.names)  # a fight shows exactly who is in the party
         self.last = []
         opened = lk.kind != self.kind
         if opened:
@@ -441,6 +446,15 @@ class Reader:
         if lk.kind == "none":
             return ""
         hits = self._hits(lk)
+        if lk.kind == "text" and lk.unsure:
+            if self.text_since is None:
+                self.text_since = now
+            if now - self.text_since > 2.5 and not self.text_handed:
+                # It never reads the same twice (misreads vary): the model reads it now.
+                self.said["text"] = lk.parts.get("text", "") or "?"
+                self.model_read = self.text_handed = True
+        else:
+            self.text_since, self.text_handed = None, False
         out = []
         for part in lk.order or ORDER:
             if part == "danger" and hits:
@@ -472,7 +486,9 @@ class Reader:
                 self.texts[value] = now
                 if part in lk.typing and lk.unsure:
                     self.said[part] = value
-                    self.model_read = True  # whole now, but read by the model
+                    if not self.text_handed:
+                        self.model_read = True  # whole now, but read by the model
+                        self.text_handed = part == "text"
                     continue
             self.said[part] = value
             if part == "danger":
@@ -492,6 +508,7 @@ ASK_HP = re.compile(r"\b(my|our|the party'?s?|every(one|body)'?s|the team'?s|(cr
                     r"robo|frog|ayla|magus)'?s?)\s+(hp|health|hit points)\b|\bhow('s| is| are) "
                     r"(every(one|body)|the party|we|my party|my team)\b|^(what'?s |what is )?"
                     r"(the |our )?(party )?(hp|health)\??$")
+COMMAND = re.compile(r"\b(if so|and then|then (heal|use|cast|attack|revive)|heal|revive|cure)\b")
 ASK_PARTY = re.compile(r"\bwho('s| is| are)? (is |are )?(in|with) (my|our|the) (party|team)\b|"
                        r"\bwho('s| is) with (me|us)\b|\bwho am i with\b")
 ASK_SAY = re.compile(r"\bwhat (does|did|do) (that|it|this|the \w+) say\b|\bread (that|it|this|"
@@ -511,9 +528,11 @@ def _plain(question: str) -> str:
 def asks(question: str) -> bool:
     """Whether this is a question the screen might answer by itself (not a command like
     "heal Frog's HP")."""
-    from .ack import QUESTION
+    from .ack import QUESTION, VERB
 
     q = _plain(question)
+    if COMMAND.search(q) or any(VERB.match(c.strip()) for c in re.split(r"[,.;?!]| and ", q)):
+        return False  # "is Frog's HP low? if so heal him": something to do, for the agent
     return bool(QUESTION.search(q)) and any(p.search(q) for p in (ASK_HP, ASK_PARTY, ASK_SAY,
                                                                   ASK_ITEMS, ASK_FOE))
 
@@ -526,6 +545,8 @@ def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
     q = _plain(question)
     st = lk.battle
     if ASK_SAY.search(q):
+        if lk.unsure:
+            return None  # it doesn't read cleanly here: the agent reads it with the model
         said = [lk.parts[p] for p in ("title", "question", "top", "text", "desc") if lk.parts.get(p)]
         if lk.kind == "choice" and lk.parts.get("focus"):
             said.append(lk.parts["focus"])
@@ -555,9 +576,9 @@ def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
                     continue
                 out.append(f"{m.name} is knocked out" if m.hp == 0 else
                            f"{m.name} {m.hp} of {m.hp_max} HP")
-            return ", ".join(out) + "."
+            return ", ".join(out) + "." if out else None
         hp = _menu_hp(lk)
-        if hp and len(party) >= len(hp):
+        if hp and len(party) >= len(hp) and not who:
             return ", ".join(f"{n} {h} of {m} HP" for n, (h, m) in zip(party, hp, strict=False)) + "."
         return None
     if ASK_ITEMS.search(q):

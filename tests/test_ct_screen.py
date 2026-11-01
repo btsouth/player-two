@@ -179,7 +179,8 @@ async def test_the_session_says_what_the_reader_reads_and_leaves_the_rest_to_the
     async def say(text, interrupt=True):
         said.append((text, interrupt))
 
-    s.voice = SimpleNamespace(say=say)
+    s.voice = SimpleNamespace(say=say, idle=lambda: True, last_spoken="")
+    s.read_last_line, s.describing = "", None
     s._tasks = set()
     s.agent = SimpleNamespace(_ct_steam=lambda f: True)
     looks = iter([look(focus="Equipment"), look(focus="Inventory"), look("none")])
@@ -277,6 +278,7 @@ async def test_a_box_the_reader_hands_to_the_model_isnt_cut_off_by_the_next_look
     s = Session.__new__(Session)
     s.reader, s.reading, s.read_t, s.read_owned = Reader(), None, 0.0, False
     s.read_thumb, s.read_prime, s.read_last_parts, s.read_model = None, False, set(), None
+    s.read_last_line, s.describing = "", None
     s.paused, s.agent_task, s.narrating = False, None, None
     s.utt, s.transcribing, s.hands_active = None, False, False
     s.narrator = SimpleNamespace(recent=deque(maxlen=4))
@@ -321,3 +323,35 @@ def test_party_hits_and_heals_are_said_once_the_numbers_are_steady():
     assert r.update(fight(660, 0), now=2.4) == ""  # the knockout isn't said twice
     r.update(fight(660, 200), now=2.7)
     assert r.update(fight(660, 200), now=3.0) == "Frog is back up."
+
+
+def test_a_box_that_never_reads_the_same_twice_goes_to_the_model_after_a_while():
+    r = Reader()
+    for i, t in enumerate((0, 0.5, 1.0, 1.5, 2.0, 2.6, 3.0, 3.5)):
+        box = look("text", typing=("text",), text=f"Lucca: Hey, Cr{i}no! Over here")
+        box.unsure = True
+        r.update(box, now=t)
+        if t < 2.5:
+            assert not r.model_read
+        elif t == 2.6:
+            assert r.model_read
+            r.model_read = False
+    assert not r.model_read  # once
+
+
+def test_screen_answers_never_guess():
+    from playertwo.ctsteam import Member, State
+
+    st = State(kind="command", actor="Crono", command="Attack",
+               party=[Member("Crono", 700, 780, 64, 64, "yellow"),
+                      Member("Frog", 494, 494, 65, 65, "white")])
+    lk = ctscreen.battle_look(st)
+    assert ctscreen.answer("what's Magus's HP?", lk) is None  # not in the party
+    assert ctscreen.answer("what's Frog's HP?", lk) == "Frog 494 of 494 HP."
+    assert not ctscreen.asks("is Frog's HP low? if so heal him")
+    box = look("text", typing=("text",), text="Lucca: Hey, Cr0no!")
+    box.unsure = True
+    assert ctscreen.answer("what does that say", box) is None  # the agent reads it
+    r = Reader()
+    r.update(lk)
+    assert r.active == ["Crono", "Frog"]
