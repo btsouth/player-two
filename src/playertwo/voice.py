@@ -215,7 +215,7 @@ class Voice:
             if first:
                 self.first_audio_ms.append((time.monotonic() - t0) * 1000)
                 first = False
-            self.mixer.push_speech(samples)
+            self.mixer.push_speech(samples, sentence)
 
     async def say_stream(self, deltas, interrupt: bool = True) -> str:
         """Speak streamed model text, starting as soon as the first sentence is complete."""
@@ -238,7 +238,7 @@ class Voice:
             if prev is not None:
                 await prev
             if gen == self._gen:
-                self.mixer.push_speech(samples)
+                self.mixer.push_speech(samples, chunk)
 
         chunks_left: list[asyncio.Task] = []
 

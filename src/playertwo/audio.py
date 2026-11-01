@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import threading
+import time
 from collections import deque
+from collections.abc import Callable
 
 import numpy as np
 
@@ -31,7 +33,13 @@ class Mixer:
     def __init__(self, sink: str = "device"):
         self._lock = threading.Lock()
         self._speech: deque[np.ndarray] = deque()
+        self._tags: deque[str] = deque()  # what each speech buffer says, for on_played
         self._speech_pos = 0
+        self._began = 0.0  # when the buffer playing now started (time.time())
+        # Told (text, began, ended, cut) as each line of speech finishes playing, from the
+        # sound card's thread: when it was really heard, for captions (a line can wait
+        # its turn behind another for seconds after it was queued).
+        self.on_played: Callable[[str, float, float, bool], None] | None = None
         self._cues: list[list] = []  # [stereo samples, position]
         self.idle = threading.Event()
         self.idle.set()
@@ -119,21 +127,38 @@ class Mixer:
         if self._stream is not None:
             self._stream.close(ignore_errors=True)
 
-    def push_speech(self, mono: np.ndarray) -> None:
+    def push_speech(self, mono: np.ndarray, tag: str = "") -> None:
+        """Queue speech; tag: the words it says (on_played hears when it played)."""
         if not self.playing():
             return  # nowhere to play it; queueing would leave everyone waiting on it
         with self._lock:
             self._speech.append(np.asarray(mono, dtype=np.float32))
+            self._tags.append(tag)
             self.idle.clear()
         if self.sink == "file":
             self.recorded.append(np.asarray(mono, dtype=np.float32))
             self.drain_offline()
 
     def clear_speech(self) -> None:
+        cut = None
         with self._lock:
+            if self._speech and self._speech_pos > 0 and self._tags:
+                cut = (self._tags[0], self._began, time.time(), True)
             self._speech.clear()
+            self._tags.clear()
             self._speech_pos = 0
             self.idle.set()
+        if cut is not None:
+            self._played([cut])
+
+    def _played(self, done: list[tuple[str, float, float, bool]]) -> None:
+        hook = self.on_played
+        if hook is None:
+            return
+        for tag, began, ended, cut in done:
+            if tag:
+                with contextlib.suppress(Exception):  # never break the sound card thread
+                    hook(tag, began, ended, cut)
 
     def cue(self, mono: np.ndarray, pan: float = 0.0, gain: float = 0.6) -> None:
         """Play a short sound. pan is -1 (left) to 1 (right)."""
@@ -149,15 +174,20 @@ class Mixer:
     def drain_offline(self) -> None:
         with self._lock:
             self._speech.clear()
+            self._tags.clear()
             self._speech_pos = 0
             self.idle.set()
 
     def _callback(self, out, frames, _time, _status) -> None:
         out.fill(0)
+        done: list[tuple[str, float, float, bool]] = []
+        now = time.time()
         with self._lock:
             filled = 0
             while filled < frames and self._speech:
                 buf = self._speech[0]
+                if self._speech_pos == 0:
+                    self._began = now + filled / RATE
                 take = min(frames - filled, len(buf) - self._speech_pos)
                 chunk = buf[self._speech_pos : self._speech_pos + take]
                 out[filled : filled + take, 0] += chunk
@@ -166,6 +196,8 @@ class Mixer:
                 self._speech_pos += take
                 if self._speech_pos >= len(buf):
                     self._speech.popleft()
+                    tag = self._tags.popleft() if self._tags else ""
+                    done.append((tag, self._began, now + filled / RATE, False))
                     self._speech_pos = 0
             if not self._speech:
                 self.idle.set()
@@ -179,6 +211,8 @@ class Mixer:
                     keep.append(c)
             self._cues = keep
         np.clip(out, -1.0, 1.0, out=out)
+        if done:
+            self._played(done)
 
 
 def tone(freq: float, ms: int, shape: str = "soft", volume: float = 0.5) -> np.ndarray:

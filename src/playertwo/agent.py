@@ -1226,15 +1226,28 @@ class Agent:
             look = plural(next(n for n in names if n.lower() in look.lower()))
         return Foes(count, look, time.monotonic())
 
-    async def what_we_fight(self, image, st: State) -> str | None:
+    async def what_we_fight(self, image, st: State,
+                            now: Callable[[], Awaitable[State | None]] | None = None
+                            ) -> str | None:
         """"What are we fighting?" in a fight: the enemies, counted by a look, and the
         party's HP in a few words ("Three Gargoyles. Crono's full, Frog's at 1 of 494,
-        Marle's full."). None when the look fails (the agent answers then)."""
+        Marle's full."). None when the look fails (the agent answers then). now: the
+        fight as it is when the count is back, for the HP: the count takes about 2 s,
+        and a fight that isn't paused goes on (live 3: "Everyone's at full health." said
+        after an enemy combo had dropped Marle to 1 HP, read from the frame the request
+        came with)."""
         foes = await self.count_foes(image, [m.name for m in st.party])
         if foes is None:
             return None
         self.foes = foes
-        return f"{foes.line()} {party_brief(st)}".strip()
+        brief = party_brief(st)
+        if now is not None:
+            # Never the old reading: an attack drawn over the numbers says nothing of HP.
+            fresh = None
+            with contextlib.suppress(Exception):
+                fresh = await now()
+            brief = party_brief(fresh) if fresh is not None else ""
+        return f"{foes.line()} {brief}".strip()
 
     def recount(self, image, party: list[str],
                 say: Callable[[str], Awaitable[None]] | None = None) -> None:

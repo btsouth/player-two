@@ -562,7 +562,7 @@ async def test_two_lines_at_once_are_said_one_after_the_other():
         return np.array([len(heard)], np.float32), sentence
 
     v._synth = lambda s: synth(s)
-    v.mixer = type("M", (), {"push_speech": lambda self, x: heard.append(x[1]),
+    v.mixer = type("M", (), {"push_speech": lambda self, x, tag="": heard.append(x[1]),
                              "clear_speech": lambda self: None})()
     await asyncio.gather(v.say("One. Two. Three.", interrupt=False),
                          v.say("Four. Five. Six.", interrupt=False))

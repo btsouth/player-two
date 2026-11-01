@@ -1009,6 +1009,31 @@ async def test_what_are_we_fighting_counts_them_and_gives_the_partys_hp(monkeypa
     assert foe_name(st) == ""  # the glove on an ally
 
 
+async def test_what_are_we_fighting_gives_hp_as_it_is_once_counted(monkeypatch):
+    """Live 3: "Three golden winged imps. Everyone's at full health." was said 2 s after
+    the request's frame, once an enemy combo had dropped Marle to 1 HP: the HP is read
+    again when the count is back, and an unreadable reading says nothing of HP."""
+    game = FakeCT(party(), enemies(), ready=(0,))
+    ag, _said = _agent(monkeypatch, game, _counting_muse([3, 3]))
+    asked_with = game.read(None)
+    later = game.read(None)
+    later.party[2].hp = 1
+
+    async def now():
+        return later
+
+    line = await ag.what_we_fight(PIC, asked_with, now=now)
+    assert line == "Three golden winged imps. Crono's full, Frog's full, Marle's at 1 of 430."
+
+    async def unreadable():
+        st = game.read(None)
+        st.party[0].hp = None
+        return st
+
+    line = await ag.what_we_fight(PIC, asked_with, now=unreadable)
+    assert line == "Three golden winged imps."
+
+
 def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
     from playertwo.battle import Intent, party_brief, progress
 

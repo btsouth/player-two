@@ -800,8 +800,9 @@ async def test_what_are_we_fighting_is_answered_from_a_count_and_the_party_box(m
     s.grab_now = grab_now
     asked = []
 
-    async def what_we_fight(image, st):
+    async def what_we_fight(image, st, now=None):
         asked.append([m.name for m in st.party])
+        assert now is not None and (await now()) is not None  # HP as it is when it's said
         return "Three Gargoyles. Everyone's at full health."
 
     s.agent = SimpleNamespace(_ct_steam=lambda f: True, history=[], what_we_fight=what_we_fight)

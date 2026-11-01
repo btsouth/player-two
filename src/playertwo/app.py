@@ -1402,8 +1402,14 @@ class Session:
             line = None
             if (ctscreen.ASK_FOE.search(ctscreen._plain(text)) and lk.battle is not None
                     and lk.battle.party and hasattr(self.agent, "what_we_fight")):
-                # The enemies, counted by a look, and the party's HP in a few words.
-                line = await self.agent.what_we_fight(frame.image, lk.battle)
+                # The enemies, counted by a look, and the party's HP in a few words, as
+                # it is once the count is back (the fight goes on meanwhile).
+                async def fight_now():
+                    f = await self.grab_now()
+                    return (await asyncio.to_thread(ctscreen.look, f.image,
+                                                    self.reader.party)).battle
+
+                line = await self.agent.what_we_fight(frame.image, lk.battle, now=fight_now)
             line = line or await asyncio.to_thread(ctscreen.answer, text, lk,
                                            self.reader.active or self.reader.party,
                                            self.reader.heard, frame.image)
@@ -1418,6 +1424,9 @@ class Session:
                          seconds=round(time.monotonic() - t0, 2))
         self.narrator.recent.append(line)
         self.agent.history.append(f"{text} -> {line}")
+        # Danger it gives ("Frog's at 1 of 494") isn't the reader's to say again.
+        with contextlib.suppress(Exception):
+            self.reader.just_said([line])
         await self.voice.say(line)
         return True
 
@@ -2041,6 +2050,16 @@ class Session:
 
         self.main = asyncio.current_task()
         self.stop_on_signals()
+        # When each line was really heard (it can wait its turn for seconds after it was
+        # queued): logged for captions that start and end with the speech.
+        loop = asyncio.get_running_loop()
+
+        def played(text: str, began: float, ended: float, cut: bool) -> None:
+            loop.call_soon_threadsafe(lambda: self.events.emit(
+                "spoken", text=text, began=round(began, 3), ended=round(ended, 3),
+                **({"cut": True} if cut else {})))
+
+        self.mixer.on_played = played
         # Open the control socket first, so a talk key pressed during start-up still lands.
         self.serving = asyncio.Event()
         tasks = [asyncio.create_task(self.serve()), asyncio.create_task(self.track_status())]
