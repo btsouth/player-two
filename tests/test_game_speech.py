@@ -16,6 +16,7 @@ from playertwo.gameaudio import (
     GameEars,
     SpeechTrack,
     game_streams,
+    known_voicing,
     voiced_hint,
     window_identity,
 )
@@ -97,7 +98,20 @@ def test_window_identity_from_hyprland():
     assert window_identity(None) == (None, "")
 
 
+def test_a_stream_that_stops_mid_line_isnt_left_speaking():
+    tr = SpeechTrack()
+    t = feed(tr, 1.0, 0.9, 0.0)
+    assert tr.speaking() and tr.speaking(t + 0.5)
+    assert not tr.speaking(t + 2.0)  # no frames since: paused, or its listener is gone
+    tr.close()  # the stream ended
+    assert not tr.speaking() and tr.segments[0][1] is not None
+    assert not tr.heard_between(t + 1.0, t + 5.0)
+
+
 def test_game_packs_say_whether_lines_are_voiced():
+    assert known_voicing("CHRONO TRIGGER") == "none"
+    assert known_voicing("Chrono Trigger (SNES)") == "none"
+    assert known_voicing("XCOM 2") == ""
     assert voiced_hint("- Battles: ...\n- Voiced: none (text boxes only)\n") == "none"
     assert voiced_hint("Voiced: all") == "all"
     assert voiced_hint("- voiced: yes") == "all"
@@ -207,6 +221,9 @@ def test_subtitles_the_game_is_saying_arent_read_and_unvoiced_text_is():
 def test_narration_waits_while_the_game_talks_and_for_a_voice_to_start():
     f = frame(time.monotonic() - 2.0)
     assert ears_session(Ears(speaking=True))._hold_for_game(f, cut=True)
+    # A still screen waits only so long: singing in the music mustn't hide a menu.
+    assert not ears_session(Ears(speaking=True))._hold_for_game(
+        frame(time.monotonic() - 3.5), cut=False)
     assert not ears_session(Ears())._hold_for_game(f, cut=False)
     fresh = frame()
     assert ears_session(Ears(ever=True))._hold_for_game(fresh, cut=False)  # a voice may come
@@ -223,7 +240,7 @@ def test_narration_waits_while_the_game_talks_and_for_a_voice_to_start():
 def test_maybe_narrate_keeps_the_screen_until_the_game_stops_talking():
     ears = Ears(speaking=True)
     s = ears_session(ears)
-    s.pending = (frame(time.monotonic() - 2.0), 0.5)
+    s.pending = (frame(time.monotonic() - 1.0), 0.5)
     s.narrating = None
     s.utt, s.transcribing, s.hands_active = None, False, False
     s.error_until = s.soft_until = s.quiet_until = 0.0
@@ -279,3 +296,46 @@ def test_ears_listen_to_the_games_stream_as_it_plays(tmp_path, monkeypatch):
     assert list(ears.streams) == [] and heard  # stopped, and it heard the game speak
     (start, end), = ears.tracks[0].segments
     assert 0.9 < start < 1.3 and 1.9 < end < 2.3
+
+
+def held_session(ad: bool):
+    s = ears_session(Ears(speaking=True))
+    s.GAP_MAX_S = 0.2
+    s.mixer = Mixer(sink="test")
+    s.mixer.push_speech(np.zeros(100, np.float32), tag="narration")
+    stopped = []
+    s.voice = SimpleNamespace(stop=lambda: (stopped.append(1), s.mixer.clear_speech()))
+    s.events = SimpleNamespace(emit=lambda *a, **k: None)
+    s.holding, s.holds, s.narration_ad = None, 0, ad
+    return s, stopped
+
+
+def test_held_narration_restarts_a_few_times_at_most_and_stale_description_is_dropped():
+    async def go():
+        s, stopped = held_session(ad=True)
+        s._game_spoke()
+        assert s.mixer.held
+        await s.holding  # the game talks past the limit: the description is dropped
+        assert stopped and not s.mixer.held
+        s, stopped = held_session(ad=True)
+        for _ in range(s.MAX_HOLDS):
+            s._game_spoke()
+            s.holding.cancel()
+            await asyncio.sleep(0)
+            s.holding = None
+        s._game_spoke()  # one hold too many: short gaps, the line would restart forever
+        assert stopped
+
+    asyncio.run(go())
+
+
+def test_an_answer_that_replaced_held_narration_is_never_cut_off():
+    async def go():
+        s, stopped = held_session(ad=True)
+        s._game_spoke()
+        s.mixer.clear_speech()  # the player asked something: its answer takes the lane
+        s.mixer.push_speech(np.zeros(100, np.float32))
+        await s.holding
+        assert not stopped and s.mixer.current_tag() == ""
+
+    asyncio.run(go())

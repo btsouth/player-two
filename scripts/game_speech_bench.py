@@ -145,12 +145,13 @@ def score(clips, **kw) -> dict:
 
 
 def policy(clips, gated: bool = True, line_s: float = 2.0, every_s: float = 3.0,
-           most_s: float = 4.0) -> dict:
-    """Narration played over each clip as the session plays it: a line of `line_s` seconds
-    wants to start every `every_s` seconds (one at a time). Gated, it starts only when the
-    game isn't speaking, stops the moment speech starts and begins again after it, and is
-    dropped after `most_s` seconds without a gap. Ungated, it just plays. How much of what
-    was played overlapped the game's real speech, and how long lines waited."""
+           most_s: float = 3.0, max_holds: int = 2) -> dict:
+    """Audio description played over each clip as the session plays it: a line of
+    `line_s` seconds wants to start every `every_s` seconds (one at a time). Gated, it
+    starts only when the game isn't speaking, stops the moment speech starts and begins
+    again after it, and is dropped after `most_s` seconds without a gap or when it would be
+    held more than `max_holds` times. Ungated, it just plays. How much of what was played
+    overlapped the game's real speech, and how long lines waited."""
     played = over = 0.0
     lines = dropped = 0
     waits: list[float] = []
@@ -160,14 +161,14 @@ def policy(clips, gated: bool = True, line_s: float = 2.0, every_s: float = 3.0,
             continue
         talked = [0.0] * len(spans)
         track = SpeechTrack(keep_s=1e9)
-        state, pos, since, due = "idle", 0.0, 0.0, 1.0
+        state, pos, since, due, holds = "idle", 0.0, 0.0, 1.0, 0
         for i, v in enumerate(p):
             t = (i + 1) * FRAME_S
             was = track.speaking()
             track.push(t, float(v))
             talking = track.speaking()
             if state == "idle" and t >= due:
-                state, since, pos = "waiting", t, 0.0
+                state, since, pos, holds = "waiting", t, 0.0, 0
                 lines += 1
             if state == "waiting":
                 if not gated or not talking:
@@ -176,8 +177,11 @@ def policy(clips, gated: bool = True, line_s: float = 2.0, every_s: float = 3.0,
                 elif t - since > most_s:
                     state, dropped, due = "idle", dropped + 1, t + every_s
             elif state == "playing":
-                if gated and talking and not was:
+                if gated and talking and not was and holds >= max_holds:
+                    state, dropped, due = "idle", dropped + 1, t + every_s
+                elif gated and talking and not was:
                     state, held_at, pos = "held", t, 0.0  # the sentence starts over after
+                    holds += 1
                 else:
                     pos += FRAME_S
                     played += FRAME_S

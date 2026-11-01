@@ -59,6 +59,7 @@ class SpeechTrack:
         self.keep_s = keep_s
         self.on_start = on_start
         self.run = 0  # frames in a row at or above `on`, while not speaking
+        self.lock = threading.Lock()  # pushed from a listening thread, read from the loop
         self.active = False
         self.last_voiced = -1e9  # end of the last frame that kept speech going
         # [start, end]; end is None while it goes on.
@@ -66,6 +67,10 @@ class SpeechTrack:
         self.t = -1e9  # the last frame's time
 
     def push(self, t: float, p: float) -> None:
+        with self.lock:
+            self._push(t, p)
+
+    def _push(self, t: float, p: float) -> None:
         self.t = t
         if not self.active:
             self.run = self.run + 1 if p >= self.on else 0
@@ -86,23 +91,40 @@ class SpeechTrack:
                 and t - self.segments[0][1] > self.keep_s:
             self.segments.popleft()
 
-    def speaking(self) -> bool:
-        return self.active
+    def close(self) -> None:
+        """The stream ended: speech going on ends at its last voiced frame."""
+        with self.lock:
+            if self.active:
+                self.active = False
+                self.segments[-1][1] = self.last_voiced
+
+    def speaking(self, now: float | None = None) -> bool:
+        """Speaking now. With `now`, only if frames are still coming in: a stream that
+        went quiet without ending (paused, its listener gone) isn't left speaking."""
+        with self.lock:
+            if now is not None and now - self.t > self.hang_s + 0.5:
+                return False
+            return self.active
 
     def quiet_for(self, now: float) -> float:
         """Seconds since the game last spoke (0 while it speaks; very long if never)."""
-        if self.active:
-            return 0.0
-        if not self.segments:
-            return 1e9
-        return max(0.0, now - self.segments[-1][1])
+        with self.lock:
+            if self.active:
+                return 0.0
+            if not self.segments:
+                return 1e9
+            return max(0.0, now - self.segments[-1][1])
 
     def heard_between(self, a: float, b: float) -> bool:
-        """Whether there was speech at any moment from a to b."""
-        return any(start <= b and (end is None or end >= a) for start, end in self.segments)
+        """Whether there was speech at any moment from a to b. Speech still going counts
+        up to the last frame heard."""
+        with self.lock:
+            return any(start <= b and (self.t if end is None else end) >= a
+                       for start, end in self.segments)
 
     def ever(self) -> bool:
-        return bool(self.segments)
+        with self.lock:
+            return bool(self.segments)
 
 
 # Finding the game's sound stream
@@ -163,7 +185,9 @@ def _comm(pid: int) -> str:
 
 # Program names too common to tie a stream to a game by name alone.
 GENERIC = {"python", "python3", "wine", "wine64", "wine-preloader", "wine64-preloader",
-           "java", "mono", "steam", "sh", "bash", "pw-play", "paplay", "aplay", "ffplay"}
+           "java", "mono", "steam", "sh", "bash", "pw-play", "paplay", "aplay", "ffplay",
+           "chromium", "chrome", "firefox", "brave", "vivaldi", "opera", "msedge",
+           "steamwebhelper", "electron"}
 
 
 def _ancestors(pid: int, parent=_parent, most: int = 32) -> list[int]:
@@ -248,6 +272,7 @@ class _Stream:
             if not data or len(data) < FRAME_BYTES:
                 break
             self.feed(data, self.clock())
+        self.track.close()  # the stream ended: whatever was being said ended with it
 
     def feed(self, data: bytes, t: float) -> None:
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
@@ -266,6 +291,7 @@ class _Stream:
             self.proc.terminate()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 self.proc.wait(timeout=1)
+        self.track.close()
 
 
 def can_listen() -> bool:
@@ -295,7 +321,8 @@ class GameEars:
         self.streams: dict[int, _Stream] = {}
         self.failed: dict[int, float] = {}  # streams parec couldn't record, until when
         self.tracks: list[SpeechTrack] = []  # every stream's, kept a while after it ends
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()  # streams and tracks, read from the event loop
+        self.scan_lock = threading.Lock()  # one rescan (or stop) at a time
         self.stopping = threading.Event()
         self.thread: threading.Thread | None = None
         self.hearing = False  # a game stream is being listened to
@@ -314,11 +341,12 @@ class GameEars:
 
     def stop(self) -> None:
         self.stopping.set()
-        with self.lock:
-            streams = list(self.streams.values())
-            self.streams.clear()
-        for s in streams:
-            s.stop()
+        with self.scan_lock:  # after a rescan in progress, so nothing it starts is left
+            with self.lock:
+                streams = list(self.streams.values())
+                self.streams.clear()
+            for s in streams:
+                s.stop()
 
     def _run(self) -> None:
         while not self.stopping.is_set():
@@ -327,27 +355,36 @@ class GameEars:
             self.stopping.wait(self.RESCAN_S)
 
     def _rescan(self) -> None:
-        pid, app = self.target()
-        want = set(game_streams(sink_inputs(), pid, app)) if (pid or app) else set()
-        now = self.clock()
-        with self.lock:
-            for idx in [i for i, s in self.streams.items() if i not in want or not s.alive()]:
-                s = self.streams.pop(idx)
-                if not s.alive() and now - s.started < 3.0:
-                    self.failed[idx] = now + 30.0  # can't record it: don't retry every scan
-                s.stop()
-            for idx in want - set(self.streams):
-                if self.failed.get(idx, 0.0) > now:
-                    continue
-                track = SpeechTrack(on_start=self._started)
-                s = _Stream(idx, self.detector_factory(), track, self.clock)
-                s.start()
-                self.streams[idx] = s
-                self.tracks.append(track)
+        with self.scan_lock:
+            if self.stopping.is_set():
+                return
+            pid, app = self.target()
+            want = set(game_streams(sink_inputs(), pid, app)) if (pid or app) else set()
             now = self.clock()
-            live = {id(s.track) for s in self.streams.values()}
-            self.tracks = [t for t in self.tracks if id(t) in live or now - t.t < 120.0]
-            self.hearing = bool(self.streams)
+            with self.lock:
+                gone = [self.streams.pop(i) for i in list(self.streams)
+                        if i not in want or not self.streams[i].alive()]
+                new = [i for i in want - set(self.streams) if self.failed.get(i, 0.0) <= now]
+            # Starting and stopping recorders (and loading a detector) happen outside the
+            # lock the event loop reads through, so it never waits on them.
+            for s in gone:
+                if not s.alive() and now - s.started < 3.0:
+                    self.failed[s.index] = now + 30.0  # can't record it: not every scan
+                s.stop()
+            started = []
+            for idx in new:
+                s = _Stream(idx, self.detector_factory(), SpeechTrack(on_start=self._started),
+                            self.clock)
+                s.start()
+                started.append(s)
+            now = self.clock()
+            with self.lock:
+                for s in started:
+                    self.streams[s.index] = s
+                    self.tracks.append(s.track)
+                live = {id(s.track) for s in self.streams.values()}
+                self.tracks = [t for t in self.tracks if id(t) in live or now - t.t < 120.0]
+                self.hearing = bool(self.streams)
 
     def _started(self, start: float) -> None:
         if self.on_speech is not None:
@@ -357,8 +394,9 @@ class GameEars:
     # What was heard (any of the game's streams)
 
     def speaking(self) -> bool:
+        now = self.clock()
         with self.lock:
-            return any(t.speaking() for t in self.tracks)
+            return any(t.speaking(now) for t in self.tracks)
 
     def quiet_for(self) -> float:
         now = self.clock()
@@ -377,6 +415,16 @@ class GameEars:
 # Whether a game's lines are spoken
 
 VOICED_HINT = re.compile(r"(?im)^\s*[-*]?\s*voiced\s*:\s*(all|some|none|yes|no)\b")
+
+
+# Games known to have no voice acting at all, when no pack says otherwise: their text is
+# always read, and nothing is listened to.
+UNVOICED = ("chrono trigger",)
+
+
+def known_voicing(game: str) -> str:
+    name = re.sub(r"\s+", " ", (game or "").lower()).strip()
+    return "none" if any(name.startswith(g) for g in UNVOICED) else ""
 
 
 def voiced_hint(pack: str) -> str:
