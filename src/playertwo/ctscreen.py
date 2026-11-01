@@ -215,8 +215,24 @@ def _block_by_order(lines: list[list[Run]], tip: tuple[int, int],
     return best if votes[best] >= 0.6 * sum(votes.values()) else None
 
 
+def _reread(img: np.ndarray, tip: tuple[int, int]) -> tuple[str, Run | None]:
+    """The entry right of a hand, read again on its own: across the whole screen its line
+    can share a band with the next panel, and coloured text on bright metal (usable techs
+    and items, green) needs a lower bar."""
+    box = (tip[0] + 4, max(0, tip[1] - 90), min(CANVAS[0], tip[0] + 1400),
+           min(CANVAS[1], tip[1] + 90))
+    for kw in ({}, {"margin": 40, "ring_bg": True}):
+        for row in runs_in(ctsteam.lib(), img, box, local=True, **kw):
+            for r in row:
+                if abs(r.y - tip[1]) < 36 and r.x0 - tip[0] < 420:
+                    w = snap(r.text, VOCAB, 0.7)
+                    if w in VOCAB:
+                        return w, r
+    return "", None
+
+
 def _hand_entry(lines: list[list[Run]], tip: tuple[int, int],
-                party: list[str] = ()) -> tuple[str, Run | None]:
+                party: list[str] = (), img: np.ndarray | None = None) -> tuple[str, Run | None]:
     """What a hand points at, and the run it was read from (None when inferred)."""
     row = sorted((r for row in lines for r in row if abs(r.y - tip[1]) < 36
                   and -30 <= r.x0 - tip[0] < 1400 and plausible(r)), key=lambda r: r.x0)
@@ -225,6 +241,10 @@ def _hand_entry(lines: list[list[Run]], tip: tuple[int, int],
         w = snap(near[0].text, VOCAB, 0.7)
         if w in VOCAB:
             return w, near[0]
+    if img is not None:
+        w, r = _reread(img, tip)
+        if w:
+            return w, r
     w = _column_entry(lines, tip) or _block_name(lines, tip) or (
         _block_by_order(lines, tip, list(party)) if party else None)
     if w:
@@ -246,7 +266,7 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     lk.names = [n for _y, n in blocks]
     question = next((r for r in good if clean(r.text).endswith("?")), None)
     tips = [(h[0] + h[2], h[1] + h[3] // 2) for h in hands]
-    found = [(tip, *_hand_entry(lines, tip, party)) for tip in tips]
+    found = [(tip, *_hand_entry(lines, tip, party, img)) for tip in tips]
     found = [f for f in found if f[1]]
     if question is not None:
         below = [f for f in found if f[0][1] > question.y and abs(f[0][0] - question.x0) < 900]

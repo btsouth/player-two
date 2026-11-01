@@ -145,10 +145,11 @@ def test_dialogue_is_read_in_its_bigger_type_with_the_speaker():
     assert lk.kind == "text" and not lk.unsure, lk.parts
     assert text.startswith("Frog: ") and text.endswith(".") and len(text.split()) >= 10
     assert Reader().update(lk, first=True) == text
-    # A menu whose highlighted entry doesn't read isn't taken for a text box.
-    for name in ("140416-04", "170901-08"):
-        assert ctscreen.look(cv2.imread(str(FRAMES / f"{name}.jpg")), PARTY).kind == "none"
-    assert ctscreen.look(cv2.imread(str(FRAMES / "170948-24.jpg")), PARTY).focus == "Lucca"
+    # A menu isn't taken for a text box; the green (usable) tech under the hand is read
+    # again on its own when the whole-screen read misses it.
+    for name, focus in (("140416-04", "Slurp"), ("170901-08", "Aura"), ("170948-24", "Lucca")):
+        lk = ctscreen.look(cv2.imread(str(FRAMES / f"{name}.jpg")), PARTY)
+        assert (lk.kind, lk.focus) == ("menu", focus)
 
 
 @needs_frames
