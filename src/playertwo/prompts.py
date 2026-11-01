@@ -129,8 +129,9 @@ walking in (not a menu, a text box, a fight or a title), say what kind of place 
 a few words, then one short sentence of what it's like, from the picture: the light, \
 colours and mood ("A rocky mountain ledge. Grey crags in a pale haze."). Only what you're \
 sure of: leave out anything you can't make out, and the time of day, weather or sky \
-unless the picture clearly shows them (a dark backdrop isn't night). At most twenty \
-words; no names unless shown. Anything else on screen is said as usual."""
+unless the picture clearly shows them (a dark backdrop isn't night), and nothing about \
+the art style ("pixel"). At most twenty words; no names unless shown. Anything else on \
+screen is said as usual."""
 
 # Just after Player Two said a surveyed place's name and what it's like.
 PLACE_SAID = """\
