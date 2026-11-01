@@ -170,6 +170,23 @@ class TestAgent:
         result = run(agent.run("what are we fighting?"))
         assert said == ["Two gold imps."] and result.outcome == "Two gold imps."
 
+    def test_take_me_back_outside_goes_out_with_no_model_turn(self):
+        """Live: the model went out, then went back into the fair it had just left."""
+        agent, _, said, _, muse = self.make([])
+        acted = []
+
+        async def inside(image):
+            return ("rooms", "here")
+
+        async def act(name, args):
+            acted.append((name, args))
+            return "arrived: went out to outside, by Leene Square (4 s)"
+
+        agent._inside, agent._act = inside, act
+        result = run(agent.run("Take me back outside."))
+        assert acted == [("go_to_exit", {"to": "outside"})] and muse.seen == []
+        assert said == ["We're outside."] and result.outcome == "We're outside."
+
     def test_running_out_of_steps_asks_for_where_things_stand(self):
         agent, _, said, _, muse = self.make(
             [[("press", {"buttons": ["up"]})]] * 2 + [[("finish", {"text": "Got halfway."})]])

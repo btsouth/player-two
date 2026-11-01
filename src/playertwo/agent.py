@@ -403,6 +403,9 @@ with its middle in thousandths of the picture's width and height, or {"epoch": n
 
 
 # A plain request to go somewhere: on a world map the atlas knows, it's walked at once.
+OUT = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|us) |"
+                 r"(?:let'?s |please )?(?:go|head|walk) )(?:back )?(?:out|outside)"
+                 r"(?: of here| again)?")
 TRIP = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|us) |"
                   r"(?:let'?s |please )?(?:go|head|walk|run) )(?:back )?(?:over )?"
                   r"(?:in)?to (?P<place>.{3,60})")
@@ -1972,6 +1975,22 @@ class Agent:
                 return run
             frame = await self.grab()
             tried = f"go_to_place({trip.group('place')!r}) was tried already: {result}\n\n"
+        out = OUT.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
+        if out and not trip and await self._inside(frame.image) is not None:
+            # "Take me back outside" inside a surveyed place: out now, no model turn (live,
+            # once the model went out and then back into the fair).
+            result = await self._act("go_to_exit", {"to": "outside"})
+            run.steps.append(Step("go_to_exit", {"to": "outside"}, time.monotonic() - t0,
+                                  result))
+            if result.startswith("arrived") or self.cancelled:
+                if result.startswith("arrived"):
+                    await self._speak("We're outside.")
+                run.outcome = self.said[-1] if self.said else result
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
+            frame = await self.grab()
+            tried += f"go_to_exit(outside) was tried already: {result}\n\n"
         # Chrono Trigger on Steam in a fight: pause it while the model thinks.
         self._battle = await self._battle_on(frame)
         if self._battle is not None:
