@@ -83,6 +83,9 @@ def clean(text: str) -> str:
     """Pixel-font look-alikes in running text."""
     t = " ".join(text.split())
     t = re.sub(r"(?<=[a-z])9(?=$|\s)", "?", t)  # "game9" is "game?"
+    # Letters that came apart on a busy battle bar: k's leg ("Attacki"), m's leg ("arri").
+    t = re.sub(r"(?<=[a-z]ck)i\b", "", t)
+    t = re.sub(r"\barri\b", "arm", t)
     return re.sub(r"\bTes\b", "Yes", t)
 
 

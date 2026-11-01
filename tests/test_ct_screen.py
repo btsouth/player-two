@@ -574,3 +574,9 @@ def test_a_choice_says_its_question_then_the_cursor_in_one_line():
                  focus="Yes selected, or No")
     moved.order = box.order
     assert r.update(moved, now=0.6) == "Yes selected, or No."
+
+
+def test_letters_that_come_apart_on_the_battle_bar_are_put_back():
+    assert ctscreen.clean("Doublehand Attacki - Dark Plasma") == "Doublehand Attack - Dark Plasma"
+    assert ctscreen.clean("Defense arri restores head!") == "Defense arm restores head!"
+    assert ctscreen.clean("Barrier Sphere") == "Barrier Sphere"
