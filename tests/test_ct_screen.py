@@ -558,6 +558,8 @@ def test_dialogue_from_a_new_game_reads_whole():
     assert text("012350-03").endswith("...")  # a second line ending in an ellipsis is kept
     assert text("011721-10").endswith("of Life.")  # specks on the box frame aren't words
     assert text("012342-00").endswith("see-") and finished(text("012342-00"))
+    lk = ctscreen.look(cv2.imread(str(FRAMES / "012342-00.jpg")), PARTY)
+    assert Reader().update(lk, first=True).endswith("go see...")  # it trails off
     assert not finished(text("012348-02"))  # still typing
 
 

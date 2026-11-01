@@ -610,7 +610,15 @@ class Reader:
         self.last = [p for p in (lk.order or ORDER) if self.said.get(p) and lk.parts.get(p) in out]
         if out and lk.kind == "menu" and lk.focus in MAIN and opened:
             out.insert(0, "Menu")
-        return " ".join(s if s[-1] in ".?!" else s + "." for s in out)
+        return " ".join(_ended(s) for s in out)
+
+
+def _ended(s: str) -> str:
+    """A line ending like a sentence when spoken; a box that breaks off with a dash trails
+    off."""
+    if re.search(r"[a-z]-$", s):
+        return s[:-1] + "..."
+    return s if s[-1] in ".?!" else s + "."
 
 
 # ---------------------------------------------------------------------------------------
