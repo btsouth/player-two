@@ -118,6 +118,16 @@ def test_list_rows_and_greyed_entries():
     assert st.usable is True
 
 
+@pytest.mark.skipif(not (LIVE / "btrace" / "004751-1494.jpg").exists(),
+                    reason="no Giga Gaia trace frame")
+def test_the_hand_on_a_used_up_items_empty_slot():
+    st = ctsteam.read(cv2.imread(str(LIVE / "btrace" / "004751-1494.jpg")))
+    assert st.kind == "list"
+    rows = [r for r in st.entries if r]
+    assert rows == [["Potion", "Mid-Potion"], ["", "Mid-Ether"], ["Panacea", "Athenian Water"]]
+    assert st.entry == "" and st.entry_rc == (2, 0)
+
+
 def test_target_glove_and_the_enemy_name_in_the_bar():
     st = ctsteam.read(load("140314-00"))
     assert st.kind == "target" and st.top == "Gargoyle" and len(st.gloves) == 1

@@ -34,6 +34,11 @@ TOP = (390, 16, 2180, 132)  # the message / description bar
 BOTTOM = (200, 1150, 2380, 1438)  # the command, list and party windows
 PAUSE_BOX = (980, 520, 1580, 720)  # where "Pause" shows
 SLOT_TEXT_X = (309, 723, 1138)  # where "Attack" starts in each party slot's command window
+# Tech and item lists have two columns: text starts near x 310 (left) and 1160 to 1330
+# (right). An entry, or the hand, left of this is in the left column; text starting past
+# LIST_END_X is an item count (it can misread as letters, "50" as "5u").
+LIST_SPLIT_X = 750
+LIST_END_X = 1700
 COMMANDS = ("Attack", "Tech", "Item")  # row order; "Combo" stands in for Tech
 NAMES = ("Crono", "Marle", "Lucca", "Robo", "Frog", "Ayla", "Magus")
 ITEMS = ("Potion", "Mid-Potion", "Hi-Potion", "Full Potion", "Ether", "Mid-Ether",
@@ -125,7 +130,7 @@ class State:
     actor_col: int | None = None  # the slot whose window has the hand
     command: str = ""  # Attack, Tech or Item under the hand ("Combo" reads as Tech)
     combo: bool = False  # the second command says Combo
-    entries: list[list[str]] = field(default_factory=list)  # list rows in view
+    entries: list[list[str]] = field(default_factory=list)  # list rows in view ("" empty slot)
     usable_rows: list[list[bool]] = field(default_factory=list)
     entry: str = ""
     entry_rc: tuple[int, int | None] | None = None
@@ -252,16 +257,26 @@ def read(image, full: bool = True) -> State:
                 st.actor_col = _slot(r.x0)
     elif left and not st.party and st.hand is not None:
         st.kind = "list"
+        hand_col = 0 if st.hand[0] < LIST_SPLIT_X else 1
         for ri, row in enumerate(left):
-            names = _names(row)
-            st.entries.append([snap(r.text, VOCAB) for r in names])
-            st.usable_rows.append([r.colour != "grey" for r in names])
-            if st.hand:
-                for ci, r in enumerate(names):
-                    if _near(r, st.hand):
-                        st.entry = snap(r.text, VOCAB)
-                        st.usable = r.colour != "grey"
-                        st.entry_rc = (ri, ci)
+            # Each entry in its column by where it starts, so a used-up item's empty slot
+            # keeps the next entry in the right column ("", "Mid-Ether").
+            slots: list = []
+            for r in _names(row):
+                if r.x0 >= LIST_END_X:
+                    continue
+                c = 0 if r.x0 < LIST_SPLIT_X else 1
+                slots += [None] * (c + 1 - len(slots))
+                slots[c] = r
+            st.entries.append([snap(r.text, VOCAB) if r else "" for r in slots])
+            st.usable_rows.append([bool(r) and r.colour != "grey" for r in slots])
+            if slots and abs(row[0].y - st.hand[1]) < 30:
+                # The hand's row, even when its own slot is empty (nothing left of that
+                # item): the hand is still there and can move from it.
+                r = slots[hand_col] if hand_col < len(slots) else None
+                st.entry = snap(r.text, VOCAB) if r else ""
+                st.usable = (r.colour != "grey") if r else None
+                st.entry_rc = (ri, hand_col)
     if st.kind == "list" and not any(e in VOCAB and not e.startswith("[")
                                      for row in st.entries for e in row):
         # Not a battle list (a text box with a choice, a field menu): no known names.
@@ -271,7 +286,7 @@ def read(image, full: bool = True) -> State:
         # The column the hand is in says whose command it is. The yellow name can't be
         # trusted alone: a critical-HP actor is drawn grey, and pausing dims every name.
         st.actor = st.party[st.actor_col].name
-    if st.gloves and not (st.kind == "list" and st.entry):
+    if st.gloves and not (st.kind == "list" and st.entry_rc is not None):
         # Gloves over the field while the hand is still in a list: a preview of who a
         # combo or group tech would hit, not the target picker.
         st.kind = "target"
@@ -314,8 +329,9 @@ def describe(st: State) -> str:
                      + (f" (also ready: {', '.join(r for r in ready if r != st.actor)})"
                         if len(ready) > 1 else ""))
     elif st.kind == "list":
-        rows = " | ".join(", ".join(r) for r in st.entries)
-        parts.append(f"a list is open ({rows}), the hand on {st.entry or 'nothing readable'}")
+        rows = " | ".join(", ".join(e or "(empty)" for e in r) for r in st.entries if r)
+        on = st.entry or ("an empty slot" if st.entry_rc else "nothing readable")
+        parts.append(f"a list is open ({rows}), the hand on {on}")
     elif st.kind == "target":
         parts.append("choosing a target" + (f" ({st.top})" if st.top else ""))
     if st.top and st.kind != "target":

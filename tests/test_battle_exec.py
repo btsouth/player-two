@@ -273,6 +273,20 @@ async def test_revive_navigates_the_two_column_list_from_where_it_was_left():
     assert game.log[:6] == ["down", "down", "a", "right", "a", "a"]
 
 
+async def test_a_revive_starts_from_a_used_up_items_empty_slot():
+    # Live, Giga Gaia 2026-11-01: an item ran out, the hand was left on its empty slot
+    # and every revive stopped at "can't see the hand in the list" until the party fell.
+    p = party()
+    p[0].hp = 0
+    items = [*ITEMS[:6], "", *ITEMS[6:]]  # an empty slot left of Lapis
+    game = FakeCT(p, enemies(), ready=(2,), items=items)
+    game.memory["item"] = 6
+    out = await executor(game).act(Intent("Marle", "item", "Athenian Water", "Crono"))
+    assert out.ok, out.text
+    assert p[0].hp == 100
+    assert game.log[:7] == ["down", "down", "a", "up", "right", "a", "a"]
+
+
 async def test_after_a_pause_start_and_the_command_go_in_one_burst():
     game = FakeCT(party(), enemies(), ready=(0, 2))
     ex = executor(game)
