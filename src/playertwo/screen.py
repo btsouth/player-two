@@ -170,6 +170,10 @@ class HyprlandCapture(Capture):
                                                timeout=3, stderr=subprocess.DEVNULL)
                 if data:
                     img = Image.open(io.BytesIO(data))
+                    # Decoded here, once: a lazily opened picture read by two threads at
+                    # once (the model's copy and the room match) comes out "truncated"
+                    # for both (live: "what does it look like?" failed every time).
+                    img.load()
                     self._blank_check(img, sid, now)
                     self._window_ok = True
                     return Frame(img, now, label=self.target.get("title", ""))
@@ -206,6 +210,7 @@ class HyprlandCapture(Capture):
         cmd = ["grim", "-t", "ppm"] + (["-o", self.output] if self.output else []) + ["-"]
         data = subprocess.check_output(cmd, timeout=3)
         img = Image.open(io.BytesIO(data))
+        img.load()  # decoded once here, not by two threads at once later
         self._blank_check(img, self.target.get("stableId") if self.target else None, now)
         return Frame(img, now)
 

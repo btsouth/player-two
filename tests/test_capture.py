@@ -127,3 +127,36 @@ def test_a_hyprland_that_cant_capture_a_window_shows_the_monitor_without_retryin
         assert cap.grab().label == ""
         clock[0] += 0.5
     assert sum("-T" in c for c in calls) == 1
+
+
+
+def test_a_frame_is_decoded_before_two_threads_read_it(monkeypatch):
+    """Live 3: "what does it look like?" hands the new frame to the model and to the room
+    match at once; a lazily opened picture read by two threads at the same time came out
+    "image file is truncated" for both, every time."""
+    import threading
+
+    big = io.BytesIO()
+    Image.new("RGB", (1280, 720), (40, 80, 120)).save(big, "PPM")
+    monkeypatch.setattr(screen.subprocess, "check_output", lambda cmd, **kw: big.getvalue())
+    monkeypatch.setattr(screen, "monitor_name", lambda i: "DP-2")
+    win = {"stableId": "abc", "monitor": 1, "title": "CHRONO TRIGGER"}
+    monkeypatch.setattr(screen, "hypr_clients", lambda: [win])
+    cap = screen.HyprlandCapture()
+    monkeypatch.setattr(cap, "pick", lambda: win)
+    for _ in range(5):
+        frame = cap.grab()
+        errors: list[str] = []
+
+        def read(img=frame.image):
+            try:
+                img.convert("L").resize((64, 36))
+            except OSError as exc:
+                errors.append(str(exc))
+
+        threads = [threading.Thread(target=read) for _ in range(2)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert not errors
