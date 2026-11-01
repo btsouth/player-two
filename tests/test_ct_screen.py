@@ -298,3 +298,26 @@ async def test_a_box_the_reader_hands_to_the_model_isnt_cut_off_by_the_next_look
     assert started == [1.6]  # once, when the box had stood still
     assert not s.narrating.cancelled() and not s.narrating.done()
     s.narrating.cancel()
+
+
+def test_party_hits_and_heals_are_said_once_the_numbers_are_steady():
+    from playertwo.ctsteam import Member, State
+
+    def fight(crono, frog):
+        st = State(kind="none", party=[Member("Crono", crono, 780, 64, 64, "white"),
+                                       Member("Frog", frog, 494, 65, 65, "white")])
+        lk = ctscreen.battle_look(st)
+        return lk
+
+    r = Reader()
+    r.update(fight(780, 494), now=0)
+    assert r.update(fight(780, 494), now=0.3) == ""  # the first steady reading: no news
+    assert r.update(fight(660, 494), now=0.6) == ""  # once: it may be mid-change
+    assert r.update(fight(660, 494), now=0.9) == "Crono took 120."
+    assert r.update(fight(660, 494), now=1.2) == ""
+    r.update(fight(660, 480), now=1.5)
+    assert r.update(fight(660, 480), now=1.8) == ""  # a scratch isn't worth a word
+    assert r.update(fight(660, 0), now=2.1) == "Frog is down."  # danger: at once
+    assert r.update(fight(660, 0), now=2.4) == ""  # the knockout isn't said twice
+    r.update(fight(660, 200), now=2.7)
+    assert r.update(fight(660, 200), now=3.0) == "Frog is back up."

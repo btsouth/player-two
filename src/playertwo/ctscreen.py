@@ -367,6 +367,8 @@ class Reader:
         self.party: list[str] = []  # characters in menu order, as screens have shown them
         self.last: list[str] = []  # the parts said by the last update
         self.model_read = False  # a whole text box that doesn't read cleanly: ask the model
+        self.hp: dict[str, tuple[int, int]] = {}  # party HP as last read steadily
+        self.hp_new: dict[str, tuple[int, int]] = {}  # and as the last look read it
         self.kind = "none"
         self.said: dict[str, str] = {}
         self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
@@ -374,6 +376,35 @@ class Reader:
 
     def reset(self) -> None:
         self.kind, self.said, self.seen = "none", {}, {}
+        self.hp, self.hp_new = {}, {}
+
+    def _hits(self, lk: Look) -> str:
+        """Party HP that changed since the last steady reading: "Frog took 120". Only a
+        reading two looks agree on counts (an attack can cover the numbers), only a
+        change of a tenth of someone's HP or more, and a knockout is left to danger."""
+        st = lk.battle
+        if st is None or not st.party or any(m.hp is None or not m.hp_max for m in st.party):
+            return ""
+        now = {m.name: (m.hp, m.hp_max) for m in st.party}
+        steady = now == self.hp_new
+        self.hp_new = now
+        if not steady:
+            return ""
+        before, self.hp = self.hp, now
+        out = []
+        for name, (hp, top) in now.items():
+            if name not in before:
+                continue
+            old = before[name][0]
+            if hp == old or hp == 0 or abs(hp - old) < top / 10:
+                continue
+            if old == 0:
+                out.append(f"{name} is back up")
+            elif hp < old:
+                out.append(f"{name} took {old - hp}")
+            else:
+                out.append(f"{name} healed {hp - old}")
+        return ", ".join(out)
 
     @property
     def waiting(self) -> bool:
@@ -406,10 +437,14 @@ class Reader:
         if opened:
             self.said, self.seen = {}, {}
             self.kind = lk.kind
+            self.hp, self.hp_new = {}, {}
         if lk.kind == "none":
             return ""
+        hits = self._hits(lk)
         out = []
         for part in lk.order or ORDER:
+            if part == "danger" and hits:
+                out.append(hits)
             value = lk.parts.get(part, "")
             old_value, n = self.seen.get(part, ("", 0))
             n = n + 1 if value == old_value else 1
