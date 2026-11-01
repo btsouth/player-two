@@ -1577,9 +1577,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     aim = c
                     break
             last = here.loc == goal and at is not None and len(path) == 2
-            if last:  # onto where to stand: its nearest part (along a counter, not past)
-                x0, y0 = path[1][1] * TILE, path[1][0] * TILE
-                aim = (min(max(px, x0 + 4), x0 + TILE - 4), min(max(py, y0 + 4), y0 + TILE - 4))
+            if last:  # onto where to stand: its middle (clear of whoever's beside it)
+                aim = centre(path[1])
             a = angle_to(aim[0] - px, aim[1] - py)
             steer(a)
             if last:
