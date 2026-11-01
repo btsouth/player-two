@@ -639,9 +639,11 @@ async def test_cut_off_ends_blocked_and_says_so_once():
         said.append(text)
 
     w = Walker(FakeMuse(game), game.grab, game.steer, say=say)
-    result = await w.walk("the green chest", timeout=25)
+    # It gives up by itself ("blocked", not "timeout"). The walk takes about 20 s of real
+    # settle waits here and up to 25 s on GitHub's slower runners, so the timeout leaves room.
+    result = await w.walk("the green chest", timeout=60)
     assert result.outcome == "blocked", result.text()
-    assert result.seconds < 22
+    assert result.seconds < 45
     assert "blocked" in game.asked[1]  # out of plans, asked the model for a way around
     around = "Something's in the way. Finding a way around."
     assert said.count(around) == 1, said  # other lines ("I lost sight of you") have their own
