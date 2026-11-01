@@ -1312,13 +1312,17 @@ BOX_UP = ("interrupted: a text box (or a menu) is up: read it to the player, pre
 
 def over_place(image) -> str:
     """What the game drew over the place on a Steam frame, by its windows and font: "fight"
-    (the party's HP box), "box" (a text box, a choice or a menu), or "" (nothing)."""
+    (the party's HP box), "box" (a text box, a choice or a menu), or "" (nothing). A box
+    is only one whose window shows too (ctscreen.box_up): live 3 stopped a walk once for
+    "a text box is up" with none on screen, read from one frame of the fair."""
     from . import ctscreen
 
     if image is None:
         return ""
     kind = ctscreen.look(image).kind
-    return "fight" if kind == "battle" else "box" if kind in ("text", "choice", "menu") else ""
+    if kind == "battle":
+        return "fight"
+    return "box" if kind in ("text", "choice", "menu") and ctscreen.box_up(image) else ""
 
 
 def fighting(image) -> bool:
