@@ -162,6 +162,188 @@ def test_something_not_sold_here_stops_backed_out():
     assert game.mode == "field" and game.funds == 400
 
 
+
+def test_only_the_good_by_its_name_never_one_like_it():
+    """Live goods at the fair: "Hi-Potion" or "Mid-Potion" isn't "Potion" (a loose match
+    bought Potion for both), and "Potion" isn't Mid-Potion where that's sold instead."""
+    fair = [shop.Good(n, p, 88 + 78 * k) for k, (n, p) in enumerate(FakeShop.GOODS)]
+    assert shop.find(fair, "Hi-Potion") is None and shop.find(fair, "Mid-Potion") is None
+    assert shop.find(fair, "Hi-Potions") is None
+    assert shop.find(fair, "potions").name == "Potion"
+    assert shop.find(fair, "athenian water").name == "Athenian Water"
+    assert shop.find([shop.Good("Mid-Potion", 100, 88), shop.Good("Ether", 800, 166)],
+                     "Potion") is None
+    # A name the font misread is still the good meant (Melchior's list, live).
+    melchior = [shop.Good("Bronze Blade", 350, 88), shop.Good("Silver Sv)ord", 4000, 168)]
+    assert shop.find(melchior, "Silver Sword").price == 4000
+    assert shop.find(melchior, "Iron Blade") is None
+    assert shop.same_good("Brohze Blade", "Bronze Blade")
+    assert not shop.same_good("Potion", "Hi-Potion") and not shop.same_good("Ether", "Mid-Ether")
+
+
+def test_hi_potion_isnt_bought_where_only_potion_is_sold():
+    game = FakeShop(funds=400)
+    out = asyncio.run(make(game).buy("Hi-Potion", 2))
+    assert out.startswith("stopped: no Hi-Potion here") and "Potion (10 G)" in out, out
+    assert game.funds == 400 and game.stock == {} and game.mode == "field"
+
+
+@pytest.mark.skipif(not (FRAMES / "shop-melchior-3-item-picked.png").exists(),
+                    reason="no shop frames")
+def test_the_count_view_names_the_good_picked_from_the_list():
+    """The count view's name is read again (and misread: "Brohze Blade"); it's still the
+    good the hand was put on, so the last a goes ahead."""
+    picked = read("shop-melchior-2-buy-list").on
+    v = read("shop-melchior-3-item-picked")
+    assert v.kind == "count" and shop.same_good(v.on, picked)
+    assert not shop.same_good(v.on, "Silver Sword")
+
+
+class FakeShopPlus(FakeShop):
+    """The fair seller with what went wrong: the hand left in the Sell list, the choice's
+    hand on "No, thanks", a count that doesn't read or reads one too many, a count view
+    showing another good."""
+
+    SELL: ClassVar = [("Potion", 5), ("Tonic", 5)]
+
+    def __init__(self, funds=400, mode="talk", choice=False, count_shown=lambda c: c,
+                 count_row=0):
+        super().__init__(funds)
+        self.mode, self.choice, self.on_no = mode, choice, choice
+        self.count_shown, self.count_row, self.sold = count_shown, count_row, 0
+        if mode.startswith("sell"):
+            self.main = 1
+
+    async def press(self, b, ms):
+        m = self.mode
+        if m == "talk" and self.choice and b in ("up", "down"):
+            self.log.append(b)
+            self.on_no = not self.on_no
+            return
+        if m == "talk" and self.choice and b == "a" and self.on_no:
+            self.log.append(b)
+            self.mode = "bye"  # declined: the seller says goodbye, no shop
+            return
+        if m == "main" and b == "a" and self.main == 1:
+            self.log.append(b)
+            self.mode, self.row = "sell", 0
+            return
+        if m == "sell":
+            self.log.append(b)
+            if b in ("up", "down"):
+                self.row = max(0, min(len(self.SELL) - 1, self.row + (1 if b == "down" else -1)))
+            elif b == "a":
+                self.mode, self.count = "sellcount", 1
+            elif b == "b":
+                self.mode = "main"
+            return
+        if m == "sellcount":
+            self.log.append(b)
+            if b == "right":
+                self.count += 1
+            elif b == "a":
+                self.funds += self.SELL[self.row][1] * self.count
+                self.sold += self.count
+                self.mode = "sell"
+            elif b == "b":
+                self.mode = "sell"
+            return
+        await super().press(b, ms)
+
+    def read(self, frame):
+        def run(text, x, y):
+            return Run(text, x, x + 20 * len(text), y, "white", 5.0)
+
+        if self.mode in ("sell", "sellcount"):
+            lines = [[run("Funds:", 227, 486), run(f"{self.funds} G", 627, 486)]]
+            if self.mode == "sell":
+                for k, (n, p) in enumerate(self.SELL):
+                    lines.append([run(f"k3 {n}", 939, 88 + 78 * k),
+                                  run(str(p), 1743, 88 + 78 * k)])
+                return [SimpleNamespace(tip=(912, 100 + 78 * self.row))], lines
+            name = self.SELL[self.row][0]
+            lines.append([run(f"k {name}", 916, 243), run(str(self.count), 1653, 243)])
+            lines.append([run(f"{self.count * self.SELL[self.row][1]} G", 1779, 378)])
+            return [SimpleNamespace(tip=(912, 252))], lines
+        hands, lines = super().read(frame)
+        if self.mode == "count":
+            name = self.GOODS[(self.row + self.count_row) % len(self.GOODS)][0]
+            shown = self.count_shown(self.count)
+            lines[-2] = [Run(f"k {name}", 916, 916 + 20 * len(name), 243, "white", 5.0)] + (
+                [Run(str(shown), 1653, 1673, 243, "white", 5.0)] if shown is not None else [])
+        return hands, lines
+
+    def dialogue(self, frame):
+        if self.mode == "talk" and self.choice:
+            return SimpleNamespace(kind="choice", parts={
+                "question": "Welcome! Have a look?",
+                "focus": "No, thanks selected, or Take a look" if self.on_no
+                else "Take a look selected, or No, thanks"})
+        return super().dialogue(frame)
+
+
+def test_the_hand_left_in_the_sell_list_buys_from_buy_not_sells():
+    """An open list may be the Sell list: an a there sold, and was reported as "Bought 3
+    Potion for -15 G"."""
+    game = FakeShopPlus(funds=400, mode="sell")
+    out = asyncio.run(make(game).buy("Potion", 3))
+    assert game.sold == 0 and game.funds == 370 and game.stock == {"Potion": 3}, out
+    assert "Bought 3 Potion for 30 G" in out
+
+
+def test_a_sale_is_never_reported_as_a_purchase():
+    """Whatever got it there, gold that went up is a sale, said as one."""
+    game = FakeShopPlus(funds=400, mode="sell")
+    sh = make(game)
+
+    async def straight_in(v):
+        return v  # the old way: any open list is taken for the Buy list
+
+    sh.to_list = straight_in
+    out = asyncio.run(sh.buy("Potion", 3))
+    assert out.startswith("stopped: the funds went up from 400 G to 415 G"), out
+
+
+def test_the_sellers_choice_is_answered_with_take_a_look_not_no_thanks():
+    """"No, thanks selected, or Take a look": the hand is on No, thanks, though "Take a
+    look" is in the line."""
+    game = FakeShopPlus(funds=400, choice=True)
+    out = asyncio.run(make(game).buy("Potion", 1))
+    assert game.stock == {"Potion": 1} and game.funds == 390, out
+    assert game.log[:2] == ["up", "a"]
+
+
+@pytest.mark.skipif(not (FRAMES / "box-melchior-options-no-question.png").exists(),
+                    reason="no seller choice frame")
+def test_the_live_sellers_choice_reads_as_the_shop_expects():
+    from playertwo import ctscreen
+
+    lk = ctscreen.look(Image.open(FRAMES / "box-melchior-options-no-question.png"))
+    assert lk.kind == "choice"
+    assert lk.parts["focus"].split(" selected")[0] in shop.OPEN
+
+
+def test_a_count_that_doesnt_read_buys_nothing():
+    game = FakeShopPlus(funds=400, count_shown=lambda c: "?")  # read, not a number
+    out = asyncio.run(make(game).buy("Potion", 3))
+    assert out.startswith("stopped: the count didn't read"), out
+    assert game.funds == 400 and game.stock == {} and game.mode == "field"
+
+
+def test_a_count_read_one_too_many_is_said_as_the_gold_says():
+    """It read 3 where the game had 2: the report goes by the gold spent."""
+    game = FakeShopPlus(funds=400, count_shown=lambda c: c + 1)
+    out = asyncio.run(make(game).buy("Potion", 3))
+    assert game.stock == {"Potion": 2}
+    assert "Bought 2 Potion for 20 G" in out and "the gold says 2" in out, out
+
+
+def test_the_count_for_another_good_isnt_bought():
+    game = FakeShopPlus(funds=400, count_row=1)
+    out = asyncio.run(make(game).buy("Potion", 1))
+    assert out.startswith("stopped: the count shows Panacea, not Potion"), out
+    assert game.funds == 400 and game.stock == {}
+
 class FakeInn:
     def __init__(self):
         self.mode, self.log = "ask", []
@@ -235,6 +417,74 @@ def test_the_inns_question_with_a_hand_that_doesnt_read_is_answered_yes(monkeypa
 
     out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(400))
     assert pressed == ["a", "a"] and out.startswith("Stayed the night"), out
+
+
+def _fake_clock(monkeypatch):
+    """Time that passes only in the shop's own sleeps: a 45 s wait runs at once."""
+    clock = [1000.0]
+
+    async def sleep(s):
+        clock[0] += s
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(shop, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    return clock
+
+
+def test_no_night_and_no_gold_spent_isnt_a_night_at_the_inn(monkeypatch):
+    """Not enough gold: Yes, then the innkeeper says so and no night comes. Before, it
+    waited 45 s and said "Stayed the night"."""
+    clock = _fake_clock(monkeypatch)
+    t0 = clock[0]
+    inn = FakeInn()
+
+    async def press(b, ms):
+        inn.log.append(b)
+        if inn.mode == "ask" and b == "a":
+            inn.mode = "broke"
+        elif inn.mode == "broke" and b == "a":
+            inn.mode = "room"
+
+    def dialogue(frame):
+        if inn.mode == "broke":
+            return SimpleNamespace(kind="text", parts={"text": "You don't have enough money!"})
+        return inn.dialogue(frame)
+
+    sh = Shop(press, inn.grab, read=lambda f: ([], []), dialogue=dialogue, gap_s=0.0)
+
+    async def vitals():
+        return [(20, 70, 8, 8)], 5
+
+    out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(5))
+    assert out.startswith("stopped: didn't stay: no night came after Yes and the gold is "
+                          "still 5 G"), out
+    assert "You don't have enough money!" in out
+    assert clock[0] - t0 < 20
+
+
+def test_a_night_the_looks_missed_counts_when_the_gold_went_down(monkeypatch):
+    _fake_clock(monkeypatch)
+    inn = FakeInn()
+
+    async def press(b, ms):
+        inn.log.append(b)
+        if inn.mode == "ask" and b == "a":
+            inn.mode = "room"  # the fade came and went between looks
+
+    sh = Shop(press, inn.grab, read=lambda f: ([], []), dialogue=inn.dialogue, gap_s=0.0)
+
+    async def vitals():
+        return [(70, 70, 8, 8)], 390
+
+    out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(400))
+    assert out.startswith("Stayed the night (10 G: 400 to 390 G)"), out
+
+    async def no_gold():
+        return [(70, 70, 8, 8)], None
+
+    inn.mode = "ask"
+    out = asyncio.run(Inn(sh, SimpleNamespace(vitals=no_gold, party=["Crono"])).rest(400))
+    assert out.startswith("stopped: no night came after Yes and the gold didn't read"), out
 
 
 def test_the_menu_after_the_night_gets_a_few_tries(monkeypatch):
