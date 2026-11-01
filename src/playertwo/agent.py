@@ -26,6 +26,7 @@ from .battle import (
     Foes,
     Intent,
     Stop,
+    act_line,
     foe_name,
     heal_line,
     heal_plan,
@@ -1223,9 +1224,8 @@ class Agent:
             return None
         intent = parse_intent(d, st.actor)
         if intent is not None and intent.command != "attack":
-            line = f"{st.actor}: {intent.name or intent.command}" + (
-                f" on {intent.target}" if intent.target else "") + "."
-            asyncio.get_running_loop().create_task(self._speak(line))
+            # "Marle uses Cure on Frog.", not "Marle: Cure on Frog." (live 3)
+            asyncio.get_running_loop().create_task(self._speak(act_line(intent)))
         return intent
 
     async def count_foes(self, image, party: list[str] = ()) -> Foes | None:

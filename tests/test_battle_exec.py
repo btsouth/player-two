@@ -799,7 +799,7 @@ async def test_win_with_nothing_to_heal_with_attacks_without_asking_each_turn():
         return Intent(st.actor, "item", "Potion", "Crono")
 
     out = await executor(game).win(decide)
-    assert out.ok and "won after 6 commands" in out.text, out.text
+    assert out.ok and "won the fight" in out.text and "(6 commands)" in out.text, out.text
     # Once each (Crono's items, Marle's techs): then it knows there's nothing to use.
     assert len(asked) <= 2
 
@@ -835,10 +835,13 @@ def test_a_heal_is_said_from_the_hp_it_gave():
     after = State(party=[Member("Frog", 126, 494, 58, 65, "white")])
     out = battle.Outcome(True, "Frog: tech Slurp on Frog. Seen: Frog HP 1 to 126", after)
     assert battle.heal_line(Intent("Frog", "tech", "Slurp", "Frog"), out, before) == \
-        "Frog's Slurp healed Frog: 126 of 494."
+        "Slurp healed Frog to 126 of 494."
+    assert battle.heal_line(Intent("Marle", "tech", "Aura", "Frog"), out, before) == \
+        "Marle's Aura healed Frog to 126 of 494."
     out = battle.Outcome(True, "Frog: tech Slurp on Frog.", before)
+    # Live 3: "Marle's Cure is on its way to Marle." (the fight was left paused)
     assert battle.heal_line(Intent("Frog", "tech", "Slurp", "Frog"), out, before) == \
-        "Frog's Slurp is on its way to Frog."
+        "Frog picked Slurp for Frog; the fight is paused, so it lands when we go on."
 
 
 def _muse(replies):
@@ -897,7 +900,7 @@ async def test_heal_x_in_a_fight_is_one_command_and_no_model_turn(monkeypatch):
     run = await ag.run("heal Frog")
     assert muse.tools_seen == []  # no model call at all
     assert p[1].hp == 400
-    assert said == ["Marle's Cure healed Frog: 400 of 494."] and run.outcome == said[0]
+    assert said == ["Marle's Cure healed Frog to 400 of 494."] and run.outcome == said[0]
     assert [s.tool for s in run.steps] == ["battle"]
     run = await ag.run("heal Marle")
     assert said[-1] == "Marle is at full health already, 430 of 430." and len(run.steps) == 0
@@ -1039,8 +1042,25 @@ def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
 
     p = party()
     st = FakeCT(p, enemies()).read(None)
-    assert progress(st, Intent("Crono", "attack")) == "Crono attacks."
+    assert progress(st, Intent("Crono", "attack")) == "Crono attacked."
     p[1].hp, p[2].hp = 1, 0
     st = FakeCT(p, enemies()).read(None)
-    assert progress(st, Intent("Crono", "attack")) == "Crono attacks. Frog 1 HP, Marle is down."
+    assert progress(st, Intent("Crono", "attack")) == "Crono attacked. Marle is down, Frog is at 1 HP."
     assert party_brief(st) == "Crono's full, Frog's at 1 of 494, Marle's down."
+    p[2].hp = 1
+    st = FakeCT(p, enemies()).read(None)
+    # Live 3: "Marle uses Cure on Frog. Frog 1 HP, Marle 1 HP."
+    assert progress(st, Intent("Marle", "tech", "Cure", "Frog")) == (
+        "Marle used Cure on Frog. Frog and Marle are at 1 HP.")
+
+
+def test_commands_in_words_a_friend_would_use():
+    from playertwo.battle import Intent, act_line
+
+    # Live 3: "Frog: Heal.", "Crono: Hi-Potion on Marle."
+    assert act_line(Intent("Frog", "tech", "Heal")) == "Frog uses Heal."
+    assert act_line(Intent("Crono", "item", "Hi-Potion", "Marle")) == "Crono gives Marle a Hi-Potion."
+    assert act_line(Intent("Marle", "tech", "Cure", "Marle")) == "Marle uses Cure on herself."
+    assert act_line(Intent("Crono", "item", "Ether"), done=True) == "Crono used an Ether."
+    assert act_line(Intent("Frog", "item", "Athenian Water", "Crono")) == (
+        "Frog gives Crono Athenian Water.")

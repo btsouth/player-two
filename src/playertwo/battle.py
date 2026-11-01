@@ -56,8 +56,10 @@ class Tuning:
     playout_max_s: float = 3.5
     spend_playout_s: float = 5.0  # after a tech's MP is spent, the time to see it land
     # A heal or revive is watched until the HP rises: live, Frog's Heal showed its numbers
-    # about 6 s after its MP went, past the 5 s above, and the model healed again.
-    heal_playout_s: float = 9.0
+    # about 6 s after its MP went, past the 5 s above, and the model healed again; live 3,
+    # Marle's Cure waited behind the enemies' combo and its 492 showed 9 s after it was
+    # picked, with the party box's HP a moment later (it was said as "on its way").
+    heal_playout_s: float = 14.0
     run_chunk_ms: int = 2500  # L and R held this long between looks
     run_chunks: int = 3
     spoils_wait_s: float = 1.2  # a won fight's message left this long gets an a
@@ -804,8 +806,10 @@ class Executor:
         seen = changes(before, st, msgs) + spent
         if (spent or healing) and not landed and not victory(st):
             # (live: a heal's MP went, a combo played first, the model healed again)
-            seen += (f" {named} is on its way (it lands after what's playing): this command "
-                     "is done; finish now, and send no other command for it (no second heal).")
+            seen += (f" {named} was picked and hadn't landed when the fight was paused "
+                     "again (it waits behind what's playing): it lands once the fight goes "
+                     "on. This command is done; finish now, and send no other command for "
+                     "it (no second heal).")
         if intent.command.lower() == "attack" and seen.startswith("No party HP"):
             # Enemies' HP isn't on screen: "nothing changed" sounded like a miss (live,
             # "Crono attacked but nothing changed").
@@ -881,8 +885,14 @@ class Executor:
                     raise Stop("stopped by the player")
                 if victory(st):
                     st, said = await self.spoils(st)
-                    return Outcome(True, f"won after {len(turns)} commands. "
-                                   + " ".join(x.rstrip(".") + "." for x in said), st,
+                    # (Said to the player from this: "won the fight", not "won after
+                    # 6 commands", which live 3 read out as it was.)
+                    low = low_line(st) if st.party else ""
+                    return Outcome(True, "won the fight. "
+                                   + " ".join(x if x.endswith(("!", ".", "?")) else x + "."
+                                              for x in said)
+                                   + (f" {low}" if low else "")
+                                   + f" ({len(turns)} commands)", st,
                                    presses=self.presses[start:])
                 if not st.in_battle:
                     # (live, Guardia Forest: the party box didn't read for 1.5 s mid-fight
@@ -988,14 +998,56 @@ def message(top: str) -> bool:
     return bool(top and re.search(r"[A-Za-z]{3}", top))
 
 
+def act_line(intent: Intent, done: bool = False) -> str:
+    """A command in words, as a friend would say it: "Marle uses Cure on Frog.", "Crono
+    gives Marle a Hi-Potion.", "Crono attacked." (done: it has happened)."""
+    who = intent.actor or "We"
+    cmd = intent.command.lower()
+    name = intent.name.strip()
+    target = intent.target.strip()
+    if cmd == "attack" or not name:
+        return f"{who} {'attacked' if done else 'attacks'}."
+    if cmd.startswith("item"):
+        article = "" if re.search(r"(?i)water$", name) else \
+            ("an " if name[:1].lower() in "aeiou" else "a ")
+        if target and _norm(target) != _norm(who):
+            return f"{who} {'gave' if done else 'gives'} {target} {article}{name}."
+        return f"{who} {'used' if done else 'uses'} {article}{name}."
+    on = f" on {target}" if target and _norm(target) != _norm(who) else (
+        " on themselves" if target else "")
+    if on == " on themselves":
+        on = {"Marle": " on herself", "Lucca": " on herself", "Ayla": " on herself",
+              "Crono": " on himself", "Frog": " on himself", "Magus": " on himself",
+              "Robo": " on itself"}.get(who, "")
+    return f"{who} {'used' if done else 'uses'} {name}{on}."
+
+
+def low_line(st: State) -> str:
+    """Who's in danger, in a few words: "Frog and Marle are at 1 HP.", "Crono's down,
+    Frog's at 37 HP." ('' when no one is)."""
+    down = [m.name for m in st.party if m.hp == 0]
+    low = [(m.name, m.hp) for m in st.party
+           if m.hp is not None and m.hp_max and 0 < m.hp < m.hp_max / 3]
+    parts = []
+    if down:
+        parts.append(f"{_and(down)} {'is' if len(down) == 1 else 'are'} down")
+    if low and len({h for _n, h in low}) == 1:
+        parts.append(f"{_and([n for n, _h in low])} {'is' if len(low) == 1 else 'are'} at "
+                     f"{low[0][1]} HP")
+    elif low:
+        parts.append(", ".join(f"{n}'s at {h} HP" for n, h in low))
+    return (", ".join(parts) + ".") if parts else ""
+
+
+def _and(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def progress(st: State, done: Intent) -> str:
     """A short line on a turn of a fight, for the player to hear now and then: who did
     what, and who's in danger (everyone's HP each time is noise)."""
-    what = "attacks" if done.command == "attack" else f"uses {done.name}" + (
-        f" on {done.target}" if done.target else "")
-    low = [f"{m.name} is down" if m.hp == 0 else f"{m.name} {m.hp} HP" for m in st.party
-           if m.hp is not None and m.hp_max and m.hp < m.hp_max / 3]
-    return f"{done.actor} {what}." + (f" {', '.join(low)}." if low else "")
+    low = low_line(st)
+    return act_line(done, done=True) + (f" {low}" if low else "")
 
 
 def party_brief(st: State) -> str:
@@ -1189,7 +1241,9 @@ def heal_line(intent: Intent, out: Outcome, before: State | None,
     look before the fight was paused again; a paused screen reads less)."""
     st = after if after is not None and after.party else out.state
     actor = intent.actor or (out.text.split(":")[0] if ":" in out.text else "")
-    what = f"{actor}'s {intent.name}" if actor else intent.name
+    # "Cure healed Marle to full, 430." when she cast it; "Frog's Slurp healed Marle..."
+    what = f"{actor}'s {intent.name}" if actor and _norm(actor) != _norm(intent.target) \
+        else intent.name
     if not out.ok:
         return ""
     b, a = _hp(before), _hp(st)
@@ -1200,12 +1254,14 @@ def heal_line(intent: Intent, out: Outcome, before: State | None,
         hp = a.get(intent.target)
         top = tops.get(intent.target)
         if any(n == intent.target for n, _h in up) and hp is not None:
-            full = " (full)" if top and hp >= top else ""
-            return f"{what} healed {intent.target}: {hp} of {top}{full}."
-        return f"{what} is on its way to {intent.target}."
+            to = f"full, {hp}" if top and hp >= top else f"{hp} of {top}"
+            return f"{what} healed {intent.target} to {to}."
+        return (f"{actor or 'We'} picked {intent.name} for {intent.target}; the fight is "
+                "paused, so it lands when we go on.")
     if up:
-        return f"{what}: " + ", ".join(f"{n} up to {h}" for n, h in up) + "."
-    return f"{what} is on its way."
+        return f"{what} healed " + ", ".join(f"{n} to {h}" for n, h in up) + "."
+    return (f"{actor or 'We'} picked {intent.name}; the fight is paused, so it lands when "
+            "we go on.")
 
 
 
