@@ -662,3 +662,32 @@ async def test_a_heal_is_watched_from_its_mp_until_the_hp_lands():
     game._target, game.read = spend, later
     out = await executor(game).act(Intent("Frog", "tech", "Heal"))
     assert "Marle HP 1 to 200" in out.text, out.text
+
+
+async def test_left_past_the_last_enemy_onto_an_ally_comes_back():
+    """Live: "left" from the leftmost Gargoyle put the glove on Frog over the windows,
+    where it didn't read; the attack stopped with the glove still up, and the next two
+    commands found no command window."""
+    game = FakeCT(party(), enemies())
+    target = game._target
+    read = game.read
+
+    def onto_ally(b):
+        if b == "left" and game.glove == 0 and not getattr(game, "on_ally", False):
+            game.on_ally = True  # off the enemies, onto Frog over the windows
+            return
+        if b == "right" and getattr(game, "on_ally", False):
+            game.on_ally = False
+            return
+        target(b)
+
+    def reads(frame, full=True):
+        if getattr(game, "on_ally", False):
+            return State(kind="command", party=[Member(m.name, m.hp, m.hp_max, m.mp, 99,
+                                                       "white") for m in game.party])
+        return read(frame, full)
+
+    game._target, game.read = onto_ally, reads
+    out = await executor(game).act(Intent("", "attack", target="left"))
+    assert out.ok, out.text
+    assert game.enemies[0][3] == 2  # the leftmost one was hit

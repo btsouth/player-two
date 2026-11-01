@@ -614,6 +614,15 @@ class Executor:
             await self.tap(button)
             nxt = await self.look()
             if nxt.kind != "target" or not nxt.gloves:
+                # Past the last enemy that way the glove can go onto an ally drawn over the
+                # windows, where it doesn't read (live: "left" from the leftmost Gargoyle
+                # put it on Frog, and the next commands found no command window). One
+                # back brings it to that last enemy.
+                await self.tap(back)
+                again = await self.look()
+                if again.kind == "target" and again.gloves:
+                    st = again
+                    break
                 raise Stop("the target glove went away")
             v = nxt.gloves[0][k]
             if (v - best) * sign > 12:
