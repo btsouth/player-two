@@ -38,8 +38,12 @@ def bgr(image) -> np.ndarray:
     return cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
 
 
-def text_mask(crop: np.ndarray, thresh: float | None = None, local: bool = False) -> np.ndarray:
-    """Text pixels: bright, in small components, each wrapped in the font's dark outline."""
+def text_mask(crop: np.ndarray, thresh: float | None = None, local: bool = False,
+              margin: float = 55, ring_bg: bool = False) -> np.ndarray:
+    """Text pixels: bright, in small components, each wrapped in the font's dark outline.
+    `margin`: how much brighter than the local background (local only). `ring_bg`: count
+    an outline pixel no brighter than the background as dark (coloured text on bright
+    metal, whose only dark outline is its drop shadow)."""
     b, g, r = cv2.split(crop)
     v = cv2.max(cv2.max(b, g), r).astype(np.float32)
     if thresh is None:
@@ -51,14 +55,15 @@ def text_mask(crop: np.ndarray, thresh: float | None = None, local: bool = False
         small = cv2.resize(v.astype(np.uint8), None, fx=0.25, fy=0.25,
                            interpolation=cv2.INTER_AREA)
         bg = cv2.resize(cv2.medianBlur(small, 11), (v.shape[1], v.shape[0]),
-                        interpolation=cv2.INTER_LINEAR)
-        m &= v > bg.astype(np.float32) + 55
+                        interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        m &= v > bg + margin
     out = np.zeros(m.shape, bool)
-    _keep_components(v, m.astype(np.uint8), out, split=True)
+    _keep_components(v, m.astype(np.uint8), out, split=True,
+                     bg=bg if local and ring_bg else None)
     return out
 
 
-def _keep_components(v, m, out, split):
+def _keep_components(v, m, out, split, bg=None):
     n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=4)
     if n <= 1:
         return
@@ -70,6 +75,8 @@ def _keep_components(v, m, out, split):
     ring = (lab == 0) & (labd > 0)
     rl = labd[ring]
     dark = v[ring] < 0.6 * core[rl]
+    if bg is not None:
+        dark |= v[ring] < bg[ring] + 8
     rc = np.bincount(rl, minlength=n).astype(np.float32)
     rd = np.bincount(rl, weights=dark.astype(np.float32), minlength=n) / np.maximum(rc, 1)
     ok = (w <= 60) & (h <= 48) & (a >= 8) & (rd >= 0.45)
@@ -219,14 +226,14 @@ class GlyphLib:
         if not gl or not len(self.y):
             return "", 0.0
         fm = np.array([feature(g) for g in gl], np.float32)
-        d = np.abs(self.X[None, :, :] - fm[:, None, :]).sum(axis=2)
-        idx = d.argmin(axis=1)
+        dist, idx = cv2.batchDistance(fm, np.ascontiguousarray(self.X, np.float32), cv2.CV_32F,
+                                      normType=cv2.NORM_L1, K=1)  # nearest by L1, in C
         s, worst = "", 0.0
         for k, g in enumerate(gl):
             if k and g.x0 - gl[k - 1].x1 >= space_px:
                 s += " "
-            s += self.y[idx[k]]
-            worst = max(worst, float(d[k, idx[k]]))
+            s += self.y[int(idx[k, 0])]
+            worst = max(worst, float(dist[k, 0]))
         return s, worst
 
 
@@ -258,12 +265,12 @@ class Run:
 
 def runs_in(lib: GlyphLib, img: np.ndarray, box: tuple[int, int, int, int],
             blank: list[tuple[int, int, int, int]] = (), local: bool = False,
-            gap: int = 60) -> list[list[Run]]:
+            gap: int = 60, margin: float = 55, ring_bg: bool = False) -> list[list[Run]]:
     """The text in a box, line by line, each line split into runs at gaps wider than
     `gap`. `blank` boxes (x, y, w, h), such as cursors, are left out."""
     x0, y0, x1, y1 = box
     crop = img[y0:y1, x0:x1]
-    m = text_mask(crop, local=local)
+    m = text_mask(crop, local=local, margin=margin, ring_bg=ring_bg)
     for hx, hy, hw, hh in blank:
         m[max(0, hy - y0 - 4):max(0, hy - y0 + hh + 4),
           max(0, hx - x0 - 4):max(0, hx - x0 + hw + 4)] = False

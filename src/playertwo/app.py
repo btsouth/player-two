@@ -12,6 +12,9 @@ import time
 from collections import deque
 from pathlib import Path
 
+import numpy as np
+
+from . import ctscreen
 from .ack import ack
 from .agent import Agent
 from .audio import Mixer
@@ -20,6 +23,7 @@ from .controls import BUTTONS, ControlsError, open_controls
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
+from .prompts import BATTLE_START
 from .screen import (
     Capture,
     CaptureError,
@@ -30,6 +34,7 @@ from .screen import (
     auto_capture,
 )
 from .screenreader import open_voice
+from .voice import clean_for_speech
 
 # Short commands handled without the model. They must be the whole utterance: "keep going,
 # but don't leave" or "stop attacking and heal" are requests for the agent, not commands.
@@ -231,6 +236,19 @@ class Session:
             self.problems.append(SOUND_PROBLEM)
         self.narrator = Narrator(self.muse, settings.verbosity, settings.game,
                                  settings.language, settings.team_up)
+        # Chrono Trigger on Steam: battles, menus, choices and text boxes read from pixels
+        # (ctscreen), said the moment they change; the model narrates the rest.
+        self.reader = ctscreen.Reader()
+        self.reading: asyncio.Task | None = None
+        self.read_t = 0.0  # when the frame the reader last looked at was grabbed
+        self.read_at = 0.0  # when that look started
+        self.read_owned = False  # whether the reader could read that frame
+        self.read_thumb = None
+        self.read_prime = False  # take in the next look without saying it
+        self.read_model: asyncio.Task | None = None  # the model reading a box for it
+        self.read_last_line = ""
+        self.describing: asyncio.Task | None = None  # a description the player asked for
+        self.read_last_parts: set[str] = set()
         self.watcher = ChangeWatcher()
         self.events = Events()
         self.latest: Frame | None = None
@@ -545,15 +563,61 @@ class Session:
 
     # Narration
 
-    async def _narrate(self, frame: Frame, interrupt: bool = False) -> None:
+    async def _place(self, frame: Frame) -> str:
+        """The surveyed place this screen shows, when it's a different one from the last
+        named (Chrono Trigger on Steam: the room survey knows it in about 0.3 s). The
+        game never shows these names, and the model must never make one up. (Room matching
+        works on small frames too, unlike reading the font.)"""
+        if not self.agent._ct_steam(frame):
+            return ""
+        from .rooms import Rooms
+
+        if getattr(self, "rooms", None) is None:
+            self.rooms = await asyncio.to_thread(Rooms.for_game, self.agent.game or "") or False
+        if not self.rooms:
+            return ""
+        here = await asyncio.to_thread(self.rooms.locate, frame.image)
+        if here is None or here.loc in self.rooms.worlds:
+            return ""
+        name = self.rooms.name(here.loc)
+        if name.startswith("place 0x"):
+            return ""
+        # "Mountain of Woe, the ledges round the chain bridge": the place, not the spot.
+        short = name.split(",")[0] if len(name.split()) > 4 else name
+        last, when = getattr(self, "place_said", ("", 0.0))
+        if short == last and time.monotonic() - when < 120:
+            return ""
+        self.place_said = (short, time.monotonic())
+        return short
+
+    async def _narrate(self, frame: Frame, interrupt: bool = False, extra: str = "") -> None:
         t = time.monotonic()
 
         self.narrating_text = ""
 
         async def deltas():
-            async for d in self.narrator.narrate(frame):
-                self.narrating_text += d
-                yield d
+            gen = self.narrator.narrate(frame, extra) if extra else self.narrator.narrate(frame)
+            # The model starts at once; the place's name (if this is a new one) goes first.
+            first = asyncio.ensure_future(anext(gen, None))
+            try:
+                place = "" if extra else await self._place(frame)
+            except asyncio.CancelledError:
+                first.cancel()
+                raise
+            except Exception:  # noqa: BLE001  no name is better than no narration
+                place = ""
+            try:
+                if place:
+                    self.narrating_text += f"{place}. "
+                    yield f"{place}. "
+                d = await first
+                while d is not None:
+                    self.narrating_text += d
+                    yield d
+                    d = await anext(gen, None)
+            finally:
+                first.cancel()
+                await gen.aclose()
 
         try:
             text = await self.voice.say_stream(deltas(), interrupt=interrupt)
@@ -591,6 +655,12 @@ class Session:
         if time.monotonic() < self.error_until:
             return
         frame, change = self.pending
+        if self._reads(frame):
+            if self.read_t < frame.t - self.watcher.settle_s:
+                return  # the reader hasn't seen this still screen yet
+            if self.read_owned:
+                self.pending = None  # the reader says what this screen needs
+                return
         cut = change >= self.SCENE_CUT and time.monotonic() >= self.soft_until
         if not cut and not self.voice.idle():
             return  # let the last line finish; we'll narrate the newest screen after
@@ -636,7 +706,7 @@ class Session:
                     self.trouble(exc, "describe", answer=True)
                     return
                 self.events.emit("say", text=text, source="describe")
-            self.narrating = asyncio.create_task(run())
+            self.narrating = self.describing = asyncio.create_task(run())
         else:
             self.narrating = asyncio.create_task(self._narrate(frame))
 
@@ -688,8 +758,94 @@ class Session:
                              change=round(self.watcher.last_change, 3))
             self.show(frame, force=True)
             self.pending = (frame, self.watcher.last_change)
+        if not self.paused and not busy and self._reads(frame):
+            self._read_soon(frame)
         if not self.paused and not busy:
             self._maybe_narrate()
+
+    # Reading Chrono Trigger (Steam) screens without the model
+
+    def _reads(self, frame: Frame) -> bool:
+        return self.agent._ct_steam(frame) and ctscreen.sharp(frame.image)
+
+    def _read_soon(self, frame: Frame) -> None:
+        if self.reading is not None and not self.reading.done():
+            return
+        from .screen import thumb
+
+        th = thumb(frame.image)
+        now = time.monotonic()
+        if (self.read_thumb is not None and not self.reader.waiting and not self.read_owned
+                and float(np.abs(th - self.read_thumb).mean()) < 0.003
+                and now - self.read_at < 2.0):
+            # Nothing moved on a screen the reader can't read: the verdict stands. (On a
+            # menu, a cursor move barely changes a thumbnail: those are always looked at.)
+            self.read_t = frame.t
+            return
+        settled = self.pending is not None and self.pending[0].t > self.read_t
+        if not self.read_owned and not settled and now - self.read_at < 0.8:
+            # Walking around: a look a second is plenty to notice a menu or a box opening
+            # (each look is a few hundred ms of CPU), and a screen that settles is looked
+            # at straight away.
+            return
+        self.read_thumb, self.read_at = th, now
+        self.reading = asyncio.create_task(self._read(frame))
+
+    async def _read(self, frame: Frame) -> None:
+        try:
+            lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
+        except Exception as exc:  # noqa: BLE001  the model narrates what can't be read
+            self.events.emit("error", where="reader", message=str(exc)[:300])
+            self.read_owned, self.read_t = False, frame.t
+            return
+        busy = self.agent_task is not None and not self.agent_task.done()
+        if self.paused or busy or self.listening():
+            # Said later, once they're done (nothing is marked as said); this look doesn't
+            # count, so the next frame gets a fresh one.
+            self.read_thumb = None
+            return
+        self.reader.verbosity = self.narrator.verbosity
+        self.reader.team_up = self.narrator.team_up
+        line = self.reader.update(lk)
+        opened = lk.readable and not self.read_owned
+        self.read_owned, self.read_t = lk.readable, frame.t
+        if self.read_prime:
+            self.read_prime, line = False, ""
+            self.reader.model_read = False
+        if ((line or opened) and self.narrating is not None and not self.narrating.done()
+                and self.narrating is not self.read_model
+                and self.narrating is not self.describing):
+            self.narrating.cancel()  # the model's line is about a screen that's gone
+        if self.reader.model_read:
+            # A text box that has finished typing but doesn't read cleanly: the model
+            # reads this frame, now that it's whole.
+            self.reader.model_read = False
+            self._start_narration(frame)
+            self.read_model = self.narrating
+        elif self.reader.fight_started:
+            # The reader says turns and HP; what the party is up against is the model's.
+            self.reader.fight_started = False
+            if self.narrating is None or self.narrating.done():
+                self.narrating = self.read_model = asyncio.create_task(
+                    self._narrate(frame, extra=BATTLE_START))
+        if not line:
+            return
+        parts = set(self.reader.last)
+        # Moving the cursor cuts off the last cursor line, as screen readers do; text
+        # (a message, a description, dialogue) is never cut off by anything but text.
+        cursor = {"focus", "turn"}
+        interrupt = (parts <= cursor and self.read_last_parts <= cursor) or (
+            bool(parts & {"text", "question"}) and bool(self.read_last_parts & {"text", "question"}))
+        # Only the reader's own line is cut off: an answer, the agent or a description
+        # the player asked for plays out.
+        playing = getattr(self.voice, "last_spoken", None)
+        if not self.voice.idle() and playing is not None and playing != self.read_last_line:
+            interrupt = False
+        self.read_last_parts, self.read_last_line = parts, clean_for_speech(line)
+        self.narrator.recent.append(line)
+        self.events.emit("say", text=line, source="reader", screen=lk.kind, ms=lk.ms,
+                         latency=round(time.monotonic() - frame.t, 2))
+        self.spawn(self.voice.say(line, interrupt=interrupt))
 
     # Talking
 
@@ -1010,9 +1166,40 @@ class Session:
         if phrase:
             self.side_task = self.spawn(self.where(phrase))
             return
+        if await self._screen_answer(text):
+            return
         if self.agent_task and not self.agent_task.done():
             self.agent_task.cancel()
         self.agent_task = asyncio.create_task(self._agent(text))
+
+    async def _screen_answer(self, text: str) -> bool:
+        """Answer from the screen as read, in a fraction of a second, when it shows the
+        answer (Chrono Trigger on Steam: HP, the party, items, what text says)."""
+        latest = self.latest
+        if latest is None or not self._reads(latest) or not ctscreen.asks(text):
+            return False
+        if self.agent_task and not self.agent_task.done():
+            return False  # mid-request: the agent hears it
+        t0 = time.monotonic()
+        try:
+            frame = await self.grab_now()
+            lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
+            line = await asyncio.to_thread(ctscreen.answer, text, lk,
+                                           self.reader.active or self.reader.party,
+                                           self.reader.heard, frame.image)
+        except Exception as exc:  # noqa: BLE001  the agent answers instead
+            self.events.emit("error", where="screen_answer", message=str(exc)[:300])
+            return False
+        if not line:
+            return False
+        self.events.emit("say", text=line, source="screen",
+                         latency=round(time.monotonic() - t0, 2))
+        self.events.emit("agent", request=text, outcome=line, steps=[], turns=[],
+                         seconds=round(time.monotonic() - t0, 2))
+        self.narrator.recent.append(line)
+        self.agent.history.append(f"{text} -> {line}")
+        await self.voice.say(line)
+        return True
 
     async def _agent(self, text: str) -> None:
         if self.narrating and not self.narrating.done():
@@ -1050,6 +1237,7 @@ class Session:
             self.watcher.accept(frame)
             self.silent_streak, self.quiet_until = 0, 0.0
             self.pending = (frame, 0.0)
+            self.read_prime = True  # the reader starts from here, quietly
 
     async def _working_ticks(self) -> None:
         """A soft tick every few seconds while acting, so a long silence isn't a mystery."""
@@ -1322,6 +1510,10 @@ class Session:
             # The player asked for the next line: read it once it has typed out, now,
             # whatever the back-off after quiet screens says.
             self.silent_streak, self.quiet_until, self.pending = 0, 0.0, None
+            latest = getattr(self, "latest", None)
+            if (not self.paused and latest is not None and getattr(self, "reader", None)
+                    and self._reads(latest)):
+                return  # the reader reads the new line the moment it has typed out
             with contextlib.suppress(Exception):
                 self._start_narration(await self._typed_out(), describe=self.paused)
         elif action == "describe":

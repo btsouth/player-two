@@ -246,6 +246,12 @@ CONFIRM = {
 
 GAME_CONTEXT = "The game is {game}."
 
+# A fight just came up (the screen reader says turns, HP and messages; this is the rest).
+BATTLE_START = """\
+A fight just started. Say only how many enemies there are and what they look like, in a \
+few words, like "Two green slimes and a big bat." A name only if the screen shows one. Nothing \
+about the party, turns, menus or HP: that is said already."""
+
 # Chrono Trigger on Steam, in a battle: the executor does the presses (battle.py).
 BATTLE_CT = """\
 This is a Chrono Trigger battle. It is paused while you think. Play it only with these \
