@@ -128,6 +128,7 @@ class HyprlandCapture(Capture):
         self._checked = 0.0
         self._bad_id = None
         self._bad_until = 0.0
+        self._window_ok = False  # a window capture has worked: this Hyprland can do them
 
     def pick(self) -> dict | None:
         from .games import pick_game
@@ -148,31 +149,55 @@ class HyprlandCapture(Capture):
         if self.target and self.target.get("address"):
             hypr_focus(self.target["address"])
 
+    def _repick(self, now: float) -> None:
+        picked = self.pick()
+        if (picked or {}).get("stableId") != (self.target or {}).get("stableId"):
+            self._dark_since = None
+        self.target = picked
+        self._checked = now
+
+    def _window(self, sid, now: float) -> Frame | None:
+        """The game window's own picture, or None when it can't be had now. A failure
+        with the window still open (a slow capture on a busy machine) is tried again at
+        once, and the next grab tries the window again: no seconds of monitor pictures
+        after one (the reader misread them, walks got lost). grim 1.5 segfaults when the
+        window closes mid-capture (a game quitting), and each crash puts up a desktop
+        notice: a closed window is never captured again, and one that crashed it while
+        still listed (closing) is left alone a while, so it's one crash per close."""
+        for _ in range(2):
+            try:
+                data = subprocess.check_output(["grim", "-t", "ppm", "-T", str(sid), "-"],
+                                               timeout=3, stderr=subprocess.DEVNULL)
+                if data:
+                    img = Image.open(io.BytesIO(data))
+                    self._blank_check(img, sid, now)
+                    self._window_ok = True
+                    return Frame(img, now, label=self.target.get("title", ""))
+                crashed = False
+            except (subprocess.SubprocessError, OSError, KeyError) as exc:
+                crashed = isinstance(exc, subprocess.CalledProcessError) and exc.returncode < 0
+            if not any(c.get("stableId") == sid for c in hypr_clients()):
+                self._bad_id, self._bad_until = sid, float("inf")  # closed: the game afresh
+                self._repick(now)
+                return None
+            if crashed or not self._window_ok:
+                # Closing, or a Hyprland that can't capture one window (older ones): the
+                # monitor for a while.
+                self._bad_id, self._bad_until = sid, now + 5.0
+                self._checked = 0.0
+                return None
+        return None  # twice in a row: this one look is of the monitor
+
     def grab(self) -> Frame:
         now = time.monotonic()
         if self.target is None or now - self._checked > 2.0:
-            picked = self.pick()
-            if (picked or {}).get("stableId") != (self.target or {}).get("stableId"):
-                self._dark_since = None
-            self.target = picked
-            self._checked = now
+            self._repick(now)
         sid = (self.target or {}).get("stableId")
+        if self.target is not None and not (sid == self._bad_id and now < self._bad_until):
+            frame = self._window(sid, now)
+            if frame is not None:
+                return frame
         if self.target is not None:
-            if not (sid == self._bad_id and now < self._bad_until):
-                try:
-                    data = subprocess.check_output(
-                        ["grim", "-t", "ppm", "-T", str(sid), "-"],
-                        timeout=3, stderr=subprocess.DEVNULL)
-                    if data:
-                        img = Image.open(io.BytesIO(data))
-                        self._blank_check(img, sid, now)
-                        return Frame(img, now, label=self.target.get("title", ""))
-                except (subprocess.SubprocessError, OSError, KeyError):
-                    # grim 1.5 segfaults when the window closes mid-capture (a game
-                    # quitting), and each crash puts up a desktop notice: leave that window
-                    # alone for a while and look for the game afresh on the next grab.
-                    self._bad_id, self._bad_until = sid, now + 5.0
-                    self._checked = 0.0
             # Older Hyprland can't capture one window: show the monitor it's on.
             if self.output is None and self.target.get("monitor") is not None:
                 self.output = monitor_name(self.target["monitor"])
