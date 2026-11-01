@@ -158,6 +158,18 @@ class TestAgent:
         run(agent.run("where am I?"))
         assert said == ["You're on a stage, with Yosuke next to you."]
 
+    def test_a_reply_in_words_labelled_finish_is_said_without_the_label(self):
+        """Live 2026-11-01: "Finish: You're fighting two small winged gold imps..." was read
+        out with its label when the model wrote the answer instead of calling finish."""
+        agent, _, said, _, muse = self.make([])
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            return SimpleNamespace(content="Finish: Two gold imps.", tool_calls=[])
+
+        muse.tools = words
+        result = run(agent.run("what are we fighting?"))
+        assert said == ["Two gold imps."] and result.outcome == "Two gold imps."
+
     def test_running_out_of_steps_asks_for_where_things_stand(self):
         agent, _, said, _, muse = self.make(
             [[("press", {"buttons": ["up"]})]] * 2 + [[("finish", {"text": "Got halfway."})]])

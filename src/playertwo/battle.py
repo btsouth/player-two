@@ -661,7 +661,7 @@ class Executor:
         named = intent.name.strip()
         seen_name = not named  # a tech or item shows its name in the bar as it goes off
         while time.monotonic() - t0 < self.t.playout_max_s + (0 if seen_name else 2.5):
-            top = st.top if st.top and st.top != stale else ""
+            top = st.top if message(st.top) and st.top != stale else ""
             if top and top not in msgs and st.kind != "target":
                 msgs.append(top)
                 last_change = time.monotonic()
@@ -810,6 +810,12 @@ class Executor:
         except Stop as exc:
             return Outcome(False, f"{exc} after {len(turns)} commands",
                            await self._settle_stopped(), str(exc), self.presses[start:])
+
+
+def message(top: str) -> bool:
+    """Whether the bar's text reads as a message: a word of three letters or more, not
+    specks of an animation passing over it ("-; - .; Q", live 2026-11-01)."""
+    return bool(top and re.search(r"[A-Za-z]{3}", top))
 
 
 def progress(st: State, done: Intent) -> str:

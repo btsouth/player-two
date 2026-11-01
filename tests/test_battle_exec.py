@@ -605,3 +605,10 @@ async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
     assert run.steps[0].tool == "fight" and run.steps[0].result.startswith("done: won")
     assert "fight" not in muse.tools_seen[0] and "battle" not in muse.tools_seen[0]
     assert "fight(win) was done already" in muse.texts[0]
+
+
+def test_specks_on_the_bar_are_not_a_message():
+    from playertwo.battle import message
+
+    assert not message("-") and not message("- .") and not message("Q") and not message("")
+    assert message("Heal") and message("Combo Attack: Reduces HP to 1")

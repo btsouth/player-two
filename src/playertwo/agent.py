@@ -1940,9 +1940,11 @@ class Agent:
             msgs.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": [c.model_dump() for c in calls] or None})
             if not calls:
-                if msg.content:
-                    await self._speak(msg.content)
-                    run.outcome = msg.content
+                # A reply in words, not a tool call; sometimes labelled ("Finish: ...").
+                text = re.sub(r"^\s*(finish|say)\s*:\s*", "", msg.content or "", flags=re.I)
+                if text.strip():
+                    await self._speak(text)
+                    run.outcome = text
                     out_of_turns = False
                     break
                 # Nothing at all (its thinking ran out of room): ask again rather than
