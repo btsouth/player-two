@@ -998,3 +998,22 @@ async def test_a_look_the_reader_chokes_on_goes_to_the_model(monkeypatch):
     await s._read(Frame(Image.new("RGB", (1920, 1080)), 5.0))
     assert s.read_t == 5.0 and not s.read_owned
     assert s.errors and "index" in s.errors[0]["message"]
+
+
+def test_danger_player_two_just_gave_isnt_said_again():
+    """Live 3: "Frog's Slurp healed Frog: 101 of 494." then the reader's "Frog 101 HP."."""
+    from playertwo.ctsteam import Member, State
+
+    def fight(frog):
+        st = State(kind="none", party=[Member("Crono", 780, 780, 64, 64, "white"),
+                                       Member("Frog", frog, 494, 65, 65, "white")])
+        return ctscreen.battle_look(st)
+
+    r = Reader()
+    r.just_said(["Okay, I'll heal Frog.", "Frog's Slurp healed Frog: 101 of 494."], now=0)
+    assert r.update(fight(101), now=0.2) == "Fight."
+    assert r.update(fight(101), now=0.5) == ""
+    # The same danger long after is still said.
+    r2 = Reader()
+    r2.just_said(["Frog's Slurp healed Frog: 101 of 494."], now=0)
+    assert r2.update(fight(101), now=30) == "Fight. Frog 101 HP."

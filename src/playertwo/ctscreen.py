@@ -660,13 +660,29 @@ class Reader:
             on.add(text)
             if text in self.danger_on:
                 continue
-            if name in covered or now - self.danger_at.get(text, -1e9) < 20:
+            if name in covered or now - self.danger_at.get(text, -1e9) < 20 \
+                    or self._told_danger(name, text, now):
                 self.danger_at.setdefault(text, now)
                 continue
             self.danger_at[text] = now
             out.append(text)
         self.danger_on = on
         return ", ".join(out)
+
+    def _told_danger(self, name: str, text: str, now: float) -> bool:
+        """Player Two's own line just now gave this already (live 3: "Frog's Slurp healed
+        Frog: 101 of 494." then the reader's "Frog 101 HP.")."""
+        if not self.told or now - self.told_at > 15:
+            return False
+        num = re.search(r"\d+", text)
+        for t in self.told:
+            if name not in t:
+                continue
+            if text.endswith("is down") and re.search(r"\b(down|knocked out)\b", t, re.I):
+                return True
+            if num and re.search(rf"\b{num.group()}\b", t):
+                return True
+        return False
 
     def prime(self) -> None:
         """Player Two just acted and said what came of it: HP read before that isn't the
