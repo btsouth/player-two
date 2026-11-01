@@ -816,9 +816,9 @@ def test_a_box_player_two_just_said_isnt_said_again_but_the_next_one_is():
     """Live (talk-to-10): the agent asked "The man says: Shelters are quite useful. Do you
     know about them? ..." and finished with the box up; the reader then said the box."""
     r = Reader()
-    r.just_said(["Okay, I'll talk to the man by the table.",
-                 "The man says: Shelters are quite useful. Do you know about them? Yes is "
-                 "highlighted. Should I pick Yes or No?"], now=0)
+    asked = ("The man says: Shelters are quite useful. Do you know about them? Yes is "
+             "highlighted. Should I pick Yes or No?")
+    r.just_said(["Okay, I'll talk to the man by the table.", asked], now=0)
     q = look("choice", typing=("question",),
              question="Shelters are quite useful. Do you know about them?",
              focus="Yes selected, or No")

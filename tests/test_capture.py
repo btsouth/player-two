@@ -54,7 +54,7 @@ def test_gone_window_is_noticed_at_once_and_never_captured_again(monkeypatch):
 
     monkeypatch.setattr(screen.subprocess, "check_output", run)
     monkeypatch.setattr(screen, "monitor_name", lambda i: "DP-2")
-    monkeypatch.setattr(screen, "hypr_clients", lambda: [])  # closed
+    monkeypatch.setattr(screen, "hypr_clients", list)  # closed: an empty client list
     cap = screen.HyprlandCapture()
     picks = iter([{"stableId": "abc", "monitor": 1}, None, None])
     monkeypatch.setattr(cap, "pick", lambda: next(picks))
@@ -109,7 +109,7 @@ def test_one_slow_capture_is_tried_again_not_five_seconds_of_the_monitor(monkeyp
 
 def test_two_failures_in_a_row_give_one_look_at_the_monitor_then_the_window(monkeypatch):
     err = subprocess.CalledProcessError(1, ["grim"])
-    cap, calls, clock = _window_then(monkeypatch, [None, err, err])
+    cap, _calls, clock = _window_then(monkeypatch, [None, err, err])
     assert cap.grab().label == "CHRONO TRIGGER"
     clock[0] += 0.5
     assert cap.grab().label == ""  # this one look: the monitor
