@@ -90,6 +90,43 @@ def test_world_exits_named_by_their_end(tmp_path):
         "outside, the nearest way out"
 
 
+def test_places_named_alike_get_plain_names(tmp_path):
+    from types import SimpleNamespace
+    from typing import ClassVar
+
+    walk = [[r, c] for r in range(2, 12) for c in range(2, 14)]
+    for loc in (15, 16, 17, 39):
+        make(tmp_path, loc, (256, 224), walk,
+             [{"from": [11, 5], "dir": [0, 1], "to": 496, "at": [100, 100]}], loc)
+    (tmp_path / "names.json").write_text(json.dumps({"names": {
+        "15": "Residence", "16": "Residence", "17": "Market", "39": "Market",
+        "12": "Truce Inn", "116": "Truce Inn"}, "worlds": [496]}))
+
+    class Map:
+        world = 496
+        places: ClassVar = {
+            "Truce Residence (west)": (366, 251), "Truce Residence (east)": (424, 252),
+            "Truce Market": (348, 283), "Medina Market": (980, 411), "Truce Inn": (426, 304)}
+        doors: ClassVar = {(1, 1): 16, (2, 2): 15, (3, 3): 17, (4, 4): 39}
+        cells: ClassVar = {
+            "Truce Residence (west)": {(1, 1)}, "Truce Residence (east)": {(2, 2)},
+            "Truce Market": {(3, 3)}, "Medina Market": {(4, 4)}}
+
+        def entrance(self, name):
+            return self.cells.get(name)
+
+        def nearest(self, x, y):
+            return "Truce Residence (east)", 0.0, ""
+
+    rooms = Rooms(tmp_path, SimpleNamespace(maps=[Map()]))
+    assert rooms.name(15) == "the east house in Truce"
+    assert rooms.name(16) == "the west house in Truce"
+    assert rooms.name(17) == "Truce Market" and rooms.name(39) == "Medina Market"
+    assert rooms.name(12) == "Truce Inn" and rooms.name(116) == "Truce Inn"  # one town
+    assert rooms.rooms[15].name == "the east house in Truce"
+    assert rooms.rooms[17].exits[0].label == "outside, by the east house in Truce"
+
+
 def with_people(folder, loc, people):
     d = json.loads((folder / f"loc-{loc:03x}.json").read_text())
     d["people"] = people

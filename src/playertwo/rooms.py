@@ -275,6 +275,7 @@ class Rooms:
             self.rooms[room.loc] = room
             if room.name and room.loc not in self.names:
                 self.names[room.loc] = room.name
+        self._name_alike(atlas)
         for room in self.rooms.values():
             for e in room.exits:
                 e.label = self._label(room, e, atlas)
@@ -308,13 +309,47 @@ class Rooms:
             if m is not None and m.places and any(e.at):
                 spots = {o.at for o in room.exits if o.to == e.to and any(o.at)}
                 if all(math.dist(o, e.at) < 16 for o in spots):
-                    return f"outside, by {m.nearest(*e.at)[0]}"
+                    return f"outside, by {plain_place(m.nearest(*e.at)[0])}"
                 own = room.name.lower()
                 others = [(math.dist(p, e.at), n) for n, p in m.places.items()
                           if not own or (n.lower() not in own and own not in n.lower())]
                 if others:
-                    return f"outside, toward {min(others)[1]}"
+                    return f"outside, toward {plain_place(min(others)[1])}"
         return self.name(e.to)
+
+    def _name_alike(self, atlas) -> None:
+        """Places the game names alike ("Residence" five times, "Market" three) are
+        called by where they are, in plain words: the world map's name for the place
+        whose door leads in ("Truce Residence (west)": "the west house in Truce"), when
+        that tells them apart."""
+        if atlas is None:
+            return
+        by_name: dict[str, list[int]] = {}
+        for loc, n in self.names.items():
+            if loc not in self.worlds:
+                by_name.setdefault(n, []).append(loc)
+        alike = {loc for locs in by_name.values() if len(locs) > 1 for loc in locs}
+        if not alike:
+            return
+        found: dict[int, str] = {}
+        for m in getattr(atlas, "maps", []):
+            doors = getattr(m, "doors", None)
+            if not doors or not hasattr(m, "entrance"):
+                continue
+            for place in m.places:
+                for c in m.entrance(place) or ():
+                    loc = doors.get(c)
+                    if loc in alike and loc not in found:
+                        found[loc] = place
+        for n, locs in by_name.items():
+            named = {loc: plain_place(found[loc]) for loc in locs if loc in found}
+            if len(set(named.values())) < 2 and len(named) < len(locs):
+                continue  # the map doesn't tell them apart either
+            for loc, full in named.items():
+                if full.lower() != n.lower():
+                    self.names[loc] = full
+                    if loc in self.rooms:
+                        self.rooms[loc].name = full
 
     @staticmethod
     def folder_for(game: str, folder: Path = ATLASES) -> Path | None:
@@ -1779,6 +1814,22 @@ async def pick_exit(muse, game: str, said: str, here: str,
 
 TALK = re.compile(r"\b(talk|speak|chat|ask|tell|buy|sell|shop|rest|sleep|stay|"
                   r"save(?! point)|open|search|check|read|examine|use)\b", re.IGNORECASE)
+
+
+PLACE_KINDS = {"residence": "house"}
+
+
+def plain_place(name: str) -> str:
+    """A world map's name for a place, the way it's said: "Truce Residence (west)" is
+    "the west house in Truce", "Medina Residence" "the house in Medina"; others as they
+    are ("Truce Market", "Last Village Hut (west)")."""
+    m = re.fullmatch(r"(?P<town>[A-Z][\w']*) (?P<kind>\w+)(?: \((?P<side>[a-z -]+)\))?",
+                     name.strip())
+    if m is None or m.group("kind").lower() not in PLACE_KINDS:
+        return name
+    kind = PLACE_KINDS[m.group("kind").lower()]
+    side = f"{m.group('side')} " if m.group("side") else ""
+    return f"the {side}{kind} in {m.group('town')}"
 
 
 def describe(rooms: Rooms, here: Here) -> str:
