@@ -288,26 +288,23 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
         rows = [r for row in _dialogue_lines(img) for r in row]
         big = [r for r in rows if plausible(r)]
         asked = next((r for r in big if clean(r.text).endswith("?")), None)
+        if asked is not None:
+            # The box's last question ("...for a while? Wouldn't that be great?").
+            asked = max((r for r in big if clean(r.text).endswith("?")
+                         and (r.y < 520) == (asked.y < 520) and abs(r.y - asked.y) < 300),
+                        key=lambda r: r.y)
         talk_found: list = []
+        said: list[Run] = []
         for tip in tips:
-            # The hand itself reads as specks in front of the option ("' ..t Yes."): the
-            # option is the words at the end.
-            near = sorted((r for r in rows if abs(r.y - tip[1]) < 45
-                           and r.x1 > tip[0] and r.x0 - tip[0] < 200), key=lambda r: r.x0)
-            m = OPTION.search(near[0].text) if near else None
-            w = m.group(1) if m else ""
-            if (snap(w, VOCAB, 0.8) in VOCAB or len(w) >= 3) and not misread(w):
-                talk_found.append((tip, w, near[0]))
+            # The options in the hand's column, read on their own: on a whole line the
+            # hand and the window's edge run into the first one ("goreI" for "Sure.").
+            col = _choice_column(img, tip)
+            here = [r for r in col if abs(r.y - tip[1]) < 45]
+            if here:
+                talk_found.append((tip, here[0].text, here[0]))
+                said = said or col
         if talk_found:
-            # The other options: the words at the end of each line in the hand's column
-            # (specks of the window's edge run into them).
             x = talk_found[0][0][0]
-            said = []
-            for r in rows:
-                o = OPTION.search(r.text) if r.x1 > x and r.x0 - x < 200 else None
-                w = o.group(1) if o else ""
-                if (snap(w, VOCAB, 0.8) in VOCAB or len(w) >= 3) and not misread(w):
-                    said.append(Run(w, x, r.x1, r.y, r.colour, r.worst))
             column = [r for r in said if abs(r.y - talk_found[0][0][1]) < 300]
             if asked is not None:
                 # The question is the whole box it ends ("Shelters are quite useful. Do you
@@ -361,7 +358,8 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
                 r.y > question.y and r.y - question.y < 700)]
             names = []
             for r in sorted(opts, key=lambda r: r.y):
-                w = snap(r.text, VOCAB, 0.7)
+                # (A dialogue option is said as read: "Sure" isn't the tech "Cure".)
+                w = r.text if talk else snap(r.text, VOCAB, 0.7)
                 names.append(w if w in VOCAB else clean(r.text).rstrip("." if talk else ""))
             others = [n for n in names if n != name]
             lk.parts["focus"] = f"{name} selected" + (f", or {', '.join(others)}"
@@ -483,6 +481,28 @@ def _box_rows(lines: list[list[Run]]) -> list[list[Run]]:
 
 def _clean_chars(rows: list[list[Run]]) -> int:
     return sum(len(r.text) for row in rows for r in row if plausible(r) and r.worst <= SURE)
+
+
+def _choice_column(img: np.ndarray, tip: tuple[int, int]) -> list[Run]:
+    """A dialogue choice's options in the hand's column (the words just right of where
+    the hand points, on its row and the rows above and below), read at dialogue size in a
+    box of their own. Each Run's text is the option without its full stop."""
+    x0, y0 = tip[0] + 4, max(0, tip[1] - 260)
+    x1, y1 = min(CANVAS[0], tip[0] + 800), min(CANVAS[1], tip[1] + 260)
+    crop = cv2.resize(img[y0:y1, x0:x1], None, fx=DIALOGUE, fy=DIALOGUE,
+                      interpolation=cv2.INTER_AREA)
+    out = []
+    for row in runs_in(ctsteam.lib(), crop, (0, 0, crop.shape[1], crop.shape[0]), local=True):
+        r = row[0]
+        x = x0 + round(r.x0 / DIALOGUE)
+        if x - tip[0] > 60 or r.worst > SURE:
+            continue  # not an option starting just right of the hand's column
+        o = OPTION.search(r.text)
+        w = o.group(1) if o else ""
+        if (snap(w, VOCAB, 0.8) in VOCAB or len(w) >= 3) and not misread(w):
+            out.append(Run(w, x, x0 + round(r.x1 / DIALOGUE), y0 + round(r.y / DIALOGUE),
+                           r.colour, r.worst))
+    return out
 
 
 def _dialogue_lines(img: np.ndarray) -> list[list[Run]]:

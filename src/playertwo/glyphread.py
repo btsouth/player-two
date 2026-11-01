@@ -123,9 +123,17 @@ def text_lines(m: np.ndarray, min_h: int = 18) -> list[tuple[int, int]]:
     out = []
     for a, b in bands(0, len(prof), 2):
         if b - a > 48:
-            # Clutter bridged two rows of text: cut at the sparse rows.
+            # Clutter bridged two rows of text: cut at the sparse rows, then give each row
+            # back the few thinner rows under it that the cut took (descenders: "y" read
+            # as "v" and "g" as "q" under a speckled box, live).
             peak = prof[a:b].max()
-            out += list(bands(a, b, max(2, 0.12 * peak)))
+            low = max(2, 0.06 * peak)
+            cut = bands(a, b, max(2, 0.12 * peak))
+            for k, (c, d) in enumerate(cut):
+                end = min(b, d + 8, cut[k + 1][0] - 2 if k + 1 < len(cut) else b)
+                while d < end and prof[d] > low and d - c < 46:
+                    d += 1
+                out.append((c, d))
         else:
             out.append((a, b))
     merged: list[list[int]] = []

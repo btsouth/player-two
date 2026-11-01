@@ -658,3 +658,21 @@ def test_options_whose_question_has_gone_still_say_the_hand():
     r = ctscreen.Reader()
     assert r.update(lk, now=1.0) == "Take a look selected, or No, thanks."
     assert r.update(lk, now=1.3) == ""  # once
+
+
+SURE = LIVE.parent / "night-2026-11-01" / "steam-frames" / "dialogue-choice-sure-sorry.png"
+
+
+@pytest.mark.skipif(not SURE.exists(), reason="no Sure/Sorry frame")
+def test_marles_sure_or_sorry_says_the_hand_and_the_whole_question():
+    """Live: the hand's fingertip ran into "Sure." ("goreI"), so the choice read as a plain
+    box; a speckled box cut the descenders ("Hev, whv ... qreat")."""
+    lk = ctscreen.look(cv2.imread(str(SURE)))
+    assert lk.kind == "choice" and not lk.unsure
+    assert lk.parts == {"question": "Hey, why don't we walk around together for a while? "
+                                    "Wouldn't that be great?",
+                        "focus": "Sure selected, or Sorry"}
+    melchior = SURE.parent / "dialogue-melchior-take-a-look-choice.png"
+    if melchior.exists():  # the same choice with his box still up
+        assert ctscreen.look(cv2.imread(str(melchior))).parts["focus"] == \
+            "Take a look selected, or No, thanks"
