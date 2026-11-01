@@ -142,16 +142,20 @@ TOOLS = [
         "description": "Inside a place (a house, a shop, a town, a castle, a forest) the "
                        "game's room survey knows: go through the way out to where the player "
                        "wants, even off screen and through other rooms on the way: "
-                       "'outside', 'upstairs', 'Leene Square', 'the way to the castle'; or to "
-                       "a thing in this place ('the counter', 'the bell'). It knows exactly "
-                       "where you are and every way out. Use it first for any "
-                       "'take me outside', 'go upstairs', 'where's the exit, take me there' "
-                       "indoors; in a place it doesn't know it says so: then exits and "
-                       "walk_to.",
+                       "'outside', 'upstairs', 'the north door', 'Leene Square', 'the way to "
+                       "the castle'; to a thing ('the counter', 'the bell', 'the save "
+                       "point'); or up to someone to talk to them ('the innkeeper', 'the "
+                       "shopkeeper', 'Mom'), in this place or the next. It knows exactly "
+                       "where you are, every way out and who stands where. Use it first for "
+                       "any 'take me outside', 'go upstairs', 'talk to the innkeeper', "
+                       "'take me to the shop counter' indoors; in a place it doesn't know it "
+                       "says so quickly.",
         "parameters": {"type": "object", "properties": {
-            "to": {"type": "string", "description": "Where to, as the player said it "
-                   "('outside', 'downstairs', 'the fair'), or a place's exact name from "
-                   "where_am_i."},
+            "to": {"type": "string", "description": "Where to or who, as the player said "
+                   "it ('outside', 'downstairs', 'the fair', 'the innkeeper'), or an exact "
+                   "name from where_am_i."},
+            "talk": {"type": "boolean", "description": "true to talk to them (or use, "
+                     "open, buy from it) once there: it presses a facing them."},
         }, "required": ["to"]}}},
     {"type": "function", "function": {
         "name": "where_am_i",
@@ -797,6 +801,12 @@ class Agent:
             on_map = await self._on_surveyed_map()
             if on_map:
                 return on_map
+        if name in ("walk_to", "talk_to") and str(a.get("target") or "").strip():
+            # Inside a surveyed place, someone or something it knows is walked to by the
+            # place's map (straight there, off screen too), not by sight.
+            known = await self._room_target(str(a["target"]), name == "talk_to")
+            if known:
+                return known
         if name == "talk_to":
             walked = await self._act("walk_to", a)
             if not walked.startswith("arrived"):
@@ -926,7 +936,9 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             try:
-                return await self._go_to_exit(str(a.get("to") or ""))
+                return await self._go_to_exit(str(a.get("to") or ""),
+                                              talk=a.get("talk") if isinstance(
+                                                  a.get("talk"), bool) else None)
             except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"
@@ -1267,6 +1279,17 @@ class Agent:
         if spot is None:  # a blink or a cloud: one more look before going without it
             await asyncio.sleep(0.4)
             spot = await self._spot(atlas, (await self.grab()).image)
+        quests = Quests.for_game(self.game or "")
+        found = None
+        if spot is None:
+            # Inside a surveyed place: out by its way nearest the place first.
+            left = await self._leave_for(atlas, place, quests)
+            if left is not None:
+                text, found = left
+                if not text.startswith("arrived"):
+                    return text
+                await asyncio.sleep(1.0)  # the fade out onto the map
+                spot = await self._spot(atlas, (await self.grab()).image)
         maps = [atlas.map(spot.map)] if spot is not None else atlas.maps
         era = era_named(place) if epoch_ok(atlas) else None
         if era is not None and era_only(place):
@@ -1274,12 +1297,12 @@ class Agent:
         if era is not None:  # "Truce Inn in 600 AD": that era's maps
             maps = sorted((m for m in atlas.maps if era_of(m.name) == era),
                           key=lambda m: spot is None or m.name != spot.map) or maps
-        quests = Quests.for_game(self.game or "")
         near = maps[0].nearest(spot.x, spot.y)[0] if spot is not None and maps[0].places \
             else ""
-        found = await pick_place(self.muse, self.game or "", place, maps,
-                                 atlas_aliases(self.game or ""), near,
-                                 quests.aliases() if quests else None)
+        if found is None or (spot is not None and found[0].name != spot.map):
+            found = await pick_place(self.muse, self.game or "", place, maps,
+                                     atlas_aliases(self.game or ""), near,
+                                     quests.aliases() if quests else None)
         if isinstance(found, str) and epoch_ok(atlas):
             if era is not None:  # no place in that era fits: go to it, then ask
                 went = await self._go_to_era(place)
@@ -1311,8 +1334,11 @@ class Agent:
         async def keep_going():
             return await self.walker_keep_going()
 
-        # Said at once, while it starts walking: the player can't see it set off.
-        told = asyncio.create_task(self._speak(f"Going to {name}."))
+        # Said at once, while it starts walking: the player can't see it set off (unless
+        # it was said on the way out of a place).
+        told = asyncio.create_task(self._speak(
+            "" if getattr(self, "_going_to", None) == name else f"Going to {name}."))
+        self._going_to = None
         if spot is not None and (m.name != spot.map or
                                  left_flying(self.notes.folder, self.game or "")):
             result = await self._pilot(atlas).travel(m, name)  # another era, or in the air
@@ -1459,6 +1485,98 @@ class Agent:
                      "them; otherwise finish.")
         return f"through {via}, then {last}"
 
+    async def _room_target(self, target: str, talk: bool) -> str:
+        """walk_to or talk_to inside a surveyed place: to someone or something in it (or
+        the next place) the survey knows, by the place's map. "" when it isn't inside a
+        surveyed place or nothing known fits (then by sight)."""
+        from .rooms import pick_exit, walk_out
+
+        inside = await self._inside((await self.grab()).image)
+        if inside is None:
+            return ""
+        rooms, here = inside
+        choices, targets, hints = rooms.options(here)
+        if not targets:
+            return ""
+        label, _why = await pick_exit(self.muse, self.game or "", target,
+                                      rooms.name(here.loc),
+                                      {k: choices[k] for k in targets},
+                                      {k: hints.get(k, "") for k in targets})
+        if label is None:
+            return ""
+        t = targets[label]
+        walker = self.walker()
+
+        async def shoot():
+            return (await self.grab()).image
+
+        told = asyncio.create_task(self._speak(f"Going to {t.name}."))
+        try:
+            out = await walk_out(rooms, t.loc, shoot, self.controls.steer,
+                                 self.walker_keep_going, walker.log, 60.0, here, "", t,
+                                 self.controls.press, talk)
+        finally:
+            await told
+        if out.startswith("arrived"):
+            walker.memory = None
+        return f"{out} (by the place's map: {label})"
+
+    async def _leave_for(self, atlas, place: str, quests) -> tuple[str, tuple] | None:
+        """Inside a surveyed place, for a place on the world map outside it: walk out by
+        the way out nearest that place. (what happened, (map, name)), or None when not
+        inside a surveyed place or the place isn't on a map it leads out to."""
+        import math
+
+        from .quests import atlas_aliases, pick_place
+        from .rooms import describe, walk_out
+
+        inside = await self._inside((await self.grab()).image)
+        if inside is None:
+            return None
+        rooms, here = inside
+        outs: dict[str, tuple[int, tuple[float, float]]] = {}  # label: (world, where)
+        seen, todo = {here.loc}, [here.loc]
+        while todo:
+            u = todo.pop()
+            for e in rooms.rooms[u].exits if u in rooms.rooms else []:
+                if e.to in rooms.worlds:
+                    if any(e.at):
+                        outs.setdefault(e.label, (e.to, e.at))
+                elif e.to not in seen:
+                    seen.add(e.to)
+                    todo.append(e.to)
+        maps = [m for m in atlas.maps if getattr(m, "world", None) in {w for w, _ in
+                                                                        outs.values()}]
+        if not maps:
+            return None
+        found = await pick_place(self.muse, self.game or "", place, maps,
+                                 atlas_aliases(self.game or ""), "",
+                                 quests.aliases() if quests else None)
+        if isinstance(found, str):
+            return None
+        m, name = found
+        if any(m.doors.get(c) in seen for c in m.entrance(name) or ()):
+            said = (f"already in {name}: {describe(rooms, here)}. go_to_exit goes to a "
+                    "way out, a thing or someone in here")
+            return said, found
+        goal = m.places[name]
+        label = min((k for k, (w, _) in outs.items() if w == m.world),
+                    key=lambda k: math.dist(outs[k][1], goal))
+        walker = self.walker()
+
+        async def shoot():
+            return (await self.grab()).image
+
+        await self._speak(f"Going to {name}, out of here first.")
+        self._going_to = name
+        out = await walk_out(rooms, m.world, shoot, self.controls.steer,
+                             self.walker_keep_going, walker.log, 90.0, here, label)
+        if not out.startswith("arrived"):
+            self._going_to = None
+            return (f"on the way out of {rooms.name(here.loc)} to {name}: {out}", found)
+        walker.memory = None
+        return out, found
+
     async def _inside(self, image):
         """(rooms, where) when the screen is inside a place the room survey knows."""
         from .rooms import Rooms
@@ -1470,37 +1588,55 @@ class Agent:
         here = await asyncio.to_thread(self._rooms.locate, image)
         return (self._rooms, here) if here is not None else None
 
-    async def _go_to_exit(self, to: str, limit: float = 90.0) -> str:
-        """Walk out of the place on screen to where the player means, by the surveyed
-        rooms (see rooms.walk_out): Muse picks the place from those reachable from here."""
-        from .rooms import pick_exit, walk_out
+    async def _go_to_exit(self, to: str, limit: float = 90.0, talk: bool | None = None
+                          ) -> str:
+        """Walk out of the place on screen to where the player means, or to a thing or
+        someone in it or the next place, by the surveyed rooms (see rooms.walk_out): Muse
+        picks from those reachable from here."""
+        from .rooms import TALK, Target, pick_exit, walk_out
 
         inside = await self._inside((await self.grab()).image)
         if inside is None:
-            return ("this place isn't in the room survey (or this isn't inside a place): "
-                    "use exits and walk_to")
+            return ("this place isn't in the room survey (or this isn't inside a place), so "
+                    "its layout isn't known: if what they want is on screen, walk_to or "
+                    "talk_to it; otherwise tell the player plainly that you don't know the "
+                    "way around this place yet and what you can see. Don't walk about "
+                    "trying ways.")
         rooms, here = inside
-        choices = rooms.reachable(here.loc)
-        spots = {f"{k} (in here)": v for k, v in rooms.rooms[here.loc].spots.items()}
-        choices.update({k: (here.loc, 0) for k in spots})
+        choices, targets, hints = rooms.options(here)
         if not choices:
             return f"in {rooms.name(here.loc)}, but no ways out are surveyed: use exits"
         label, why = await pick_exit(self.muse, self.game or "", to, rooms.name(here.loc),
-                                     choices)
+                                     choices, hints)
         if label is None:
             return (f"no single place from here fits {to!r} ({why}). From here: "
                     f"{'; '.join(choices)}. Ask the player which, or call go_to_exit with "
                     "an exact name")
+        target: Target | None = targets.get(label)
+        if talk is None:
+            talk = target is not None and (why.startswith("talk:") or bool(TALK.search(to)))
         walker = self.walker()
 
         async def shoot():
             return (await self.grab()).image
 
-        result = await walk_out(rooms, choices[label][0], shoot, self.controls.steer,
-                                self.walker_keep_going, walker.log, limit, here, label,
-                                spots.get(label))
+        name = target.name if target is not None else label
+        told = asyncio.create_task(self._speak(
+            f"Going to {name}." if target is not None or not label.startswith("outside")
+            else "Going outside."))
+        try:
+            result = await walk_out(rooms, choices[label][0], shoot, self.controls.steer,
+                                    self.walker_keep_going, walker.log, limit, here,
+                                    "" if target is not None else label, target,
+                                    self.controls.press, bool(talk))
+        finally:
+            await told
         if result.startswith("arrived"):
             walker.memory = None  # somewhere else now
+            if target is not None and target.person and any(
+                    p.moves and p.name == target.name
+                    for p in rooms.rooms[target.loc].people):
+                result += " (they walk about: if they're not there, look for them)"
         return result
 
     async def _travel(self, direction: str, target: str, secs: float) -> str:

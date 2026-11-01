@@ -27,6 +27,7 @@ cam_y = "0x1D0D"
 scroll_x = "0x1D87"  # the background's scroll (low byte): its low 3 bits are the
 scroll_y = "0x1D89"  # pixels the view is past cam_x, cam_y (rounded down to 8)
 battle = "0x117"    # 1 in a fight
+dialog = "0x134"    # 255 while a text box (or a shop) is up, else 0
 
 [rooms]
 start = "world-1000-home"        # a world-map state the doors are walked to from
@@ -178,3 +179,121 @@ to = "0x18D"
 location = "0x18D"
 walk_s = 300
 limit_s = 420
+
+# Added 2026-11-01: more of Truce (1000 A.D.), Guardia Castle (1000 A.D., from the side
+# quests save outside it), Truce in 600 A.D.; and walking up to someone (`target`, named
+# as the people survey names them) or a thing in a place, talking to them (`talk`).
+[[task]]
+id = "r-mayor-out"
+category = "rooms"
+state = "rooms/arrive-e-d"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-mayor-up"
+category = "rooms"
+state = "rooms/door-d"
+request = "go upstairs"
+to = "0xE"
+location = "0xE"
+limit_s = 180
+
+[[task]]
+id = "r-res-out"
+category = "rooms"
+state = "rooms/deep-10"
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-inn-keeper"
+category = "rooms"
+state = "rooms/deep-c"
+request = "talk to the innkeeper"
+to = "0xC"
+target = "the innkeeper"
+talk = true
+location = "0xC"
+limit_s = 180
+
+[[task]]
+id = "r-market-shop"
+category = "rooms"
+state = "rooms/door-11"
+request = "I want to buy something, take me to the shopkeeper"
+to = "0x11"
+target = "the shopkeeper"
+talk = true
+location = "0x11"
+limit_s = 180
+
+[[task]]
+id = "r-kitchen-mom"
+category = "rooms"
+state = "rooms/arrive-2-1"
+request = "talk to my mom"
+to = "0x1"
+target = "Crono's mom"
+talk = true
+location = "0x1"
+limit_s = 180
+
+[[task]]
+id = "r-fair-bell"
+category = "rooms"
+state = "rooms/door-5"
+request = "take me to the bell"
+to = "0x5"
+target = "the bell"
+location = "0x5"
+limit_s = 180
+
+[[task]]
+id = "r-castle-out"
+category = "rooms"
+state = "rooms/arrive-18-15"     # from the kitchen door, two guards below it
+request = "take me outside"
+to = "0x1F0"
+location = "0x1F0"
+limit_s = 180
+
+[[task]]
+id = "r-castle-kitchen"
+category = "rooms"
+state = "rooms/door-15"
+request = "take me to the kitchen"
+to = "0x18"
+location = "0x18"
+limit_s = 180
+
+[[task]]
+id = "r-inn600-up"
+category = "rooms"
+state = "rooms/door-74"
+request = "go upstairs"
+to = "0x75"
+location = "0x75"
+limit_s = 180
+
+[[task]]
+id = "r-inn600-out"
+category = "rooms"
+state = "rooms/deep-75"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-market600-out"
+category = "rooms"
+state = "rooms/deep-76"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180

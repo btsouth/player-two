@@ -80,6 +80,26 @@ class Exit:
 
 
 @dataclass
+class Person:
+    """Someone (or something drawn, like a save point) standing in a place, found by the
+    survey with the game's memory and named from their look."""
+    name: str
+    kind: str  # "person", "animal", "save point", "chest" or "thing"
+    at: tuple[float, float]  # their feet, in the place's pixels
+    moves: bool = False  # walks about: may not be just there
+
+
+@dataclass
+class Target:
+    """Somewhere to go: a thing in a place (where its name was put on the picture) or
+    someone standing there (walked up to and faced, to talk to them)."""
+    loc: int
+    at: tuple[float, float]
+    person: bool = False  # someone or something standing there: walked up to, faced
+    name: str = ""
+
+
+@dataclass
 class Room:
     loc: int
     name: str
@@ -92,6 +112,10 @@ class Room:
     small: np.ndarray | None = None
     spots: dict[str, tuple[float, float]] = field(default_factory=dict)  # things in it
     moving: bool = False  # its ground never stands still (drifting mist): found by its edges
+    people: list[Person] = field(default_factory=list)
+    # Tiles beside someone who stands still: walked past only when there's no other
+    # way (their feet's box reaches into them; a slanting step there catches on it).
+    crowd: set[tuple[int, int]] = field(default_factory=set)
 
     def cam_range(self) -> tuple[int, int, int, int]:
         xs = [c[0] for c in self.cams] or [0]
@@ -234,9 +258,17 @@ class Rooms:
                         {tuple(t) for t in d["walk"]}, {tuple(t) for t in d.get("wall", [])},
                         exits, [tuple(c) for c in d.get("cams", [])],
                         spots={k: tuple(v) for k, v in d.get("spots", {}).items()
-                               if not WAY_OUT.search(k)}, moving=bool(d.get("moving")))
+                               if not WAY_OUT.search(k)}, moving=bool(d.get("moving")),
+                        people=[Person(p["name"], p.get("kind") or "person",
+                                       tuple(p["at"]), bool(p.get("moves")))
+                                for p in d.get("people", []) if p.get("name")
+                                and p.get("kind") != "none"])
             room.small = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2),
                                     interpolation=cv2.INTER_AREA)
+            for p in room.people:
+                if not p.moves and p.kind in ("person", "animal"):
+                    pr, pc = int(p.at[1]) // TILE, int(p.at[0]) // TILE
+                    room.crowd |= {(pr + 1, pc), (pr - 1, pc), (pr, pc + 1), (pr, pc - 1)}
             self.rooms[room.loc] = room
             if room.name and room.loc not in self.names:
                 self.names[room.loc] = room.name
@@ -277,8 +309,15 @@ class Rooms:
 
     @staticmethod
     def folder_for(game: str, folder: Path = ATLASES) -> Path | None:
+        """The game's rooms/ in its atlas folder; PLAYER_TWO_ROOMS names another folder
+        of rooms instead (a survey being tried out), for whichever game is played."""
+        import os
+
         from .atlas import Atlas
 
+        own = os.environ.get("PLAYER_TWO_ROOMS")
+        if own and folder == ATLASES and Path(own).expanduser().is_dir():
+            return Path(own).expanduser()
         d = Atlas.folder_for(game, folder)
         if d is None:
             d = folder / slug(game) if game else None
@@ -293,8 +332,9 @@ class Rooms:
         d = cls.folder_for(game, folder)
         if d is None:
             return None
+        a = Atlas.folder_for(game, folder) or d.parent
         try:
-            atlas = Atlas(d.parent) if (d.parent / "atlas.json").exists() else None
+            atlas = Atlas(a) if (a / "atlas.json").exists() else None
         except (OSError, ValueError, KeyError):
             atlas = None
         rooms = cls(d, atlas)
@@ -420,7 +460,7 @@ class Rooms:
         bg = room.image[cam[1]:cam[1] + h, cam[0]:cam[0] + w]
         if bg.shape != v.shape:
             return Here(room.loc, cam, fx, fy, score, all(follows))
-        drawn = (np.abs(v.astype(np.int16) - bg.astype(np.int16)).sum(2) > 60)
+        drawn = drawn_over(v, room.image, cam) > 60
         drawn[200:] = False  # the field ends there; a notice may be drawn below
         drawn = cv2.morphologyEx(drawn.astype(np.uint8), cv2.MORPH_CLOSE,
                                  np.ones((5, 3), np.uint8))
@@ -741,6 +781,116 @@ class Rooms:
             out[NEAREST_OUT] = min(outs, key=lambda v: v[1])
         return out
 
+    def targets(self, start: int, here: Here | None = None, reach: int = 2
+                ) -> dict[str, Target]:
+        """Things and people to go to, by name: in this place ("the innkeeper (in
+        here)"), and in places up to `reach` ways out away ("the mayor (Mayor's Manor,
+        upstairs)"), not on world maps."""
+        dist = {start: 0}
+        q = deque([start])
+        while q:
+            u = q.popleft()
+            if dist[u] >= reach or u not in self.rooms:
+                continue
+            for e in self.rooms[u].exits:
+                if e.to not in dist and e.to not in self.worlds:
+                    dist[e.to] = dist[u] + 1
+                    q.append(e.to)
+        out: dict[str, Target] = {}
+        for loc in sorted(dist, key=dist.get):
+            room = self.rooms.get(loc)
+            if room is None:
+                continue
+            where = "in here" if loc == start else self.name(loc)
+            for p in room.people:
+                key = f"{p.name} ({where})"
+                if key not in out:  # walked up to and faced (stood on: a save point)
+                    out[key] = Target(loc, p.at, p.kind != "save point", p.name)
+            for k, v in room.spots.items():
+                key = f"{k} ({where})"
+                if key not in out:
+                    out[key] = Target(loc, v, False, k)
+        return out
+
+    def options(self, here: Here) -> tuple[dict[str, tuple[int, int]], dict[str, Target],
+                                           dict[str, str]]:
+        """Everywhere the player can be taken from here, by name: (location, how many
+        ways out away); which of those are things or people (Targets); and which way
+        each is from the player, in words."""
+        choices = self.reachable(here.loc)
+        targets = {k: t for k, t in self.targets(here.loc).items() if k not in choices}
+        for k, t in targets.items():
+            hops = self.hops(here.loc, t.loc)
+            choices[k] = (t.loc, len(hops) - 1 if hops else 0)
+        room = self.rooms[here.loc]
+        hints: dict[str, str] = {}
+        for k, (loc, _n) in choices.items():
+            ways = [e for e in room.exits if e.label == k]
+            if k in targets:
+                hints[k] = self.hint(here, loc, targets[k].at)
+            elif ways:
+                c = min((centre(e.frm) for e in ways),
+                        key=lambda c: math.dist(c, (here.x, here.y)))
+                hints[k] = (f"{math.dist(c, (here.x, here.y)) / TILE:.0f} steps "
+                            f"{compass(c[0] - here.x, c[1] - here.y)}")
+            else:
+                hints[k] = self.hint(here, loc)
+        return choices, targets, hints
+
+    def hint(self, here: Here, loc: int, at: tuple[float, float] | None = None) -> str:
+        """Which way and how far something is from the player, in words: "6 steps
+        north" in this place; "through <way>" for another place."""
+        room = self.rooms.get(here.loc)
+        if room is None:
+            return ""
+        if loc == here.loc and at is not None:
+            steps = math.dist(at, (here.x, here.y)) / TILE
+            if steps < 1:
+                return "right here"
+            return f"{steps:.0f} steps {compass(at[0] - here.x, at[1] - here.y)}"
+        hops = self.hops(here.loc, loc)
+        if not hops or len(hops) < 2:
+            return ""
+        ways = [e for e in room.exits if e.to == hops[1]]
+        if not ways:
+            return ""
+        e = min(ways, key=lambda e: math.dist(centre(e.frm), (here.x, here.y)))
+        c = centre(e.frm)
+        steps = math.dist(c, (here.x, here.y)) / TILE
+        return (f"way out {steps:.0f} steps {compass(c[0] - here.x, c[1] - here.y)}"
+                + (f", then {len(hops) - 2} more" if len(hops) > 2 else ""))
+
+    def stand_by(self, room: Room, at: tuple[float, float], person: bool
+                 ) -> dict[tuple[int, int], tuple[int, int]]:
+        """Where to stand to reach something, and the way to face it: (dx, dy). Someone
+        is talked to from a tile straight beside them, or across a counter (two tiles
+        off, with no ground between); a thing from the nearest walked tile."""
+        tr, tc = int(at[1]) // TILE, int(at[0]) // TILE
+        out: dict[tuple[int, int], tuple[int, int]] = {}
+        if person:
+            for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                one = (tr + dy, tc + dx)
+                two = (tr + 2 * dy, tc + 2 * dx)
+                if one in room.walk and one not in room.learned:
+                    out[one] = (-dx, -dy)
+                elif two in room.walk and two not in room.learned:
+                    out[two] = (-dx, -dy)
+            if out:
+                return out
+        near = sorted(room.walk, key=lambda t: math.dist(centre(t), at))
+        if not near:
+            return out
+        # The nearest few (any side of a counter: whichever the way reaches first).
+        least = math.dist(centre(near[0]), at)
+        for end in near[:4]:
+            if math.dist(centre(end), at) > least + TILE / 2:
+                break
+            cx, cy = centre(end)
+            dx, dy = at[0] - cx, at[1] - cy
+            out[end] = (0, 1 if dy > 0 else -1) if abs(dy) >= abs(dx) else \
+                (1 if dx > 0 else -1, 0)
+        return out
+
     def route(self, room: Room, start: tuple[int, int], goals: set[tuple[int, int]]
               ) -> list[tuple[int, int]] | None:
         """Tiles from start to any goal tile over the place's walkable tiles (A*)."""
@@ -748,6 +898,9 @@ class Rooms:
             if t == start or t in goals:
                 return False
             return t in room.learned or t not in room.walk
+
+        # Other ways out are kept clear of: a step onto one can take you through it.
+        doors = {e.frm for e in room.exits} - goals
 
         pq = [(0.0, start)]
         came = {start: None}
@@ -772,13 +925,84 @@ class Rooms:
                     # Keep off walls: the character is wider than a point.
                     side = sum((v[0] + a, v[1] + b) not in room.walk
                                for a, b in ((0, 1), (0, -1), (1, 0), (-1, 0)))
-                    c = cost[u] + (1.4 if dr and dc else 1.0) + 0.3 * side
+                    c = cost[u] + (1.4 if dr and dc else 1.0) + 0.3 * side + \
+                        (6.0 if v in doors else 0.0) + (3.0 if v in room.crowd else 0.0)
                     if c < cost.get(v, 1e9):
                         cost[v] = c
                         came[v] = u
                         h = min(abs(v[0] - g[0]) + abs(v[1] - g[1]) for g in goals)
                         heapq.heappush(pq, (c + h, v))
         return None
+
+
+def drawn_over(v: np.ndarray, image: np.ndarray, cam: tuple[int, int]) -> np.ndarray:
+    """How far each pixel of a view found at `cam` is from the bare place under it (the
+    sum of its colours' differences), the nearest of the place's pixels a pixel either
+    way: a screen captured scaled is off by a pixel here and there, which on stone walls
+    would differ everywhere; people drawn over it differ from all round them."""
+    h, w = v.shape[:2]
+    pad = under(image, cam, h, w)
+    vi = v.astype(np.int16)
+    out = None
+    for dy in range(3):
+        for dx in range(3):
+            e = np.abs(vi - pad[dy:dy + h, dx:dx + w]).sum(2)
+            out = e if out is None else np.minimum(out, e)
+    return out
+
+
+def under(image: np.ndarray, cam: tuple[int, int], h: int, w: int) -> np.ndarray:
+    """The place's picture under a view at `cam`, a pixel more all round (edges
+    repeated off the picture)."""
+    x0, y0 = cam[0] - 1, cam[1] - 1
+    H, W = image.shape[:2]
+    ys = np.clip(np.arange(y0, y0 + h + 2), 0, H - 1)
+    xs = np.clip(np.arange(x0, x0 + w + 2), 0, W - 1)
+    return image[ys[:, None], xs[None, :]].astype(np.int16)
+
+
+def in_the_way(room: Room, here: Here, ahead: tuple[int, int],
+               goals: set[tuple[int, int]]) -> Person | None:
+    """Someone the survey saw standing where the way is shut (by the tile pushed into,
+    or beside the character), to say who's in the way."""
+    c = centre(ahead)
+    for p in room.people:
+        if p.kind in ("person", "animal") and (
+                math.dist(p.at, c) < 24 or math.dist(p.at, (here.x, here.y)) < 26):
+            return p
+    return None
+
+
+async def wait_for_way(room: Room, blocker: Person | None, waits: int, steer, log) -> str:
+    """No way left but through what was found shut: wait a moment for whoever is in the
+    way to move, and look again (the shut tiles forgotten). After a few waits: what to
+    tell the player ("" while still waiting)."""
+    steer(None)
+    who = blocker.name if blocker is not None else "someone"
+    if waits >= 3:
+        return f"{who} is standing in"
+    log(f"rooms: the way is shut ({who} in the way?): waiting a moment")
+    await asyncio.sleep(2.0)
+    room.learned.clear()
+    return ""
+
+
+async def step_aside(rooms: Rooms, room: Room, here: Here, a: float, n: int,
+                     goals: set[tuple[int, int]], steer) -> None:
+    """A short step to one side of the way it's heading (one side then the other, by
+    `n`), round someone in the way: not onto another way out (it could go through), and
+    not at all when both sides are."""
+    doors = {e.frm for e in room.exits} - goals
+    for turn in ((90, -90) if n % 2 else (-90, 90)):
+        b = (a + turn) % 360
+        rad = math.radians(b)
+        side = (int((here.y - 14 * math.cos(rad)) // TILE),
+                int((here.x + 14 * math.sin(rad)) // TILE))
+        if side not in doors:
+            steer(b)
+            await asyncio.sleep(0.1 if n <= 2 else 0.3)  # a nudge first (lining up)
+            steer(None)
+            return
 
 
 def centre(t: tuple[int, int]) -> tuple[float, float]:
@@ -810,18 +1034,26 @@ def lead(here: Here, trail) -> tuple[float, float]:
 
 async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                    limit: float = 90.0, start: Here | None = None, label: str = "",
-                   spot: tuple[float, float] | None = None) -> str:
+                   spot: tuple[float, float] | Target | None = None, press=None,
+                   talk: bool = False) -> str:
     """Walk to the place `goal` (a location number; a world map for "outside") through
     the ways out, place by place, with the screen alone: where the character is comes
     from the pictures several times a second. label: which way out into it, by its name
-    (a world map's sides). spot: a place in `goal` to walk to (in its pixels), not a
-    way into it."""
+    (a world map's sides). spot: a place in `goal` to walk to (in its pixels), or a
+    Target there (someone is walked up to and faced), not a way into it. talk: press
+    a (`press`) facing them, to talk (or to open, search, use)."""
     t0 = time.monotonic()
+    person = isinstance(spot, Target) and spot.person
+    at = (spot.at if isinstance(spot, Target) else spot) if spot is not None else None
+    lines = 0  # small steps taken to line up with someone, at the end
+    blocker: Person | None = None  # someone the survey saw standing in the way
+    waits = 0  # times waited for the way to clear
     here = start
     misses = 0
     gone_by: Exit | None = None  # the way out last walked into
     heading: Exit | None = None  # the way out being walked to
-    target = label or rooms.name(goal)
+    target = (spot.name if isinstance(spot, Target) and spot.name else
+              label or rooms.name(goal))
     stalls = 0
     gone_t = said = stuck_t = 0.0
     faded = False  # the screen went black since the place was last seen
@@ -888,7 +1120,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 log(f"rooms: now in {rooms.name(now.loc)}")
                 gone_by = None
                 stalls = 0
-                if now.loc == goal and spot is None:
+                if now.loc == goal and at is None:
                     steer(None)
                     return f"arrived: in {target} ({time.monotonic() - t0:.0f} s)"
             here = now
@@ -897,92 +1129,116 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             # takes a while, so it's walked on a little by then (turns start early).
             px, py = lead(here, trail)
             tap = STEAM_TAP if here.steam else 0.06
-            if here.loc == goal and spot is not None:
-                # The last of it: to the walkable tile nearest the spot, facing it.
+            if here.loc == goal and at is not None:
+                # The last of it: to a tile to stand on by it, facing it.
+                ends = rooms.stand_by(room, at, person)
                 tile = here.tile
                 if tile not in room.walk:
                     tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
-                end = min(room.walk, key=lambda t: math.dist(centre(t), spot))
-                if math.dist((px, py), centre(end)) < 10 or tile == end:
-                    steer(angle_to(spot[0] - here.x, spot[1] - here.y))
+                if not ends:
+                    steer(None)
+                    return f"blocked: nowhere to stand by {target}"
+                if tile in ends:
+                    fx, fy = ends[tile]
+                    cx, cy = centre(tile)
+                    # Someone is talked to straight on: lined up across the way it faces.
+                    off = (cx - here.x) if fy else (cy - here.y)
+                    if person and abs(off) > 5 and lines < 6:
+                        lines += 1
+                        steer(angle_to(off, 0) if fy else angle_to(0, off))
+                        await asyncio.sleep(tap)
+                        steer(None)
+                        if here.steam:  # till the step shows
+                            await asyncio.sleep(STEAM_LEAD)
+                            trail.clear()
+                        continue
+                    steer(angle_to(fx, fy))
                     await asyncio.sleep(max(0.08, tap))
                     steer(None)
-                    return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"
-                path = rooms.route(room, tile, {end})
+                    took = time.monotonic() - t0
+                    if talk and press is not None:
+                        await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
+                        press("a")
+                        return (f"arrived: at {target}, facing them, and pressed a to talk "
+                                f"({took:.0f} s): read what's on screen")
+                    return f"arrived: at {target} ({took:.0f} s)"
+                goals = set(ends)
+                path = rooms.route(room, tile, goals)
+                if path is None and room.learned:
+                    if (said_wait := await wait_for_way(room, blocker, waits, steer, log)):
+                        return f"blocked: {said_wait} the way to {target}"
+                    waits += 1
+                    continue
                 if path is None:
                     steer(None)
                     return f"blocked: no way to {target} from here"
-                aim = centre(path[1]) if len(path) > 1 else centre(end)
-                for t in path[1:4]:
-                    if math.dist((px, py), centre(t)) > 12:
-                        aim = centre(t)
-                        break
-                steer(angle_to(aim[0] - px, aim[1] - py))
-                if here.steam:
-                    trail.append((time.monotonic(), here.loc, here.x, here.y))
-                await asyncio.sleep(0.02)
-                continue
-            if here.loc == goal:
-                return f"already in {target}"
-            hops = rooms.hops(here.loc, goal)
-            if hops is None or len(hops) < 2:
-                steer(None)
-                return f"no way from {rooms.name(here.loc)} to {target} that I know of"
-            ways = [e for e in room.exits if e.to == hops[1]]
-            if len(hops) == 2 and label and any(e.label == label for e in ways):
-                ways = [e for e in ways if e.label == label]
-            if all((e.frm, e.dir) in dud for e in ways):
-                dud.clear()
-            ways = [e for e in ways if (e.frm, e.dir) not in dud]
-            if gone_by is not None:
-                # Stepping through a way out: keep walking it until the screen changes.
-                steer(angle_to(*gone_by.dir))
-                await asyncio.sleep(0.05)
-                if time.monotonic() - gone_t > 2.5:
-                    # Didn't go through from here: another tile of it, or another way.
-                    dud.add((gone_by.frm, gone_by.dir))
-                    log(f"rooms: the way out at {gone_by.frm} didn't open")
-                    gone_by = None
-                continue
-            tile = here.tile
-            if tile not in room.walk:
-                # Between tiles or off what was surveyed: the nearest walked tile.
-                tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
-            goals = {e.frm for e in ways}
-            path = rooms.route(room, tile, goals)
-            if path is not None:
-                heading = next((e for e in ways if e.frm == path[-1]), None)
-            if path is None and room.learned:
-                # Shut off by what was found shut on the way (people move): try again.
-                room.learned.clear()
-                path = rooms.route(room, tile, goals)
-            if path is None:
-                steer(None)
-                return (f"blocked: no way through to {rooms.name(hops[1])} from here in "
-                        f"{rooms.name(here.loc)}")
-            at_end = len(path) == 1 or (len(path) == 2 and
-                                        math.dist((px, py), centre(path[-1])) < 10)
-            if at_end:
-                e = min((e for e in ways if e.frm == path[-1]),
-                        key=lambda e: 0, default=ways[0])
-                cx, cy = centre(e.frm)
-                # Line up across the way first, then walk through it.
-                off = (cx - here.x) if e.dir[1] else (cy - here.y)
-                if abs(off) > 5:
-                    a = angle_to(off, 0) if e.dir[1] else angle_to(0, off)
-                    steer(a)
-                    await asyncio.sleep(tap)
+                toward = target
+            else:
+                if here.loc == goal:
+                    return f"already in {target}"
+                hops = rooms.hops(here.loc, goal)
+                if hops is None or len(hops) < 2:
                     steer(None)
-                    if here.steam:  # till the step shows
-                        await asyncio.sleep(STEAM_LEAD)
-                        trail.clear()
+                    return f"no way from {rooms.name(here.loc)} to {target} that I know of"
+                ways = [e for e in room.exits if e.to == hops[1]]
+                if len(hops) == 2 and label and any(e.label == label for e in ways):
+                    ways = [e for e in ways if e.label == label]
+                if all((e.frm, e.dir) in dud for e in ways):
+                    dud.clear()
+                ways = [e for e in ways if (e.frm, e.dir) not in dud]
+                if gone_by is not None:
+                    # Stepping through a way out: keep walking it until the screen changes.
+                    steer(angle_to(*gone_by.dir))
+                    await asyncio.sleep(0.05)
+                    if time.monotonic() - gone_t > 2.5:
+                        # Didn't go through from here: another tile of it, or another way.
+                        dud.add((gone_by.frm, gone_by.dir))
+                        log(f"rooms: the way out at {gone_by.frm} didn't open")
+                        gone_by = None
                     continue
-                gone_by, gone_t = e, time.monotonic()
-                log(f"rooms: through the way out to {rooms.name(e.to)} at {e.frm}")
-                steer(angle_to(*e.dir))
-                continue
+                tile = here.tile
+                if tile not in room.walk:
+                    # Between tiles or off what was surveyed: the nearest walked tile.
+                    tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
+                goals = {e.frm for e in ways}
+                path = rooms.route(room, tile, goals)
+                if path is not None:
+                    heading = next((e for e in ways if e.frm == path[-1]), None)
+                if path is None and room.learned:
+                    # Shut off by what was found shut on the way (people move): a moment
+                    # for them to, then try again.
+                    if (said_wait := await wait_for_way(room, blocker, waits, steer, log)):
+                        return f"blocked: {said_wait} the way to {rooms.name(hops[1])}"
+                    waits += 1
+                    continue
+                if path is None:
+                    steer(None)
+                    return (f"blocked: no way through to {rooms.name(hops[1])} from here in "
+                            f"{rooms.name(here.loc)}")
+                at_end = len(path) == 1 or (len(path) == 2 and
+                                            math.dist((px, py), centre(path[-1])) < 10)
+                if at_end:
+                    e = min((e for e in ways if e.frm == path[-1]),
+                            key=lambda e: 0, default=ways[0])
+                    cx, cy = centre(e.frm)
+                    # Line up across the way first, then walk through it.
+                    off = (cx - here.x) if e.dir[1] else (cy - here.y)
+                    if abs(off) > 5:
+                        a = angle_to(off, 0) if e.dir[1] else angle_to(0, off)
+                        steer(a)
+                        await asyncio.sleep(tap)
+                        steer(None)
+                        if here.steam:  # till the step shows
+                            await asyncio.sleep(STEAM_LEAD)
+                            trail.clear()
+                        continue
+                    gone_by, gone_t = e, time.monotonic()
+                    log(f"rooms: through the way out to {rooms.name(e.to)} at {e.frm}")
+                    steer(angle_to(*e.dir))
+                    continue
+                toward = rooms.name(hops[1])
             # Aim a little way along the path (several tiles when it runs straight).
-            aim = centre(path[1])
+            aim = centre(path[1]) if len(path) > 1 else centre(path[-1])
             for t in path[1:4]:
                 c = centre(t)
                 if math.dist((px, py), c) > 12:
@@ -1005,14 +1261,13 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 stalls += 1
                 if path[1] not in goals:
                     room.learned.add(path[1])
+                blocker = in_the_way(room, here, path[1], goals) or blocker
                 log(f"rooms: no nearer for 6 s at {tile} in {rooms.name(here.loc)}, shut "
-                    f"{path[1]} ({stalls})")
-                steer((a + (90 if stalls % 2 else -90)) % 360)
-                await asyncio.sleep(0.3)
-                steer(None)
+                    f"{path[1]} ({stalls}){f' by {blocker.name}' if blocker else ''}")
+                await step_aside(rooms, room, here, a, stalls, goals, steer)
                 best = (here.loc, 10**6, now_t)
                 if stalls > 12:
-                    return (f"blocked: can't get through to {rooms.name(hops[1])} from "
+                    return (f"blocked: can't get through to {toward} from "
                             f"{tile} in {rooms.name(here.loc)}")
                 continue
             trail.append((now_t, here.loc, here.x, here.y))
@@ -1028,16 +1283,15 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     ahead = path[1]  # (the tile it stands on, as the survey has it)
                 if ahead not in goals:
                     room.learned.add(ahead)
+                blocker = in_the_way(room, here, ahead, goals) or blocker
                 log(f"rooms: stuck at {tile} in {rooms.name(here.loc)}, shut {ahead} "
-                    f"({stalls})")
+                    f"({stalls}){f' by {blocker.name}' if blocker else ''}")
                 # A step aside, one way then the other: round someone in the way.
-                steer((a + (90 if stalls % 2 else -90)) % 360)
-                await asyncio.sleep(0.3)
-                steer(None)
+                await step_aside(rooms, room, here, a, stalls, goals, steer)
                 stuck_t = now_t
                 trail.clear()
                 if stalls > 12:
-                    return (f"blocked: can't get through to {rooms.name(hops[1])} from "
+                    return (f"blocked: can't get through to {toward} from "
                             f"{tile} in {rooms.name(here.loc)}")
             await asyncio.sleep(0.02)
     finally:
@@ -1064,28 +1318,49 @@ def pick_words(said: str, choices: dict[str, str]) -> str | None:
     for k, v in choices.items():
         if v.lower() == said.lower().strip(" .!?"):
             return k
-    return None
+    # Someone or something by its name ("talk to the innkeeper"): when just one fits.
+    want = bare(re.sub(r"^\s*(please\s+)?((take|bring|get) me|go|walk|run|head|talk|"
+                       r"speak|chat)\s+(over\s+)?(to|with)\s+", "", said.lower()))
+    hits = [k for k, v in choices.items() if bare(v.split(" (")[0]) == want]
+    return hits[0] if len(hits) == 1 and want else None
+
+
+def bare(name: str) -> str:
+    """A name without "the" or "a" in front or a full stop after."""
+    return re.sub(r"^(the|a|an|my)\s+", "", name.lower().strip(" .!?"))
 
 
 PICK_EXIT = """The player is inside {here} in {game} and says: "{said}".
-The places they can walk to from here, by how many ways out away:
+Where they can go from here: ways out to other places (by how many ways out away), and
+things and people in this place or the places next to it (which place in brackets), with
+which way each is from the player:
 {places}
 Which one do they mean? "outside", "the way out", "leave" mean the world map unless
 they name a place (with more than one way outside and none of them named or meant, "outside,
-the nearest way out"). "Upstairs" or "downstairs" is the floor of the same building. JSON:
-{{"place": "the number before the name", "why": "a few words"}} or {{"place": null,
-"why": "..."}} if none fits."""
+the nearest way out"). "Upstairs" or "downstairs" is the floor of the same building; "the
+north door" or "the door on the left" is the way out that way from the player. "The
+shop" or "buy something" in a shop is its shopkeeper or counter; "the inn" or "rest"
+in an inn, its innkeeper; "save" or "the save point", the save point. Someone named or
+described ("the old man", "the guard", "Mom") is the person who fits best. JSON:
+{{"place": "the number before the name", "talk": true if they want to talk to, ask, buy
+from or use it (not just go there), "why": "a few words"}} or {{"place": null, "why":
+"..."}} if none fits."""
 
 
 async def pick_exit(muse, game: str, said: str, here: str,
-                    choices: dict[str, tuple[int, int]]) -> tuple[str | None, str]:
-    """The place the player means, among those reachable (by name: location, how far):
-    (its name, why), or (None, why none fits)."""
+                    choices: dict[str, tuple[int, int]], hints: dict[str, str] | None = None
+                    ) -> tuple[str | None, str]:
+    """The place (or thing, or person) the player means, among those reachable (by name:
+    location, how far), hints saying which way each is: (its name, why), or (None, why
+    none fits). why starts with "talk:" when they want to talk to it."""
     hit = pick_words(said, {k: k for k in choices})
     if hit is not None:
         return hit, "named"
     names = sorted(choices, key=lambda k: choices[k][1])
-    lines = "\n".join(f"{i + 1}: {k} ({choices[k][1]} away)" for i, k in enumerate(names))
+    hints = hints or {}
+    lines = "\n".join(f"{i + 1}: {k} ({choices[k][1]} away"
+                      f"{'; ' + hints[k] if hints.get(k) else ''})"
+                      for i, k in enumerate(names))
     try:
         data = await muse.json([{"role": "user", "content": PICK_EXIT.format(
             game=game or "the game", here=here, said=said, places=lines)}],
@@ -1099,19 +1374,29 @@ async def pick_exit(muse, game: str, said: str, here: str,
     why = str(data.get("why") or "")
     if not 1 <= i <= len(names):
         return None, why or "no place matches"
-    return names[i - 1], why
+    return names[i - 1], ("talk: " if data.get("talk") is True else "") + why
+
+
+TALK = re.compile(r"\b(talk|speak|chat|ask|tell|buy|sell|shop|rest|sleep|stay|save|"
+                  r"open|search|check|read|examine|use)\b", re.IGNORECASE)
 
 
 def describe(rooms: Rooms, here: Here) -> str:
-    """Where the player is in a place, said plainly, with the ways out by direction."""
+    """Where the player is in a place, said plainly: the ways out, and the people and
+    things in it, by direction."""
     room = rooms.rooms[here.loc]
     parts = []
-    for to in sorted({e.to for e in room.exits}):
-        e = min((e for e in room.exits if e.to == to),
+    for lab in sorted({e.label or rooms.name(e.to) for e in room.exits}):
+        e = min((e for e in room.exits if (e.label or rooms.name(e.to)) == lab),
                 key=lambda e: math.dist(centre(e.frm), (here.x, here.y)))
         c = centre(e.frm)
         steps = math.dist(c, (here.x, here.y)) / TILE
-        parts.append(f"{rooms.name(to)}: {steps:.0f} steps "
-                     f"{compass(c[0] - here.x, c[1] - here.y)}")
-    return (f"in {rooms.name(here.loc)}. Ways out: " + "; ".join(parts)) if parts else \
+        parts.append(f"{lab}: {steps:.0f} steps {compass(c[0] - here.x, c[1] - here.y)}")
+    out = (f"in {rooms.name(here.loc)}. Ways out: " + "; ".join(parts)) if parts else \
         f"in {rooms.name(here.loc)}; no ways out surveyed"
+    near = [f"{p.name} ({rooms.hint(here, here.loc, p.at)}"
+            f"{', walks about' if p.moves else ''})" for p in room.people]
+    near += [f"{k} ({rooms.hint(here, here.loc, v)})" for k, v in room.spots.items()]
+    if near:
+        out += ". Here: " + "; ".join(near)
+    return out
