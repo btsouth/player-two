@@ -368,6 +368,7 @@ class Reader:
         self.active: list[str] = []  # the three in the party now, as a battle showed them
         self.last: list[str] = []  # the parts said by the last update
         self.model_read = False  # a whole text box that doesn't read cleanly: ask the model
+        self.fight_started = False  # a battle just came up: the model says what we face
         self.hp: dict[str, tuple[int, int]] = {}  # party HP as last read steadily
         self.hp_new: dict[str, tuple[int, int]] = {}  # and as the last look read it
         self.text_since: float | None = None  # when a box that doesn't read cleanly came up
@@ -441,6 +442,7 @@ class Reader:
         opened = lk.kind != self.kind
         if opened:
             self.said, self.seen = {}, {}
+            self.fight_started = lk.kind == "battle" and not lk.parts.get("pause")
             self.kind = lk.kind
             self.hp, self.hp_new = {}, {}
         if lk.kind == "none":

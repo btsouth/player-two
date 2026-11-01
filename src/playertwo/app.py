@@ -23,6 +23,7 @@ from .controls import BUTTONS, ControlsError, open_controls
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
+from .prompts import BATTLE_START
 from .screen import (
     Capture,
     CaptureError,
@@ -589,17 +590,17 @@ class Session:
         self.place_said = (short, time.monotonic())
         return short
 
-    async def _narrate(self, frame: Frame, interrupt: bool = False) -> None:
+    async def _narrate(self, frame: Frame, interrupt: bool = False, extra: str = "") -> None:
         t = time.monotonic()
 
         self.narrating_text = ""
 
         async def deltas():
-            gen = self.narrator.narrate(frame)
+            gen = self.narrator.narrate(frame, extra) if extra else self.narrator.narrate(frame)
             # The model starts at once; the place's name (if this is a new one) goes first.
             first = asyncio.ensure_future(anext(gen, None))
             try:
-                place = await self._place(frame)
+                place = "" if extra else await self._place(frame)
             except asyncio.CancelledError:
                 first.cancel()
                 raise
@@ -819,6 +820,12 @@ class Session:
             self.reader.model_read = False
             self._start_narration(frame)
             self.read_model = self.narrating
+        elif self.reader.fight_started:
+            # The reader says turns and HP; what the party is up against is the model's.
+            self.reader.fight_started = False
+            if self.narrating is None or self.narrating.done():
+                self.narrating = self.read_model = asyncio.create_task(
+                    self._narrate(frame, extra=BATTLE_START))
         if not line:
             return
         parts = set(self.reader.last)

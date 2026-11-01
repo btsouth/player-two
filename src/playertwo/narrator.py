@@ -117,15 +117,16 @@ class Narrator:
         x, y = set(_words(a)), set(_words(b))
         return bool(x and y) and len(x & y) / len(x | y) >= 0.75
 
-    async def narrate(self, frame: Frame) -> AsyncIterator[str]:
-        """Stream what to say about a newly settled frame. Yields nothing when silent."""
+    async def narrate(self, frame: Frame, extra: str = "") -> AsyncIterator[str]:
+        """Stream what to say about a newly settled frame. Yields nothing when silent.
+        `extra`: what this look is for, when it isn't an ordinary one."""
         t = time.monotonic()
         text = ""  # what was said (a repeated opening left out)
         head = ""
         decided = False
         silent = False
         repeated = False  # the opening repeated: hold the rest and keep only what's new
-        stream = self.muse.stream(self.messages(frame))
+        stream = self.muse.stream(self.messages(frame, extra))
         try:
             async for delta in stream:
                 if decided:

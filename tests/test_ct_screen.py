@@ -412,3 +412,13 @@ async def test_narration_says_the_place_then_the_model_line():
     await s._narrate(Frame(Image.new("RGB", (8, 8)), time.monotonic()))
     said = [k["text"] for kind, k in events if kind == "say"]
     assert said == ["Truce Inn. A cozy inn with a counter."]
+
+
+def test_a_fight_coming_up_asks_the_model_what_the_party_faces_once():
+    r = Reader()
+    r.update(look("none"), now=0)
+    r.update(look("battle", danger="Frog 1 HP"), now=1)
+    assert r.fight_started
+    r.fight_started = False
+    r.update(look("battle", turn="Crono's turn", focus="Attack"), now=2)
+    assert not r.fight_started  # the same fight
