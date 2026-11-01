@@ -230,3 +230,16 @@ def test_list_moves_replayed_from_the_live_run():
     if total == 0:
         pytest.skip("the frames of those runs aren't here (times are local)")
     assert ok == total and total >= 20, (ok, total)
+
+
+def test_the_actor_name_with_forest_leaves_run_into_it():
+    """Guardia Forest, live 2026-11-01: yellow leaves between the windows ran into Marle's
+    yellow name ("t -.2u t C' -i'-i' Marle"), so no one was choosing and "win this fight"
+    gave up after 0 commands."""
+    img = load("forest-041307-04")
+    if img is None:
+        pytest.skip("no forest frame")
+    st = ctsteam.read(img)
+    assert (st.kind, st.actor, st.actor_col, st.columns) == ("command", "Marle", 1, [0, 1])
+    assert [(m.name, m.hp, m.hp_max, m.mp) for m in st.party] == [("Crono", 22, 70, 8),
+                                                                  ("Marle", 40, 65, 12)]

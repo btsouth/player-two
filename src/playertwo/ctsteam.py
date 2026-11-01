@@ -33,6 +33,7 @@ CANVAS = (2560, 1440)
 TOP = (390, 16, 2180, 132)  # the message / description bar
 BOTTOM = (200, 1150, 2380, 1438)  # the command, list and party windows
 PAUSE_BOX = (980, 520, 1580, 720)  # where "Pause" shows
+NAME_TO_HP = 316  # from the start of a party box name to its "HP" (1478 to 1794)
 PARTY_X = 1400  # left of the party box names (about 1477), when no line read as one
 SLOT_TEXT_X = (309, 723, 1138)  # where "Attack" starts in each party slot's command window
 # Tech and item lists have two columns: text starts near x 310 (left) and 1160 to 1330
@@ -182,13 +183,20 @@ def _member(row: list[Run]) -> tuple[Member | None, int | None]:
     if row[i].x0 - name_run.x1 > 700:
         return None, None
     who = snap(name_run.text, NAMES, 0.5)
+    x0 = name_run.x0
+    if who not in NAMES and " " in name_run.text.strip():
+        # Yellow leaves between the windows (Guardia Forest) read as specks and run into
+        # the actor's yellow name: "t -.2u t C' -i'-i' Marle". The name is the last word,
+        # and starts where names do, a fixed way left of the HP column.
+        who = snap(name_run.text.split()[-1], NAMES, 0.7)
+        x0 = max(name_run.x0, row[i].x0 - NAME_TO_HP)
     if who not in NAMES:
         return None, name_run.x0
     nums = NUM.findall(numfix(" ".join(r.text for r in row[i:])))
     hp = nums[0] if nums else (None, None)
     mp = nums[1] if len(nums) > 1 else (None, None)
     return (Member(who, *(int(n) if n is not None else None for n in (*hp, *mp)),
-                   name_run.colour), name_run.x0)
+                   name_run.colour), x0)
 
 
 def _hp_run(row: list[Run]) -> int | None:
