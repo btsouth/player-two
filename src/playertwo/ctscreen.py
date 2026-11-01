@@ -46,8 +46,28 @@ def plausible(r: Run) -> bool:
         return False
     if re.fullmatch(r"[\d :/G]+", t):
         return True
+    if snap(t, VOCAB, 0.8) in VOCAB:
+        return True
+    if misread(t):
+        return False
     words = re.findall(r"[A-Za-z]{3,}", t)
-    return any(re.search(r"[aeiouyAEIOUY]", w) for w in words) or snap(t, VOCAB, 0.8) in VOCAB
+    return any(re.search(r"[aeiouyAEIOUY]", w) for w in words)
+
+
+def misread(text: str) -> bool:
+    """Words that can't be right: digits inside words ("Red0ces", "Com6o", "1ce"), capitals
+    after small letters ("SlQp"), or a word of consonants. The font's look-alikes (0 and o,
+    1 and l, 5 and S) show up this way when glyphs are small or dimmed."""
+    for w in re.findall(r"[A-Za-z0-9']+", text):
+        if re.fullmatch(r"\d+(st|nd|rd|th|s|G|HP|MP|TP|EXP)?|[A-Z]{1,4}\d*|\d+[A-Z]", w):
+            continue
+        if re.search(r"[A-Za-z]", w) and re.search(r"\d", w):
+            return True
+        if re.search(r"[a-z][A-Z]", w.replace("'", "")) and w not in ("KOd",):
+            return True
+        if len(w) >= 4 and not re.search(r"[aeiouyAEIOUY]", w) and not w.isupper():
+            return True
+    return False
 
 
 def clean(text: str) -> str:
@@ -99,7 +119,8 @@ def battle_look(st: ctsteam.State) -> Look:
         if st.command:
             lk.parts["focus"] = st.command
     elif st.kind == "list" and st.entry:
-        lk.parts["focus"] = st.entry + ("" if st.usable is not False else ", can't use")
+        # (Whether it can be used isn't said: a pause dims every entry, usable or not.)
+        lk.parts["focus"] = st.entry
     top = clean(st.top)
     if top and not st.paused and plausible(Run(top, 0, 0, 0, "", 0)):
         lk.parts["top"] = top
@@ -369,6 +390,9 @@ class Reader:
                 continue
             if self.said.get(part) == value:
                 continue
+            if part == "danger" and now - self.texts.get("danger:" + value, -1e9) < 20:
+                self.said[part] = value  # the party box was hidden a moment: not news
+                continue
             if part in lk.texts:
                 whole = finished(value)
                 if part in lk.typing and not ((whole and (n >= 2 or first)) or n >= 3):
@@ -378,6 +402,8 @@ class Reader:
                     continue
                 self.texts[value] = now
             self.said[part] = value
+            if part == "danger":
+                self.texts["danger:" + value] = now
             out.append(value)
         self.texts = {t: w for t, w in self.texts.items() if now - w < self.forget_s}
         self.last = [p for p in (lk.order or ORDER) if self.said.get(p) and lk.parts.get(p) in out]

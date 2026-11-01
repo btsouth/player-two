@@ -249,6 +249,187 @@ def summarize(args) -> None:
                       f" danger={e.get('danger')}\n    said={r['said']!r}")
 
 
+QUESTIONS = [
+    ("134639-00", "what's my HP", ["780", "1", "430", "Frog"]),
+    ("164538-03", "what's my HP", ["780", "Frog", "Marle", "1"]),
+    ("135105-01", "how's everyone doing", ["50", "188", "Frog"]),
+    ("134832-08", "who's in my party", ["Crono", "Frog", "Marle"]),
+    ("140314-00", "what are we fighting", ["Gargoyle|Gargoyles"]),
+    ("164519-00", "what are we fighting", ["Gargoyle|Gargoyles"]),
+    ("134854-00", "what items do I have", ["Potion", "Mid-Potion", "Hi-Potion", "Mid-Ether",
+                                           "Panacea", "Athenian Water"]),
+    ("135428-00", "how's everyone doing", ["227", "241", "188"]),
+    ("135629-31", "who's in my party", ["Crono", "Frog", "Marle"]),
+    ("135445-06", "what items do I have", ["Potion", "Hi-Potion", "Panacea", "Shelter",
+                                           "Elixir", "Athenian Water", "Lapis", "Ether"]),
+    ("135445-06", "what does that say", ["Fully restores HP/MP at a save point."]),
+    ("134639-00", "what does it say", ["Combo Attack: Reduces HP to 1"]),
+    ("s3", "what does that say", ["Resume bookmarked game?", "No"]),
+    ("q4", "what does that say", ["Exit?"]),
+    ("135212-14", "what does that say", ["Crono's level increased!"]),
+    ("164526-01", "what does that say", ["Attack all enemies with water."]),
+    ("140421-06", "what does that say", ["Restore moderate HP to all allies."]),
+    ("a6", "what does that say", ["Leene Square"]),
+]
+
+
+async def ask(args) -> None:
+    """Questions on frames: the agent (model, tools) as before, or the screen first."""
+    from playertwo import agent as agent_mod
+    from playertwo import ctscreen
+    from playertwo.controls import DryRun
+
+    gt = {e["id"]: e for e in json.loads(Path(args.gt).read_text())}
+    s = settings()
+    muse = Muse(s)
+
+    async def no_pause(self, st):  # the frames don't move: count it as paused at once
+        return st
+
+    agent_mod.Agent._hold_fight = no_pause
+    out = Path(args.out).open("a")  # noqa: SIM115, ASYNC230  appended to as answers come
+    for fid, q, must in QUESTIONS:
+        e = gt[fid]
+        img = Image.open(e["path"]).convert("RGB")
+        frame = Frame(img, time.monotonic(), fid)
+        said: list[tuple[float, str]] = []
+        t0 = time.monotonic()
+        via = "agent"
+        line = None
+        if args.mode == "fast":
+            lk = await asyncio.to_thread(ctscreen.look, img, PARTY)
+            line = ctscreen.answer(q, lk, PARTY)
+            if line:
+                said.append((time.monotonic() - t0, line))
+                via = "screen"
+        if not line:
+            async def speak(text, said=said, t0=t0):
+                said.append((time.monotonic() - t0, text))
+
+            async def grab(frame=frame):
+                return frame
+
+            ag = agent_mod.Agent(muse, DryRun(), grab, speak, game="Chrono Trigger",
+                                 max_turns=4)
+            before = muse.usage.cost_usd()
+            try:
+                await ag.run(q, frame)
+            except Exception as exc:  # noqa: BLE001
+                said.append((time.monotonic() - t0, f"ERROR {exc!r}"[:200]))
+            cost = muse.usage.cost_usd() - before
+        else:
+            cost = 0.0
+        text = " ".join(t for _t, t in said)
+        ok = sum(has(text, m) for m in must) / len(must)
+        rec = {"id": fid, "q": q, "mode": args.mode, "via": via, "said": text,
+               "first_s": round(said[0][0], 2) if said else None,
+               "total_s": round(time.monotonic() - t0, 2), "must": ok, "cost": round(cost, 4)}
+        out.write(json.dumps(rec) + "\n")
+        out.flush()
+        print(f"{fid:<10} {q:<24} {via:<6} {rec['first_s']!s:>5}s must={ok:.2f} {text[:120]!r}",
+              flush=True)
+    print(f"cost ${muse.usage.cost_usd():.3f}")
+
+
+def ask_summary(path: str) -> None:
+    recs = [json.loads(x) for x in Path(path).read_text().splitlines()]
+    for r in recs:  # re-scored, so a fixed label counts
+        must = next(m for f, q, m in QUESTIONS if f == r["id"] and q == r["q"])
+        r["must"] = sum(has(r["said"], m) for m in must) / len(must)
+    firsts = sorted(r["first_s"] for r in recs if r["first_s"] is not None)
+    print(f"n={len(recs)} must={sum(r['must'] for r in recs) / len(recs):.2f} "
+          f"all_right={sum(r['must'] == 1 for r in recs)}/{len(recs)} "
+          f"first_med={firsts[len(firsts) // 2]:.2f}s max={firsts[-1]:.2f}s "
+          f"screen={sum(r['via'] == 'screen' for r in recs)} cost=${sum(r['cost'] for r in recs):.3f}"
+          f" words={sum(len(words(r['said'])) for r in recs) / len(recs):.1f}")
+
+
+def seq_frames(folder: str, start: str, end: str) -> list[tuple[float, Path]]:
+    """Frames named HHMMSS-n.jpg, timed by their names (several in a second spread evenly)."""
+    by_sec: dict[str, list[Path]] = {}
+    for p in sorted(Path(folder).glob("*.jpg")):
+        hms = p.name[:6]
+        if start <= hms <= end:
+            by_sec.setdefault(hms, []).append(p)
+    out = []
+    for hms, ps in sorted(by_sec.items()):
+        base = int(hms[:2]) * 3600 + int(hms[2:4]) * 60 + int(hms[4:6])
+        out += [(base + i / len(ps), p) for i, p in enumerate(ps)]
+    t0 = out[0][0] if out else 0
+    return [(t - t0, p) for t, p in out]
+
+
+def repeats(lines: list[tuple[float, str]], within: float = 30.0) -> int:
+    """Lines that say again what was said in the last `within` seconds."""
+    n = 0
+    for i, (t, line) in enumerate(lines):
+        w = set(words(line))
+        for t2, old in lines[:i]:
+            o = set(words(old))
+            if t - t2 <= within and w and o and len(w & o) / len(w | o) >= 0.75:
+                n += 1
+                break
+    return n
+
+
+async def seq(args) -> None:
+    """A recorded stretch of play, narrated as the session would: the watcher and the
+    model (old), or the reader with the model for what it can't read (new)."""
+    from playertwo import ctscreen
+    from playertwo.screen import ChangeWatcher
+
+    frames = seq_frames(args.folder, args.start, args.end)
+    s = settings()
+    muse = Muse(s)
+    narr = Narrator(muse, s.verbosity, "Chrono Trigger")
+    watcher = ChangeWatcher()
+    reader = ctscreen.Reader()
+    reader.party = list(PARTY)
+    said: list[tuple[float, str, str]] = []
+    busy_until, quiet_until, streak = -1.0, -1.0, 0
+    pending = None
+    last_look, owned, owned_t = -9.0, False, -9.0
+    for t, path in frames:
+        img = Image.open(path).convert("RGB")
+        frame = Frame(img, t, path.name)
+        if args.mode == "fast" and t - last_look >= 0.3:
+            last_look = t
+            lk = await asyncio.to_thread(ctscreen.look, img, reader.party)
+            owned, owned_t = lk.readable, t
+            line = reader.update(lk, now=t)
+            if line:
+                said.append((t + lk.ms / 1000, line, "reader"))
+                busy_until = max(busy_until, t) + len(words(line)) / 2.7
+        if watcher.update(frame):
+            pending = frame
+        if pending is None or t < busy_until or t < quiet_until:
+            continue
+        if args.mode == "fast" and owned and owned_t >= pending.t - 0.3:
+            pending = None
+            continue
+        f, pending = pending, None
+        text, first = await narrate_model(narr, f)
+        lat = narr.log[-1].latency_s if narr.log else 0.0
+        if text:
+            said.append((t + (first or lat), text, "model"))
+            busy_until = t + lat + len(words(text)) / 2.7
+            streak = 0
+        else:
+            streak += 1
+            quiet_until = t + lat + min(16.0, 2.0 ** streak)
+            busy_until = t + lat
+    span = frames[-1][0] if frames else 0
+    rep = repeats([(t, x) for t, x, _w in said])
+    nw = sum(len(words(x)) for _t, x, _w in said)
+    print(f"{args.mode}: {len(frames)} frames over {span:.0f} s; {len(said)} lines "
+          f"({sum(w == 'reader' for *_x, w in said)} by the reader), {nw} words "
+          f"({nw / max(span, 1) * 60:.0f} a minute), repeats {rep}, "
+          f"cost ${muse.usage.cost_usd():.3f}")
+    with Path(args.out).open("w") as fh:
+        for t, x, who in said:
+            fh.write(json.dumps({"t": round(t, 2), "who": who, "said": x}) + "\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -260,6 +441,18 @@ def main() -> None:
     r.add_argument("--kinds", default="")
     r.add_argument("--par", type=int, default=4)
     r.add_argument("--full", action="store_true", help="scale small frames up to 2560x1440")
+    k = sub.add_parser("ask")
+    k.add_argument("--gt", required=True)
+    k.add_argument("--out", required=True)
+    k.add_argument("--mode", default="model")
+    q = sub.add_parser("seq")
+    q.add_argument("folder")
+    q.add_argument("--start", default="000000")
+    q.add_argument("--end", default="999999")
+    q.add_argument("--out", required=True)
+    q.add_argument("--mode", default="model")
+    k2 = sub.add_parser("asked")
+    k2.add_argument("run")
     s = sub.add_parser("score")
     s.add_argument("run")
     s.add_argument("--gt", required=True)
@@ -267,6 +460,12 @@ def main() -> None:
     a = ap.parse_args()
     if a.cmd == "run":
         asyncio.run(run(a))
+    elif a.cmd == "ask":
+        asyncio.run(ask(a))
+    elif a.cmd == "seq":
+        asyncio.run(seq(a))
+    elif a.cmd == "asked":
+        ask_summary(a.run)
     else:
         summarize(a)
 
