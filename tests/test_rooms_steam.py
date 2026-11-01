@@ -26,8 +26,10 @@ FRAMES = LIVE / "steam-2026-11-01/frames"
 REC = Path(os.environ.get("P2_RECORDINGS") or Path.home() / ".cache/player-two/recordings")
 # The places surveyed when these screens were taken: places surveyed since (the Mountain
 # of Woe) are left out, so the screens of them still count as places not surveyed.
-# The folder grows while the game is played: the screens up to this one (13:46 to 16:56).
+# The folder grows while the game is played: the screens from 13:46 to this one (16:56);
+# later nights add 00xxxx ones, left out by FIRST_FRAME.
 LAST_FRAME = "165609-00.jpg"
+FIRST_FRAME = "1"
 SURVEYED = {0x1, 0x2, 0x3, 0x4, 0x5, 0xC, 0x11, 0x13, 0x14, 0x1B2, 0x1B7}
 
 # Steam screens from trips (2560x1440): the place and the view's top left on its picture.
@@ -123,7 +125,8 @@ def test_steam_not_surveyed():
     """383 Steam screens of places not surveyed (the Mountain of Woe, battles, menus, a
     cliff path, Mayor's Manor): none is taken for a surveyed place."""
     r = rooms()
-    shots = [rgb(p) for p in sorted(FRAMES.glob("*.jpg")) if p.name <= LAST_FRAME]
+    shots = [rgb(p) for p in sorted(FRAMES.glob("*.jpg"))
+             if FIRST_FRAME <= p.name <= LAST_FRAME]
     shots += list(rec("rec_down"))
     shots += [rgb(TRIPS / f"truce-mayor-s-manor-{i}.png") for i in (0, 1)]
     assert len(shots) == 383
