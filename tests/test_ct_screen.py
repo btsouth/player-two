@@ -168,6 +168,7 @@ async def test_the_session_says_what_the_reader_reads_and_leaves_the_rest_to_the
     s = Session.__new__(Session)
     s.reader, s.reading, s.read_t, s.read_owned = Reader(), None, 0.0, False
     s.read_thumb, s.read_prime, s.read_last_parts = None, False, set()
+    s.read_model = None
     s.paused, s.agent_task, s.narrating = False, None, None
     s.watcher = SimpleNamespace(settle_s=0.3)
     s.utt, s.transcribing, s.hands_active = None, False, False
@@ -247,3 +248,53 @@ def test_misread_words_are_caught():
     assert not ctscreen.misread("Restores 200 HP to all party members.")
     assert not ctscreen.misread("Reduces physical damage by 1/3.")
     assert not ctscreen.misread("Earned 648 EXP.") and not ctscreen.misread("Lightning II")
+
+
+def test_the_same_fighter_gets_each_new_turn_said_but_not_a_flicker():
+    r = Reader()
+
+    def turn():
+        return look("battle", turn="Crono's turn", focus="Attack")
+
+    assert r.update(turn(), now=0) == "Crono's turn. Attack."
+    r.update(look("battle"), now=0.3)  # one look without the window: a flicker
+    assert r.update(turn(), now=0.6) == ""
+    r.update(look("battle"), now=1.0)
+    r.update(look("battle"), now=1.3)  # gone for two looks: the turn was taken
+    assert r.update(turn(), now=3.0) == "Crono's turn. Attack."
+
+
+async def test_a_box_the_reader_hands_to_the_model_isnt_cut_off_by_the_next_look(monkeypatch):
+    import asyncio
+    from collections import deque
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    s.reader, s.reading, s.read_t, s.read_owned = Reader(), None, 0.0, False
+    s.read_thumb, s.read_prime, s.read_last_parts, s.read_model = None, False, set(), None
+    s.paused, s.agent_task, s.narrating = False, None, None
+    s.utt, s.transcribing, s.hands_active = None, False, False
+    s.narrator = SimpleNamespace(recent=deque(maxlen=4))
+    s.events = SimpleNamespace(emit=lambda kind, **k: None)
+    s._tasks = set()
+    started = []
+
+    def start(frame, describe=False):
+        started.append(frame.t)
+        s.narrating = asyncio.get_running_loop().create_task(asyncio.sleep(5))
+
+    s._start_narration = start
+    box = look("text", typing=("text",), text="Lucca: Hey, Cr0no! Over here")
+    box.unsure = True
+    monkeypatch.setattr(ctscreen, "look", lambda image, party=(): box)
+    img = Image.new("RGB", (1920, 1080))
+    for t in (1.0, 1.3, 1.6, 1.9):
+        await s._read(Frame(img, t))
+    assert started == [1.6]  # once, when the box had stood still
+    assert not s.narrating.cancelled() and not s.narrating.done()
+    s.narrating.cancel()

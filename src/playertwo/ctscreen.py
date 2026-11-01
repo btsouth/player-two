@@ -415,8 +415,11 @@ class Reader:
             n = n + 1 if value == old_value else 1
             self.seen[part] = (value, n)
             if not value:
-                if part in ("danger", "pause", "top", "text", "question", "title"):
-                    self.said.pop(part, None)  # gone: say it again when it's back
+                if part in ("danger", "pause", "top", "text", "question", "title") or (
+                        part in ("turn", "focus") and n >= 2):
+                    # Gone (a command window for two looks running: the turn is over), so
+                    # it's news when it's back: the same fighter's next turn is a new turn.
+                    self.said.pop(part, None)
                 continue
             if self.said.get(part) == value:
                 continue

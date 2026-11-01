@@ -239,9 +239,11 @@ class Session:
         self.reader = ctscreen.Reader()
         self.reading: asyncio.Task | None = None
         self.read_t = 0.0  # when the frame the reader last looked at was grabbed
+        self.read_at = 0.0  # when that look started
         self.read_owned = False  # whether the reader could read that frame
         self.read_thumb = None
         self.read_prime = False  # take in the next look without saying it
+        self.read_model: asyncio.Task | None = None  # the model reading a box for it
         self.read_last_parts: set[str] = set()
         self.watcher = ChangeWatcher()
         self.events = Events()
@@ -722,12 +724,19 @@ class Session:
         from .screen import thumb
 
         th = thumb(frame.image)
+        now = time.monotonic()
         if (self.read_thumb is not None and not self.reader.waiting
                 and float(np.abs(th - self.read_thumb).mean()) < 0.003
-                and time.monotonic() - self.read_t < 2.0):
+                and now - self.read_at < 2.0):
             self.read_t = frame.t  # nothing moved: the last verdict stands
             return
-        self.read_thumb = th
+        settled = self.pending is not None and self.pending[0].t > self.read_t
+        if not self.read_owned and not settled and now - self.read_at < 0.8:
+            # Walking around: a look a second is plenty to notice a menu or a box opening
+            # (each look is a few hundred ms of CPU), and a screen that settles is looked
+            # at straight away.
+            return
+        self.read_thumb, self.read_at = th, now
         self.reading = asyncio.create_task(self._read(frame))
 
     async def _read(self, frame: Frame) -> None:
@@ -741,17 +750,20 @@ class Session:
         if self.paused or busy or self.listening():
             return  # said later, once they're done (nothing is marked as said)
         line = self.reader.update(lk)
+        opened = lk.readable and not self.read_owned
         self.read_owned, self.read_t = lk.readable, frame.t
         if self.read_prime:
             self.read_prime, line = False, ""
             self.reader.model_read = False
+        if ((line or opened) and self.narrating is not None and not self.narrating.done()
+                and self.narrating is not self.read_model):
+            self.narrating.cancel()  # the model's line is about a screen that's gone
         if self.reader.model_read:
             # A text box that has finished typing but doesn't read cleanly: the model
             # reads this frame, now that it's whole.
             self.reader.model_read = False
             self._start_narration(frame)
-        if lk.readable and self.narrating is not None and not self.narrating.done():
-            self.narrating.cancel()  # the model's line is about a screen that's gone
+            self.read_model = self.narrating
         if not line:
             return
         parts = set(self.reader.last)
