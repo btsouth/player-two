@@ -1449,22 +1449,30 @@ class Session:
         elif cmd == "press" and arg:
             # For scripted setups (tests, a known start for a task): no model involved.
             # "start wait2 down*2 a": buttons, pauses in seconds, repeats.
-            plan: list[tuple[str, float]] = []
+            # "down:1.5" holds for 1.5 s; "down+left:0.6" holds a chord.
+            plan: list[tuple[list[str], float, float]] = []  # buttons, hold s, pause s
             for token in arg.split():
                 try:
                     if token.startswith("wait"):
-                        plan.append(("", min(float(token[4:] or 1), 30)))
+                        plan.append(([], 0, min(float(token[4:] or 1), 30)))
                         continue
-                    button, _, times = token.partition("*")
-                    n = int(times or 1)
+                    if ":" in token:
+                        buttons, _, held = token.partition(":")
+                        hold, n, names = min(float(held), 10), 1, buttons.split("+")
+                    else:
+                        button, _, times = token.partition("*")
+                        hold, n, names = 0.1, int(times or 1), [button]
                 except ValueError:
-                    return f"can't read {token!r}: use a button, button*N or waitSECONDS"
-                if button not in BUTTONS or not 1 <= n <= 50:
+                    return (f"can't read {token!r}: use a button, button*N, button:SECONDS, "
+                            "a+b:SECONDS or waitSECONDS")
+                if any(b not in BUTTONS for b in names) or not 1 <= n <= 50 or hold <= 0:
                     return f"unknown button or count: {token}"
-                plan += [(button, 0.25)] * n
-            for button, pause in plan:
-                if button:
-                    await asyncio.to_thread(self.controls.press, button)
+                plan += [(names, hold, 0.25 if hold == 0.1 else 0.15)] * n
+            for names, hold, pause in plan:
+                if len(names) == 1 and hold == 0.1:
+                    await asyncio.to_thread(self.controls.press, names[0])
+                elif names:
+                    await asyncio.to_thread(self.controls.chord, names, int(hold * 1000))
                 await asyncio.sleep(pause)
         elif cmd == "shot" and arg:
             if not os.path.isabs(arg):
