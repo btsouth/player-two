@@ -126,6 +126,8 @@ class HyprlandCapture(Capture):
         self.whole_screen = whole_screen
         self.target: dict | None = None
         self._checked = 0.0
+        self._bad_id = None
+        self._bad_until = 0.0
 
     def pick(self) -> dict | None:
         from .games import pick_game
@@ -154,17 +156,23 @@ class HyprlandCapture(Capture):
                 self._dark_since = None
             self.target = picked
             self._checked = now
+        sid = (self.target or {}).get("stableId")
         if self.target is not None:
-            try:
-                data = subprocess.check_output(
-                    ["grim", "-t", "ppm", "-T", str(self.target["stableId"]), "-"],
-                    timeout=3, stderr=subprocess.DEVNULL)
-                if data:
-                    img = Image.open(io.BytesIO(data))
-                    self._blank_check(img, self.target.get("stableId"), now)
-                    return Frame(img, now, label=self.target.get("title", ""))
-            except (subprocess.SubprocessError, OSError, KeyError):
-                pass
+            if not (sid == self._bad_id and now < self._bad_until):
+                try:
+                    data = subprocess.check_output(
+                        ["grim", "-t", "ppm", "-T", str(sid), "-"],
+                        timeout=3, stderr=subprocess.DEVNULL)
+                    if data:
+                        img = Image.open(io.BytesIO(data))
+                        self._blank_check(img, sid, now)
+                        return Frame(img, now, label=self.target.get("title", ""))
+                except (subprocess.SubprocessError, OSError, KeyError):
+                    # grim 1.5 segfaults when the window closes mid-capture (a game
+                    # quitting), and each crash puts up a desktop notice: leave that window
+                    # alone for a while and look for the game afresh on the next grab.
+                    self._bad_id, self._bad_until = sid, now + 5.0
+                    self._checked = 0.0
             # Older Hyprland can't capture one window: show the monitor it's on.
             if self.output is None and self.target.get("monitor") is not None:
                 self.output = monitor_name(self.target["monitor"])
