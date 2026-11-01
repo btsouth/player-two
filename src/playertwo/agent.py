@@ -58,6 +58,7 @@ from .walk import Walker, small
 PROGRESS_GAP_S = 8.0
 # Walking around by trial and error in one request stops after this long: wandering on
 # camera looks lost, and an honest "I don't know the way here yet" is better.
+FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
 WANDER_LIMIT_S = 40.0
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
 
@@ -1191,10 +1192,12 @@ class Agent:
         return intent
 
     async def count_foes(self, image, party: list[str] = ()) -> Foes | None:
-        """The enemies standing, counted by a look (one model call, 2.5 s median; 24/27
+        """The enemies standing, counted by a look (one model call, about 2 s; 25/27
         right on the battle bench, misses off by one): the screen shows no enemy list or
-        HP. Listing them by where they stand counts better than a number. None when the
-        look fails."""
+        HP. Listing them by where they stand counts better than a number. Sent at 1536
+        px: at 1024 a Gargoyle standing on Crono at a fight's start was missed 3 times in
+        4 (live 3: "Two golden winged imps" with three up; 16/16 at 1536, and the bench
+        23/27 at 1024 the same hour). None when the look fails."""
         try:
             img = image if isinstance(image, Image.Image) else Image.fromarray(
                 np.ascontiguousarray(np.asarray(image)[..., ::-1]))
@@ -1208,7 +1211,7 @@ class Agent:
                              named=FOES_NAMED.format(names=", ".join(names)) if names else "")
         try:
             d = await asyncio.wait_for(self.muse.json([{"role": "user", "content": [
-                image_part(field, 1024), {"type": "text", "text": prompt}]}],
+                image_part(field, FOES_SIDE), {"type": "text", "text": prompt}]}],
                 effort="minimal", max_tokens=1500), 12)
             where = d.get("enemies")
             count = len(where) if isinstance(where, list) else int(d.get("count"))

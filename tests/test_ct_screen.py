@@ -1017,3 +1017,31 @@ def test_danger_player_two_just_gave_isnt_said_again():
     r2 = Reader()
     r2.just_said(["Frog's Slurp healed Frog: 101 of 494."], now=0)
     assert r2.update(fight(101), now=30) == "Fight. Frog 101 HP."
+
+
+def test_the_enemy_count_looks_at_a_sharp_picture(monkeypatch):
+    """Live 3: at 1024 px a Gargoyle standing on Crono at a fight's start was missed 3
+    times in 4; at 1536 px 16/16."""
+    import asyncio
+
+    from PIL import Image
+
+    from playertwo import agent as agent_mod
+    from playertwo.agent import Agent
+
+    sent = []
+
+    class Muse:
+        async def json(self, messages, **k):
+            url = messages[0]["content"][0]["image_url"]["url"]
+            sent.append(url)
+            return {"enemies": ["top", "right", "behind Crono"], "look": "golden winged imps"}
+
+    a = Agent.__new__(Agent)
+    a.muse, a._executor, a._party, a.on_action = Muse(), None, [], None
+    sizes = []
+    orig = agent_mod.image_part
+    monkeypatch.setattr(agent_mod, "image_part",
+                        lambda img, side=1280, **k: (sizes.append(side), orig(img, side))[1])
+    f = asyncio.run(a.count_foes(Image.new("RGB", (2560, 1440)), ["Crono", "Frog", "Marle"]))
+    assert f.count == 3 and sizes == [1536] and sent
