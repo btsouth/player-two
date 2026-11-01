@@ -44,7 +44,8 @@ class ShopStop(Exception):
 
 def number(text: str) -> int | None:
     """A price or a sum as the font reads it ("4.000", "4,000", "496 G", "35O")."""
-    t = ctsteam.numfix(text.replace("G", "").strip())
+    t = re.sub(r"(?<=\d)[uUQ]|[uUQ](?=\d)", "0", text.replace("G", "").strip())  # "1u": 10
+    t = ctsteam.numfix(t)
     t = re.sub(r"(?<=\d)[.,](?=\d{3}\b)", "", t)
     m = re.search(r"\d+", t)
     return int(m.group()) if m else None

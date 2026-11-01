@@ -39,6 +39,7 @@ def test_the_shop_screen_read_from_live_frames():
 def test_numbers_as_the_font_reads_them():
     assert shop.number("4.000") == 4000 and shop.number("4,000") == 4000
     assert shop.number("496 G") == 496 and shop.number("35O") == 350
+    assert shop.number("1u") == 10  # the fair's Potion, live
     assert shop.item_name("k3 Bronze Blade") == "Bronze Blade"
 
 
@@ -272,3 +273,18 @@ def test_the_menu_page_hp_and_mp_with_misread_labels():
     fm = FieldMenu(press, grab, wait_s=0.1)
     fm.open = fm.close = nothing
     assert asyncio.run(fm.vitals()) == ([(70, 70, 8, 8), (65, 65, 12, 12)], 366)
+
+
+@pytest.mark.skipif(not (FRAMES / "shop-fair-item-seller-list.png").exists(),
+                    reason="no fair shop frames")
+def test_the_fair_item_sellers_goods_and_the_reader_on_them():
+    from playertwo import ctscreen
+
+    v = read("shop-fair-item-seller-list")
+    assert [(g.name, g.price) for g in v.goods] == [
+        ("Potion", 10), ("Panacea", 10), ("Athenian Water", 200), ("Shelter", 150)]
+    assert (v.kind, v.on, v.funds, v.stock) == ("list", "Potion", 276, 18)
+    lk = ctscreen.look(Image.open(FRAMES / "shop-fair-item-seller-list.png"))
+    assert lk.parts == {"focus": "Potion, 10 G", "desc": "Restores 50 HP."}
+    lk = ctscreen.look(Image.open(FRAMES / "shop-fair-item-seller-main.png"))
+    assert lk.parts == {"focus": "Buy", "desc": "Funds 276 G"}

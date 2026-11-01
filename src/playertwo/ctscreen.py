@@ -277,6 +277,8 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     found = [f for f in found if f[1]]
     pool = good  # where a choice's options are read
     talk = False  # a choice in dialogue: its options and question at dialogue size
+    if tips and any(r.text.lower().startswith("funds") for row in lines for r in row):
+        return _shop_look(lk, tips, lines, good)
     known = set(VOCAB) | set(ctsteam.NAMES) | set(ctsteam.ITEMS)
     if tips and question is None and not any(f[1] in known for f in found):
         # A question in dialogue (the inn's "Would you like to stay for the night?"): the
@@ -409,6 +411,33 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
         lk.typing.add("text")
         lk.unsure = misread(text) or not all(plausible(r) and r.worst <= SURE
                                              for row in rows for r in row)
+    return lk
+
+
+def _shop_look(lk: Look, tips, lines, good) -> Look:
+    """A shop screen: what the hand is on with its price (or the count and the total), the
+    item's help line, the funds."""
+    from .shop import parse
+
+    v = parse(tips, lines)
+    lk.kind = "menu"
+    if v.kind == "main" and v.on:
+        lk.parts["focus"] = v.on
+        if v.funds is not None:
+            lk.parts["desc"] = f"Funds {v.funds} G"
+    elif v.kind == "count" and v.on:
+        lk.parts["focus"] = f"{v.on}, {v.count}" + (f", {v.total} G" if v.total else "")
+    elif v.kind == "list" and v.on:
+        g = next((g for g in v.goods if g.name == v.on), None)
+        lk.parts["focus"] = v.on + (f", {g.price} G" if g and g.price else "")
+        help_ = [r for r in good if 840 < r.y < 960 and r.x0 < 800
+                 and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2]
+        if help_:
+            lk.parts["desc"] = clean(" ".join(r.text for r in help_))
+            lk.texts.add("desc")
+    lk.focus = lk.parts.get("focus", "")
+    if not lk.focus:
+        lk.kind = "none"  # the model looks
     return lk
 
 
