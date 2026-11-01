@@ -589,7 +589,8 @@ class Session:
             return ""
         self.place_said = (short, time.monotonic())
         recent = getattr(getattr(self, "narrator", None), "recent", ())
-        if any(short.lower() in r.lower() for r in recent):
+        base = short.split(",")[0].lower()  # "Crono's house, downstairs": the house
+        if any(base in r.lower() for r in recent):
             return ""  # just said, by Player Two ("We're at Leene Square.") or a narration
         return short
 

@@ -990,12 +990,18 @@ class Agent:
             if self.cancelled:
                 return "stopped by the player"
             try:
-                return await self._go_to_exit(str(a.get("to") or ""),
-                                              talk=a.get("talk") if isinstance(
-                                                  a.get("talk"), bool) else None)
+                out = await self._go_to_exit(str(a.get("to") or ""),
+                                             talk=a.get("talk") if isinstance(
+                                                 a.get("talk"), bool) else None)
             except WALK_ERRORS as exc:
                 self.controls.steer(None)
                 return f"walking failed ({exc})"
+            if out.startswith("arrived") and "pressed a" in out:
+                line = await self._settled_line()
+                if line:
+                    out += (f'. Their line, typed out in full: "{line}" (say it once, as is; '
+                            "don't say part of it)")
+            return out
         if name == "guide":
             from .guide import look_up
 
@@ -1213,6 +1219,32 @@ class Agent:
             out = await fm.use(action, str(a.get("name") or ""), str(a.get("user") or ""),
                                str(a.get("target") or ""))
         return out
+
+    async def _settled_line(self, most: float = 3.5) -> str:
+        """The text box's line once it has typed out (Steam CT: two looks agree and it
+        ends like a sentence), so it's said whole, once (live: "Mother: Oh, I almost
+        forgot" was said, then the whole line)."""
+        from . import ctscreen
+
+        if not self._ct_steam(await self.grab()):
+            return ""
+        end, last = time.monotonic() + most, ""
+        while time.monotonic() < end:
+            frame = await self.grab()
+            if not ctscreen.sharp(frame.image):
+                return ""
+            lk = await asyncio.to_thread(ctscreen.look, frame.image)
+            text = lk.parts.get("text") or lk.parts.get("question") or ""
+            if lk.kind not in ("text", "choice") or not text:
+                return ""
+            if text == last and (ctscreen.finished(text) or lk.kind == "choice"):
+                if lk.unsure:
+                    return ""  # misread somewhere: the model reads the screen
+                return text + (f" ({lk.parts['focus']})" if lk.kind == "choice"
+                               and lk.parts.get("focus") else "")
+            last = text
+            await asyncio.sleep(0.35)
+        return ""
 
     async def _shop(self, a: dict) -> str:
         """Buy at a shop or rest at an inn (shop.py), walking to the seller first when

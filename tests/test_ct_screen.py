@@ -427,6 +427,10 @@ async def test_a_place_player_two_just_named_isnt_named_again():
                               locate=lambda image: SimpleNamespace(loc=5))
     frame = Frame(Image.new("RGB", (1920, 1080)), time.monotonic())
     assert await s._place(frame) == ""
+    s.narrator.recent.append("We're at Crono's House.")
+    s.rooms.name = lambda loc: "Crono's house, downstairs"
+    s.place_said = ("", 0.0)
+    assert await s._place(frame) == ""  # the house was just named, if not which floor
 
 
 async def test_narration_says_the_place_then_the_model_line():

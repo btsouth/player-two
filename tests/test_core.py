@@ -187,6 +187,20 @@ class TestAgent:
         assert acted == [("go_to_exit", {"to": "outside"})] and muse.seen == []
         assert said == ["We're outside."] and result.outcome == "We're outside."
 
+    def test_a_line_talked_to_is_given_whole_once_it_has_typed_out(self, monkeypatch):
+        from playertwo import ctscreen
+
+        agent, _, _, _, _ = self.make([])
+        agent._ct_steam = lambda frame: True
+        monkeypatch.setattr(ctscreen, "sharp", lambda image: True)
+        monkeypatch.setattr(asyncio, "sleep", lambda s: _now())
+        typed = iter(["Mother: Oh, I almost forgot", "Mother: Oh, I almost forgot! Here's",
+                      "Mother: Oh, I almost forgot! Here's your allowance.",
+                      "Mother: Oh, I almost forgot! Here's your allowance."])
+        monkeypatch.setattr(ctscreen, "look", lambda image, party=(): SimpleNamespace(
+            kind="text", parts={"text": next(typed)}, unsure=False))
+        assert run(agent._settled_line()) == "Mother: Oh, I almost forgot! Here's your allowance."
+
     def test_running_out_of_steps_asks_for_where_things_stand(self):
         agent, _, said, _, muse = self.make(
             [[("press", {"buttons": ["up"]})]] * 2 + [[("finish", {"text": "Got halfway."})]])
@@ -909,3 +923,7 @@ def test_a_game_pack_is_shared_by_every_version_of_the_game(tmp_path):
     assert "L and R together runs" in notes.prompt("Chrono Trigger (SNES)")
     assert "game pack" in notes.prompt("Chrono Trigger")
     assert notes.prompt("Other Game") == ""
+
+
+async def _now():
+    return None
