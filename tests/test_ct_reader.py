@@ -106,8 +106,10 @@ def test_ready_columns_and_where_the_actor_stands():
     st = ctsteam.read(load("134639-00"))
     assert st.columns == [0, 1, 2] and st.actor_col == 0 and st.ready() == list(NAMES)
     assert st.bracket is not None and abs(st.bracket[0] - 1884) < 30
-    st = ctsteam.read(load("135153-09"))  # Frog behind the windows: no bracket, still read
+    st = ctsteam.read(load("135153-09"))  # Frog behind the windows: his top corners only
     assert (st.actor, st.columns, st.actor_col) == ("Frog", [1, 2], 1)
+    assert st.bracket is not None and abs(st.bracket[0] - 1056) < 30 \
+        and abs(st.bracket[1] - 1200) < 40
 
 
 def test_critical_names_under_the_pause_and_whose_turn_it_is():
@@ -243,3 +245,23 @@ def test_the_actor_name_with_forest_leaves_run_into_it():
     assert (st.kind, st.actor, st.actor_col, st.columns) == ("command", "Marle", 1, [0, 1])
     assert [(m.name, m.hp, m.hp_max, m.mp) for m in st.party] == [("Crono", 22, 70, 8),
                                                                   ("Marle", 40, 65, 12)]
+
+
+FOREST = LIVE.parent / "steam-2026-11-01b" / "frames"
+
+
+@pytest.mark.skipif(not FOREST.is_dir(), reason="no 2026-11-01b frames")
+def test_the_party_box_reads_over_guardia_forest_leaves():
+    """Live 2026-11-01: bright leaves behind and between the windows ran the box's rows
+    together; the party didn't read for seconds and "win" said the fight had ended."""
+    for name, kind, want in (
+            ("041253-01", "command", [("Crono", 26, 70), ("Marle", 44, 65)]),
+            ("041257-02", "none", [("Crono", 26, 70), ("Marle", 44, 65)]),
+            ("041315-05", "none", [("Crono", 17, 70), ("Marle", 40, 65)])):
+        st = ctsteam.read(cv2.imread(str(FOREST / f"{name}.jpg")))
+        assert st.kind == kind, name
+        assert [(m.name, m.hp, m.hp_max) for m in st.party] == want, name
+    st = ctsteam.read(cv2.imread(str(FOREST / "041253-01.jpg")))
+    assert (st.actor, st.command) == ("Crono", "Attack")
+    st = ctsteam.read(cv2.imread(str(FOREST / "041421-11.jpg")))  # the field after it
+    assert not st.party and not st.in_battle

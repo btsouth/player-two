@@ -75,6 +75,10 @@ MENU_WORDS = (*VOCAB, "Equipment", "Inventory", "Techs", "Party", "Settings", "B
               "Save", *NAMES, "Use / Switch", "Sort list", "Battle", "Sound", "Graphics",
               "Controls", "Defaults", "Quit", "Consumables")
 NUM = re.compile(r"(\d+)\s*[/t ]\s*(\d+)")
+# The bottom windows left to right (canvas x): three command windows and the party box.
+STRIPS = ((200, 607), (607, 1020), (1020, 1434), (1434, 2380))
+BRACKET_TOP_ROWS = 18  # quarter-scale rows of the bracket template that hold its top corners
+BRACKET_HALF_H = 156  # canvas pixels from the bracket's top to its centre
 # Words in the top bar after a won fight.
 SPOILS = re.compile(r"(?i)\b(earned|exp|tp\b|level|obtained|found|got|received|\d+\s*g\b)")
 
@@ -96,6 +100,11 @@ def templates() -> dict[str, list[Template]]:
         # The target glove is the same hand drawn bigger.
         "glove": [scaled(hand, mask, 0.5 * s, "glove") for s in (1.75, 1.9)],
         "bracket": [Template(br, (bm > 0).astype(np.uint8) * 255, "bracket")],
+        # Its top corners alone, for a fighter standing low enough that the bottom corners
+        # are behind the windows (Frog on the Mountain of Woe: never bracketed before).
+        "bracket_top": [Template(br[:BRACKET_TOP_ROWS].copy(),
+                                 (bm[:BRACKET_TOP_ROWS] > 0).astype(np.uint8) * 255,
+                                 "bracket_top")],
     }
 
 
@@ -199,6 +208,37 @@ def _member(row: list[Run]) -> tuple[Member | None, int | None]:
                    name_run.colour), x0)
 
 
+def _members(lines: list[list[Run]]) -> tuple[list[Member | None], int | None]:
+    """Each line as a fighter (or None), and where the party box's names start."""
+    party_x = None
+    found: list[Member | None] = []
+    for row in lines:
+        m, x = _member(row)
+        if x is not None:
+            party_x = x if party_x is None else min(party_x, x)
+        found.append(m)
+    return found, party_x
+
+
+def _strip_lines(img: np.ndarray, blank: list) -> list[list[Run]]:
+    """The bottom windows read one at a time, their rows matched up by height; nothing
+    when the party box holds no fighter (a field screen: the cheap strip first)."""
+    rows: list[list[Run]] = []
+    for k, (x0, x1) in enumerate(reversed(STRIPS)):
+        got = runs_in(lib(), img, (x0, BOTTOM[1], x1, BOTTOM[3]), blank)
+        if k == 0 and not any(_members(got)[0]):
+            return []
+        for row in got:
+            same = next((r for r in rows if abs(r[0].y - row[0].y) < 24), None)
+            if same is None:
+                rows.append(list(row))
+            else:
+                same.extend(row)
+    for r in rows:
+        r.sort(key=lambda run: run.x0)
+    return sorted(rows, key=lambda r: r[0].y)
+
+
 def _hp_run(row: list[Run]) -> int | None:
     for i, r in enumerate(row):
         if re.match(r"H[PF]\b|HP", r.text):
@@ -252,14 +292,16 @@ def read(image, full: bool = True) -> State:
         st.hand = (menu[0][0] + menu[0][2], menu[0][1] + menu[0][3] // 2)
     blank = [h[:4] for h in hs]
     lines = runs_in(lib(), img, BOTTOM, blank)
+    found, party_x = _members(lines)
+    if not any(found):
+        # Bright leaves behind and between the windows (Guardia Forest) run the rows of
+        # the whole box together and nothing reads (live: "the fight ended" mid-fight).
+        # Window by window, each row stands alone.
+        strips = _strip_lines(img, blank)
+        found2, x2 = _members(strips)
+        if any(found2):
+            lines, found, party_x = strips, found2, x2
     t2 = time.perf_counter()
-    party_x = None
-    found: list[Member | None] = []
-    for row in lines:
-        m, x = _member(row)
-        if x is not None:
-            party_x = x if party_x is None else min(party_x, x)
-        found.append(m)
     for k, (m, row) in enumerate(zip(found, lines, strict=True)):
         if m is not None and m.hp is not None:
             continue
@@ -365,6 +407,12 @@ def read(image, full: bool = True) -> State:
         if br:
             x, y, w, h, _s, _n = br[0]
             st.bracket = (x + w // 2, y + h // 2)
+        else:
+            top = find_template(img, tp["bracket_top"], CANVAS, thresh=0.7,
+                                roi=(0, 300, 2560, BOTTOM[1] + 10), most=1)
+            if top:
+                x, y, w, _h, _s, _n = top[0]
+                st.bracket = (x + w // 2, y + BRACKET_HALF_H)
     t3 = time.perf_counter()
     if full:
         st.top = " ".join(r.text for row in runs_in(lib(), img, TOP, blank) for r in row)
