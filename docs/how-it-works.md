@@ -19,14 +19,26 @@ The parts, in the order a moment of play goes through them. File names are under
   and every screen in games without a profile, go to Muse Spark, whose answer streams into the
   voice sentence by sentence, so speech starts before the model has finished. It stays silent
   while the agent is acting, so it never talks over what you asked for.
+- **Places** (`narrator.py`, `rooms.py`): "what does it look like?" gets a few sentences of
+  setting, light, colours and mood from Muse Spark, after the place's name from the room survey.
+  The first time you walk into a surveyed place in a session, its name comes with one line on
+  what it's like, drafted once from the survey's picture of it (`scripts/atmos_rooms.py`).
+  Never in terse or quiet mode, and never over a text box, a menu or a fight.
+- **Voice** (`voice.py`, `audio.py`, `screenreader.py`): Kokoro speaks each sentence as it
+  arrives (about 0.1 s a sentence on a GPU, and it runs on the CPU too). With
+  `output = "screen-reader"` the words go to Orca, speech-dispatcher, NVDA or JAWS instead.
+  Sound cues (low health, the "where is it?" pings) always come from Player Two.
 - **Instant echo** (`ack.py`): says your request back in your own words the moment it arrives,
   with no model call ("Okay, Crono will use Cyclone"), so a misheard request is caught at once. It
   states what it will try, never a result.
-- **Agent** (`agent.py`): Muse Spark in a tool loop. The general tools are `press`, `hold`,
-  `walk_to`, `talk_to`, `keep_walking`, `exits`, `area_map`, `walk_to_map`, `wait`, `say`,
-  `ask_player`, `remember` and `finish`. With a game's maps it also gets `where_am_i`,
-  `go_to_place`, `go_to_exit` and `travel`; with a walkthrough, `guide` and `next_goal`; in
-  Chrono Trigger on Steam, the executors below. A rule in code stops any press sequence just
+- **Agent** (`agent.py`): Muse Spark in a tool loop. The tools are `press`, `hold`, `walk_to`,
+  `talk_to`, `keep_walking`, `travel`, `exits`, `area_map`, `walk_to_map`, `wait`, `say`,
+  `ask_player`, `remember` and `finish`, plus `where_am_i`, `go_to_place`, `go_to_exit` and
+  `go_to_era`, which use a game's maps, and `guide` and `next_goal`, which use a walkthrough.
+  Those are always offered; without maps or a walkthrough they say so, and the agent falls
+  back on the general tools. In Chrono Trigger on Steam it also gets the `shop` and
+  `field_menu` executors below, and in a fight only `battle`, `fight`, `say`, `ask_player`,
+  `remember`, `wait` and `finish`. A rule in code stops any press sequence just
   before an A that follows any other press, so it always looks at the highlight before
   confirming, and it can't press A twice and skip a line you didn't hear.
 - **Executors** (`battle.py`, `shop.py`, `menu.py`, Chrono Trigger on Steam): the model says what
@@ -58,6 +70,21 @@ The parts, in the order a moment of play goes through them. File names are under
   while your character is hidden behind something. When the screen changes, at
   once or over a fade through a door, it lets go, waits for the picture to settle, and says
   whether it's a new place.
+- **People** (`people.py`): in a surveyed place, "talk to the guy selling swords" is matched
+  with no model call against everything known about each person there: the survey's name and
+  other names they go by, what they said when talked to, what they are ("guy" is a man,
+  "soldier" a guard; a word that contradicts someone counts against them), and where they
+  stand ("on the left", "by the bell"). The best fit wins when it's clearly ahead; when two or
+  three fit about as well, it asks which one. "Who's here?" is answered the same way, nearest
+  first, in steps and d-pad directions.
+- **Where is it?** (`locate.py`, `app.py`): SAM 3.1 finds every match for the thing asked
+  about, exact to the pixel. At the same time Muse Spark looks for it too (SAM doesn't know many
+  game things, like a pixel-art cat) and for your character. The answer is from your character
+  when it's known ("4 steps up and 2 to your left", nearest first), and each match gets a short
+  sound panned to its side.
+- **Health warnings** (`hud.py`): for real-time games, Muse Spark finds the health and stamina
+  bars once; then a few lines of pixel math read them on every frame and play a sound when they
+  get low.
 - **Exploring** (`explore.py`): `keep_walking` holds a direction and watches every frame: how far
   the view scrolled, when the character stopped (a wall), and when the picture changed to a new
   place or a text box came up. It reports that in steps ("blocked after 8 steps up"). The agent
