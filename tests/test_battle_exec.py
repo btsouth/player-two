@@ -691,3 +691,28 @@ async def test_left_past_the_last_enemy_onto_an_ally_comes_back():
     out = await executor(game).act(Intent("", "attack", target="left"))
     assert out.ok, out.text
     assert game.enemies[0][3] == 2  # the leftmost one was hit
+
+
+async def test_a_glove_left_on_an_ally_over_the_windows_is_backed_out_first():
+    game = FakeCT(party(), enemies())
+    game.on_ally, game.mode = True, "target"  # left so by the last request
+    target, read = game._target, game.read
+
+    def keys(b):
+        if game.on_ally:
+            if b == "b":
+                game.on_ally = False
+                game.mode = "command"
+            return
+        target(b)
+
+    def reads(frame, full=True):
+        if game.on_ally:
+            return State(kind="command", columns=[0, 1, 2], party=[
+                Member(m.name, m.hp, m.hp_max, m.mp, 99, "white") for m in game.party])
+        return read(frame, full)
+
+    game._target, game.read = keys, reads
+    out = await executor(game).act(Intent("", "attack"))
+    assert out.ok, out.text
+    assert game.log[0] == "b"

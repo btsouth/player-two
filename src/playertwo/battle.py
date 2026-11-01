@@ -287,6 +287,12 @@ class Executor:
 
     async def back_out(self, st: State) -> State:
         """Back to the command windows from a list or the target glove."""
+        if st.kind == "command" and st.actor_col is None and st.columns and not st.paused:
+            # Command windows up but no hand in any: a glove left on an ally drawn over the
+            # windows (it doesn't read as a glove there). b takes it back to the commands.
+            await self.tap("b")
+            st = await self.until(lambda s: s.kind != "command" or s.actor_col is not None,
+                                  0.6)
         for _ in range(3):
             if st.kind not in ("list", "target"):
                 return st
