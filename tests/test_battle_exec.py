@@ -253,6 +253,12 @@ async def test_attack_with_whoever_is_up_is_two_presses():
     assert sum(e[3] for e in game.enemies) == 8
 
 
+async def test_an_attack_with_nothing_seen_says_it_went_in():
+    game = FakeCT(party(), enemies())
+    out = await executor(game).act(Intent("", "attack"))
+    assert "attack went in" in out.text and "No party HP" not in out.text
+
+
 async def test_paused_first_then_the_named_actor_in_another_column():
     game = FakeCT(party(), enemies(), ready=(0, 2))
     game.paused = True

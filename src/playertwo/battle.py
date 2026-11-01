@@ -691,6 +691,11 @@ class Executor:
             await asyncio.sleep(self.t.poll_s)
             st = await self.look()
         seen = changes(before, st, msgs) + spent
+        if intent.command.lower() == "attack" and seen.startswith("No party HP"):
+            # Enemies' HP isn't on screen: "nothing changed" sounded like a miss (live,
+            # "Crono attacked but nothing changed").
+            seen = ("The attack went in (damage to enemies isn't read from the screen); no "
+                    "party HP changed")
         if not seen_name:
             seen += (f" {intent.name} is chosen but hadn't gone off yet (it waits its turn "
                      "behind what's playing); it goes off once the fight runs again.")
