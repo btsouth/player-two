@@ -176,6 +176,7 @@ class Executor:
         self.notes: list[str] = []
         self.held: State | None = None  # the screen as it was when paused
         self._unpause_first = False
+        self._acting = ""  # whose command is being put in, once known
 
     # -- seeing and pressing ---------------------------------------------------------------
 
@@ -297,7 +298,7 @@ class Executor:
     # Stops that mean the fight moved under the hand (a hit closed the list, the windows
     # changed), not that the command can't be done: worth one more go.
     RETRY = ("the list closed", "the command windows changed", "the command windows went away",
-             "the target hand went away", "didn't open")
+             "the target hand went away", "didn't open", "knocked out while choosing")
 
     async def act(self, intent: Intent, watch: bool = True, pause_after: bool = True,
                   st: State | None = None) -> Outcome:
@@ -335,7 +336,7 @@ class Executor:
             before = st
             st = await self._pick_actor(st, intent.actor)
             before = st
-            actor = st.actor
+            actor = self._acting = st.actor
             st = await self._pick_command(st, intent.command)
             if intent.command.lower() in ("tech", "item"):
                 st = await self._pick_entry(st, intent, actor)
@@ -355,6 +356,14 @@ class Executor:
             return Outcome(False, why, st, stopped=why, presses=self.presses[start:])
         finally:
             self._unpause_first = False
+            self._acting = ""
+
+    def _still_up(self, st: State) -> None:
+        """The one choosing went down while choosing: their command won't happen, so
+        stop now rather than steer the glove round for nothing (live: a minute lost)."""
+        m = st.member(self._acting) if self._acting else None
+        if m is not None and m.down:
+            raise Stop(f"{m.name} was knocked out while choosing")
 
     async def _settle_stopped(self, pause: bool = True) -> State | None:
         if self.cancelled():
@@ -565,6 +574,7 @@ class Executor:
         return await self._target_named(st, intent.target)
 
     async def _target_ally(self, st: State, ally: str) -> State:
+        self._still_up(st)
         member = st.member(ally) if st.party else None
         who = await self.who_at(st)
         if who and same_name(who, ally):
@@ -579,6 +589,7 @@ class Executor:
             st = await self.look()
             if st.kind != "target":
                 raise Stop("the target glove went away")
+            self._still_up(st)
             who = await self.who_at(st)
             if who and same_name(who, ally):
                 return st

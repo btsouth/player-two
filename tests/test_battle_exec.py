@@ -56,6 +56,7 @@ class FakeCT:
         self.taps_since_look = 0
         self.bursts: list[int] = []  # taps between looks
         self.drop_starts = 0
+        self.ko_at_target: int | None = None  # this fighter goes down as the glove opens
 
     # The controller.
     async def press(self, button: str, ms: int) -> None:
@@ -114,6 +115,9 @@ class FakeCT:
             i -= 1
         elif b == "b":
             self.mode = "command"
+            if self.hand_col not in self.ready:  # they went down: the next one's window
+                self.hand_col = self.ready[0] if self.ready else None
+                self.mode, self.cmd = ("command", 0) if self.ready else ("none", 0)
             return
         elif b == "a":
             name = self.list[i]
@@ -129,6 +133,10 @@ class FakeCT:
                 down = [k for k, m in enumerate(self.party) if m.hp == 0]
                 self.glove = down[0] if name == "Athenian Water" else self.hand_col
                 self.mode = "target"
+                if self.ko_at_target is not None:
+                    self.party[self.ko_at_target].hp = 0
+                    self.ready.remove(self.ko_at_target)
+                    self.ko_at_target = None
             else:
                 self._aim_enemies()
             return
@@ -287,6 +295,19 @@ async def test_a_revive_starts_from_a_used_up_items_empty_slot():
     assert out.ok, out.text
     assert p[0].hp == 100
     assert game.log[:7] == ["down", "down", "a", "up", "right", "a", "a"]
+
+
+async def test_the_one_choosing_knocked_out_at_the_glove_hands_it_to_the_next():
+    # Live, Woe 2026-11-01: Frog went down with his Athenian Water's glove up; it steered
+    # the glove round for a minute before the model asked Marle instead.
+    p = party()
+    p[0].hp = 0
+    game = FakeCT(p, enemies(), ready=(1, 2))
+    game.ko_at_target = 1
+    out = await executor(game).act(Intent("", "item", "Athenian Water", "Crono"))
+    assert out.ok, out.text
+    assert out.text.startswith("Marle: item Athenian Water on Crono")
+    assert p[0].hp == 100 and p[1].hp == 0
 
 
 async def test_a_tech_when_none_are_learned_yet_stops_and_says_so():
