@@ -31,6 +31,7 @@ Never say:
 characters are standing.
 - Health or other stats of people who are fine, outside status screens.
 - Frame-rate counters, watermarks, overlay notifications or UI decoration.
+- A "!" or speech bubble over someone: it only marks something in reach to talk to or use.
 - Generic advice ("press A to continue", "nothing to press yet", "let it play"). Only \
 name a button when the screen shows a prompt for it.
 - Guesses. If you can't read something, say "a name I can't read" and move on. Never \
