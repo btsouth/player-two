@@ -37,6 +37,7 @@ OPTIONS = ("Yes", "No", "Empty", "Resume", "New Game", "Load Game", "Extras", "Q
            "ACTIONS", "Battle Mode", "Battle Speed", "Battle Message Speed",
            "Battle Cursor Memory", "Help Messages")
 VOCAB = tuple(sorted({*ctsteam.MENU_WORDS, *OPTIONS}))
+OPTION = re.compile(r"([A-Z][A-Za-z']*(?:[ ,][A-Za-z']+)*)[.!]?\s*$")  # a choice's words
 END = re.compile(r"[.?!:\"')\]]$")  # text that ends like a finished sentence
 
 
@@ -292,13 +293,30 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
             # The hand itself reads as specks in front of the option ("' ..t Yes."): the
             # option is the words at the end.
             near = sorted((r for r in rows if abs(r.y - tip[1]) < 45
-                           and -260 <= r.x0 - tip[0] < 200), key=lambda r: r.x0)
-            m = re.search(r"([A-Z][A-Za-z']*(?:[ ,][A-Za-z']+)*)[.!]?\s*$",
-                          near[0].text) if near else None
-            if m and len(m.group(1)) >= 2 and not misread(m.group(1)):
-                talk_found.append((tip, m.group(1), near[0]))
+                           and r.x1 > tip[0] and r.x0 - tip[0] < 200), key=lambda r: r.x0)
+            m = OPTION.search(near[0].text) if near else None
+            w = m.group(1) if m else ""
+            if (snap(w, VOCAB, 0.8) in VOCAB or len(w) >= 3) and not misread(w):
+                talk_found.append((tip, w, near[0]))
         if talk_found:
-            found, talk, pool, question = talk_found, True, big, asked
+            # The other options: the words at the end of each line in the hand's column
+            # (specks of the window's edge run into them).
+            x = talk_found[0][0][0]
+            pool = []
+            for r in rows:
+                o = OPTION.search(r.text) if r.x1 > x and r.x0 - x < 200 else None
+                w = o.group(1) if o else ""
+                if (snap(w, VOCAB, 0.8) in VOCAB or len(w) >= 3) and not misread(w):
+                    pool.append(Run(w, x, r.x1, r.y, r.colour, r.worst))
+            # The question is the whole box it ends ("Shelters are quite useful. Do you
+            # know about them?"), not just its last line.
+            band = [r for r in big if (r.y < 520) == (asked.y < 520) and abs(r.y - asked.y) < 300
+                    and r.y <= asked.y and abs(r.x0 - asked.x0) < 120]
+            if band:
+                asked = Run(" ".join(r.text for r in sorted(band, key=lambda r: r.y)),
+                            asked.x0, asked.x1, asked.y, asked.colour,
+                            max(r.worst for r in band))
+            found, talk, question = talk_found, True, asked
     if question is not None and not talk:
         below = [f for f in found if f[0][1] > question.y and abs(f[0][0] - question.x0) < 900]
         found = below or found
@@ -328,7 +346,7 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
             lk.parts["question"] = clean(question.text)
             lk.texts.add("question")
             lk.typing.add("question")
-            x = run.x0 if run is not None else tip[0]
+            x = tip[0] if talk or run is None else run.x0
             opts = [r for r in pool if r is not question and abs(r.x0 - x) < 160 and (
                 abs(r.y - tip[1]) < 300 if talk else
                 r.y > question.y and r.y - question.y < 700)]

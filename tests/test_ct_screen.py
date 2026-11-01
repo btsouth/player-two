@@ -640,3 +640,6 @@ def test_a_question_in_dialogue_says_where_the_hand_is():
         assert lk.kind == "choice"
         assert lk.parts["question"] == "Lodging is 10 G. Would you like to stay for the night?"
         assert lk.parts["focus"].startswith("Yes selected")
+    lk = ctscreen.look(cv2.imread(str(FRAMES / "box-manor-shelter-question.png")))
+    assert lk.parts == {"question": "Shelters are quite useful. Do you know about them?",
+                        "focus": "Yes selected, or No"}
