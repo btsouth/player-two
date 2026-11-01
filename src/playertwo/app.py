@@ -126,6 +126,7 @@ SETTABLE: dict[str, tuple] = {
     "hands_free": (True, False),
 }
 SPEECH_RATES = (0.8, 2.0)
+FOES_GAP_S = 6.0  # a fight the player plays: enemies counted again at most this often
 
 
 def parse_setting(key: str, raw: str):
@@ -245,6 +246,7 @@ class Session:
         self.read_owned = False  # whether the reader could read that frame
         self.read_thumb = None
         self.read_prime = False  # take in the next look without saying it
+        self.foes_at = 0.0  # when the enemies were last counted (a fight the player plays)
         self.read_model: asyncio.Task | None = None  # the model reading a box for it
         self.read_last_line = ""
         self.describing: asyncio.Task | None = None  # a description the player asked for
@@ -812,7 +814,16 @@ class Session:
             return
         self.reader.verbosity = self.narrator.verbosity
         self.reader.team_up = self.narrator.team_up
+        # A fight Player Two saw (it acted in it) isn't a new one when the reader sees it.
+        agent = getattr(self, "agent", None)
+        seen = getattr(agent, "_battle_seen", 0.0)
+        if isinstance(seen, float) and seen:
+            self.reader.battle_at = max(self.reader.battle_at, seen)
         line = self.reader.update(lk)
+        if lk.battle is not None and hasattr(agent, "note_battle"):
+            # Where each fighter stands and what the glove names, for Player Two's next
+            # command in this fight; a new fight forgets the last one's.
+            agent.note_battle(lk.battle, new=self.reader.fight_started)
         opened = lk.readable and not self.read_owned
         self.read_owned, self.read_t = lk.readable, frame.t
         if self.read_prime:
@@ -830,11 +841,18 @@ class Session:
             self._start_narration(frame)
             self.read_model = self.narrating
         elif self.reader.fight_started:
-            # The reader says turns and HP; what the party is up against is the model's.
+            # The reader says turns and HP; what the party is up against is a look's.
             self.reader.fight_started = False
             if self.narrating is None or self.narrating.done():
                 self.narrating = self.read_model = asyncio.create_task(
-                    self._narrate(frame, extra=BATTLE_START))
+                    self._fight_start(frame, lk.battle))
+        elif ("turn" in self.reader.last and lk.battle is not None
+              and getattr(agent, "foes", None) is not None
+              and time.monotonic() - self.foes_at > FOES_GAP_S):
+            # A new turn in a fight the player plays: fewer enemies than before is news.
+            self.foes_at = time.monotonic()
+            agent.recount(frame.image, [m.name for m in lk.battle.party],
+                          say=self._foe_news)
         if not line:
             return
         parts = set(self.reader.last)
@@ -853,6 +871,31 @@ class Session:
         self.events.emit("say", text=line, source="reader", screen=lk.kind, ms=lk.ms,
                          latency=round(time.monotonic() - frame.t, 2))
         self.spawn(self.voice.say(line, interrupt=interrupt))
+
+    async def _fight_start(self, frame: Frame, st) -> None:
+        """A fight just came up: how many enemies and what they look like ("Three
+        Gargoyles."), counted by a look; the model's narration if the count fails."""
+        party = [m.name for m in st.party] if st is not None and st.party else list(
+            self.reader.active)
+        foes = None
+        if hasattr(self.agent, "count_foes"):
+            with contextlib.suppress(Exception):
+                foes = await self.agent.count_foes(frame.image, party)
+        if foes is None or foes.count == 0:
+            await self._narrate(frame, extra=BATTLE_START)
+            return
+        if self.agent.foes is None:
+            self.agent.foes = foes
+        self.foes_at = time.monotonic()
+        await self._foe_news(foes.line())
+
+    async def _foe_news(self, line: str) -> None:
+        """An enemy count, said unless Player Two is acting (its lines go first)."""
+        if self.agent_task is not None and not self.agent_task.done():
+            return
+        self.narrator.recent.append(line)
+        self.events.emit("say", text=line, source="foes")
+        await self.voice.say(line)
 
     # Talking
 
@@ -1191,7 +1234,12 @@ class Session:
         try:
             frame = await self.grab_now()
             lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
-            line = await asyncio.to_thread(ctscreen.answer, text, lk,
+            line = None
+            if (ctscreen.ASK_FOE.search(ctscreen._plain(text)) and lk.battle is not None
+                    and lk.battle.party and hasattr(self.agent, "what_we_fight")):
+                # The enemies, counted by a look, and the party's HP in a few words.
+                line = await self.agent.what_we_fight(frame.image, lk.battle)
+            line = line or await asyncio.to_thread(ctscreen.answer, text, lk,
                                            self.reader.active or self.reader.party,
                                            self.reader.heard, frame.image)
         except Exception as exc:  # noqa: BLE001  the agent answers instead

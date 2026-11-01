@@ -112,16 +112,21 @@ class Look:
 ORDER = ("pause", "title", "turn", "focus", "question", "top", "text", "desc", "danger")
 
 
-def _danger(st: ctsteam.State) -> str:
+def _danger_items(st: ctsteam.State) -> list[tuple[str, str]]:
+    """Who's in danger, each with what to say: knocked out, or under a third of their HP."""
     out = []
     for m in st.party:
         if m.hp is None or not m.hp_max:
             continue
         if m.hp == 0:
-            out.append(f"{m.name} is down")
+            out.append((m.name, f"{m.name} is down"))
         elif m.hp < m.hp_max / 3:
-            out.append(f"{m.name} {m.hp} HP")
-    return ", ".join(out)
+            out.append((m.name, f"{m.name} {m.hp} HP"))
+    return out
+
+
+def _danger(st: ctsteam.State) -> str:
+    return ", ".join(t for _n, t in _danger_items(st))
 
 
 def battle_look(st: ctsteam.State) -> Look:
@@ -568,25 +573,30 @@ class Reader:
         self.texts: dict[str, float] = {}  # text said -> when
         self.heard = ""  # the last text box read out, for "what did he say?"
         self.danger_at: dict[str, float] = {}  # who's low, as said -> when
+        self.battle_at = -1e9  # when a battle was last looked at (a new fight after a gap)
+        self.danger_on: set[str] = set()  # danger in this fight said (or covered) and standing
 
     def reset(self) -> None:
         self.kind, self.said, self.seen = "none", {}, {}
         self.hp, self.hp_new = {}, {}
 
-    def _hits(self, lk: Look) -> str:
-        """Party HP that changed since the last steady reading: "Frog took 120". Only a
-        reading two looks agree on counts (an attack can cover the numbers), only a
-        change of a tenth of someone's HP or more, and a knockout is left to danger."""
+    def _hits(self, lk: Look) -> tuple[str, set[str], set[str]]:
+        """Party HP that changed since the last steady reading: "Frog took 493, down to 1".
+        Only a reading two looks agree on counts (an attack can cover the numbers), only a
+        change of a tenth of someone's HP or more, and a knockout is left to danger. Also
+        who the line covers (their low HP is said in it) and whose HP is still changing
+        (their danger waits a look, to be said with the hit)."""
         st = lk.battle
         if st is None or not st.party or any(m.hp is None or not m.hp_max for m in st.party):
-            return ""
+            return "", set(), set()
         now = {m.name: (m.hp, m.hp_max) for m in st.party}
         steady = now == self.hp_new
         self.hp_new = now
         if not steady:
-            return ""
+            moving = {n for n, (hp, _t) in now.items() if n in self.hp and self.hp[n][0] != hp}
+            return "", set(), moving
         before, self.hp = self.hp, now
-        out = []
+        out, covered = [], set()
         for name, (hp, top) in now.items():
             if name not in before:
                 continue
@@ -595,10 +605,35 @@ class Reader:
                 continue
             if old == 0:
                 out.append(f"{name} is back up")
+                covered.add(name)
             elif hp < old:
-                out.append(f"{name} took {old - hp}")
+                low = hp < top / 3
+                out.append(f"{name} took {old - hp}" + (f", down to {hp}" if low else ""))
+                if low:
+                    covered.add(name)
             else:
                 out.append(f"{name} healed {hp - old}")
+        return ", ".join(out), covered, set()
+
+    def _danger_news(self, lk: Look, now: float, covered: set[str], moving: set[str]) -> str:
+        """Who's newly in danger in a fight, one by one: a knockout at once; low HP once its
+        hit is steady (said with it, not before it). Danger that stands isn't said again;
+        if the party box drops out and comes back, it's news after 20 s."""
+        out, on = [], set()
+        for name, text in _danger_items(lk.battle):
+            if name in moving and not text.endswith("is down"):
+                if text in self.danger_on:
+                    on.add(text)
+                continue
+            on.add(text)
+            if text in self.danger_on:
+                continue
+            if name in covered or now - self.danger_at.get(text, -1e9) < 20:
+                self.danger_at.setdefault(text, now)
+                continue
+            self.danger_at[text] = now
+            out.append(text)
+        self.danger_on = on
         return ", ".join(out)
 
     def prime(self) -> None:
@@ -636,14 +671,24 @@ class Reader:
             self.active = list(lk.names)  # a fight shows exactly who is in the party
         self.last = []
         opened = lk.kind != self.kind
+        new_fight = False
         if opened:
             self.said, self.seen = {}, {}
-            self.fight_started = lk.kind == "battle" and not lk.parts.get("pause")
+            # A new fight, not the same one back after a look that didn't read as one.
+            new_fight = lk.kind == "battle" and not lk.parts.get("pause") and \
+                now - self.battle_at > 8
+            self.fight_started = self.fight_started or new_fight
+            if new_fight:
+                self.danger_on = set()
             self.kind = lk.kind
             self.hp, self.hp_new = {}, {}
+        if lk.kind == "battle":
+            self.battle_at = now
         if lk.kind == "none":
             return ""
-        hits = self._hits(lk)
+        hits, covered, moving = self._hits(lk)
+        if lk.battle is not None:
+            lk.parts["danger"] = self._danger_news(lk, now, covered, moving)
         if self.verbosity == "quiet":
             hits = ""  # quiet: text, decisions and danger only
         if lk.kind == "text" and lk.unsure:
@@ -680,8 +725,8 @@ class Reader:
                     and lk.parts.get("question")
                     and self.said.get("question") != lk.parts["question"]):
                 continue  # the question first, then where the cursor is, in one line
-            if part == "danger" and now - self.danger_at.get(value, -1e9) < (
-                    20 if lk.kind == "battle" else 120):
+            if part == "danger" and lk.battle is None and now - self.danger_at.get(
+                    value, -1e9) < (20 if lk.kind == "battle" else 120):
                 # The party box was hidden a moment, or the menu page shows the same HP
                 # again: not news (in a fight, a reminder after 20 s is).
                 self.said[part] = value
@@ -717,6 +762,8 @@ class Reader:
         self.last = [p for p in (lk.order or ORDER) if self.said.get(p) and lk.parts.get(p) in out]
         if out and lk.kind == "menu" and lk.focus in MAIN and opened:
             out.insert(0, "Menu")
+        if new_fight and not first:
+            out.insert(0, "Fight")  # the enemies follow, from a look (the model's)
         return " ".join(_ended(s) for s in out)
 
 

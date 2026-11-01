@@ -287,6 +287,17 @@ under a third of their HP (Marle: Cure 2 MP or Aura 1 MP; Frog: Slurp 1 MP or He
 for all; Robo: Cure Beam; items Mid-Potion, Hi-Potion, Potion), otherwise attack. Only \
 techs {actor} has: {techs}."""
 
+# How many enemies are left: the screen shows no enemy HP or list, so a look counts them.
+FOES = """\
+This is a picture of a Chrono Trigger battle. The player's party ({party}) stands on the \
+field. List each enemy (a monster the party is fighting) standing on the field now, by where \
+it stands, like "top middle" or "right, behind Crono"; one may be partly hidden behind \
+someone. Don't list the party, damage numbers, sparkles or spell effects, or an enemy already \
+fading away (tinted red, see-through or flashing white). JSON: {{"enemies": ["where", ...], \
+"look": "what they look like in two to four words, plural, like 'golden winged imps'"}}{named}"""
+FOES_NAMED = """ The screen named enemies in this fight: {names}. If they look like that, \
+"look" is the name, plural."""
+
 # Who the target glove points at, when the executor can't tell.
 WHO_GLOVE = """\
 This is a Chrono Trigger battle. A big white pointing glove (a cursor) points at one of the \

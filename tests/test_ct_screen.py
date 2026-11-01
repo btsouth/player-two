@@ -69,8 +69,8 @@ def test_a_battle_message_is_said_first_and_danger_on_change():
     lk = look("battle", top="Combo Attack: Reduces HP to 1", turn="Crono's turn",
               focus="Attack", danger="Frog 1 HP")
     lk.order = ("pause", "top", "turn", "focus", "danger")
-    assert r.update(lk, now=0) == ("Combo Attack: Reduces HP to 1. Crono's turn. Attack. "
-                                   "Frog 1 HP.")
+    assert r.update(lk, now=0) == ("Fight. Combo Attack: Reduces HP to 1. Crono's turn. "
+                                   "Attack. Frog 1 HP.")
     lk2 = look("battle", turn="Marle's turn", focus="Attack", danger="Frog 1 HP")
     assert r.update(lk2, now=1) == "Marle's turn."
     lk3 = look("battle", turn="Marle's turn", focus="Attack", danger="Frog is down")
@@ -284,7 +284,7 @@ def test_the_same_fighter_gets_each_new_turn_said_but_not_a_flicker():
     def turn():
         return look("battle", turn="Crono's turn", focus="Attack")
 
-    assert r.update(turn(), now=0) == "Crono's turn. Attack."
+    assert r.update(turn(), now=0) == "Fight. Crono's turn. Attack."
     r.update(look("battle"), now=0.3)  # one look without the window: a flicker
     assert r.update(turn(), now=0.6) == ""
     r.update(look("battle"), now=1.0)
@@ -494,7 +494,7 @@ def test_quiet_and_team_up_say_less():
     r = Reader()
     r.verbosity = "quiet"
     lk = look("battle", top="Earned 648 EXP.", danger="Frog 1 HP")
-    assert r.update(lk, now=0) == "Frog 1 HP."
+    assert r.update(lk, now=0) == "Fight. Frog 1 HP."
     r2 = Reader()
     r2.team_up = True
     assert r2.update(look(focus="Equipment"), now=0) == ""
@@ -676,3 +676,137 @@ def test_marles_sure_or_sorry_says_the_hand_and_the_whole_question():
     if melchior.exists():  # the same choice with his box still up
         assert ctscreen.look(cv2.imread(str(melchior))).parts["focus"] == \
             "Take a look selected, or No, thanks"
+
+
+def _fight(**hp):
+    from playertwo.ctsteam import Member, State
+
+    tops = {"Crono": 780, "Frog": 494, "Marle": 430}
+    st = State(kind="none", party=[Member(n, hp.get(n, t), t, 60, 60, "white")
+                                   for n, t in tops.items()])
+    return ctscreen.battle_look(st)
+
+
+def test_a_hit_that_leaves_someone_low_is_one_line_and_not_said_again():
+    r = Reader()
+    r.update(_fight(), now=0)
+    r.update(_fight(), now=0.3)
+    assert r.update(_fight(Frog=1), now=0.6) == ""  # mid-change: wait for the hit's line
+    assert r.update(_fight(Frog=1), now=0.9) == "Frog took 493, down to 1."
+    for t in (1.2, 25.0, 60.0):
+        assert r.update(_fight(Frog=1), now=t) == ""  # still low: no reminders
+    assert r.update(_fight(Frog=0), now=61) == "Frog is down."
+
+
+def test_a_new_fight_is_said_once_not_after_the_box_flickers():
+    r = Reader()
+    r.update(look("none"), now=0)
+    assert r.update(_fight(), now=1).startswith("Fight.")
+    assert r.fight_started
+    r.fight_started = False
+    r.update(look("none"), now=2)  # an animation hid the party box a moment
+    assert not r.update(_fight(), now=4).startswith("Fight") and not r.fight_started
+    r.update(look("none"), now=5)  # the fight ended
+    assert r.update(_fight(), now=30).startswith("Fight.")  # the next one
+    assert r.fight_started
+
+
+async def test_a_fight_starting_is_said_then_what_it_is_against(monkeypatch):
+    """"Fight." at once from the reader, then the enemies counted by a look; a new turn
+    in a fight the player plays has them counted again (said only if fewer)."""
+    import asyncio
+    from collections import deque
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.battle import Foes
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    s.reader, s.reading, s.read_t, s.read_owned = Reader(), None, 0.0, False
+    s.read_thumb, s.read_prime, s.read_last_parts = None, False, set()
+    s.read_model, s.foes_at = None, 0.0
+    s.paused, s.agent_task, s.narrating = False, None, None
+    s.utt, s.transcribing, s.hands_active = None, False, False
+    s.narrator = SimpleNamespace(recent=deque(maxlen=4), verbosity="normal", team_up=False)
+    said, notes, counts = [], [], []
+    s.events = SimpleNamespace(emit=lambda kind, **k: None)
+
+    async def say(text, interrupt=True):
+        said.append(text)
+
+    s.voice = SimpleNamespace(say=say, idle=lambda: True, last_spoken="")
+    s.read_last_line, s.describing = "", None
+    s._tasks = set()
+
+    async def count_foes(image, party):
+        await asyncio.sleep(0.01)  # a model call: a second or two
+        return Foes(3, "Gargoyles")
+
+    s.agent = SimpleNamespace(
+        _ct_steam=lambda f: True, foes=None, _battle_seen=0.0, count_foes=count_foes,
+        note_battle=lambda st, new=False: notes.append(new),
+        recount=lambda image, party, say=None: counts.append(party))
+    turn = _fight()
+    turn.parts["turn"], turn.order = "Crono's turn", ("turn", "danger")
+    looks = iter([look("none"), _fight(), turn])
+    monkeypatch.setattr(ctscreen, "look", lambda image, party=(): next(looks))
+    img = Image.new("RGB", (1920, 1080))
+    await s._read(Frame(img, 1.0))
+    await s._read(Frame(img, 2.0))
+    await s.narrating
+    assert said == ["Fight.", "Three Gargoyles."]
+    assert notes == [True] and s.agent.foes.count == 3  # the agent knows it's a new fight
+    await s._read(Frame(img, 3.0))
+    await asyncio.sleep(0)
+    assert said[-1] == "Crono's turn."
+    assert counts == []  # counted a moment ago
+    s.foes_at = 0.0
+    s.reader.said.pop("turn")
+    looks = iter([turn])
+    await s._read(Frame(img, 4.0))
+    await asyncio.sleep(0)
+    assert counts == [["Crono", "Frog", "Marle"]]
+
+
+async def test_what_are_we_fighting_is_answered_from_a_count_and_the_party_box(monkeypatch):
+    import time
+    from collections import deque
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from playertwo.app import Session
+    from playertwo.screen import Frame
+
+    s = Session.__new__(Session)
+    s.reader, s.agent_task = Reader(), None
+    s.narrator = SimpleNamespace(recent=deque(maxlen=4))
+    s.events = SimpleNamespace(emit=lambda kind, **k: None)
+    said = []
+
+    async def say(text, interrupt=False):
+        said.append(text)
+
+    s.voice = SimpleNamespace(say=say)
+    img = Image.new("RGB", (1920, 1080))
+    s.latest = Frame(img, time.monotonic())
+
+    async def grab_now():
+        return s.latest
+
+    s.grab_now = grab_now
+    asked = []
+
+    async def what_we_fight(image, st):
+        asked.append([m.name for m in st.party])
+        return "Three Gargoyles. Everyone's at full health."
+
+    s.agent = SimpleNamespace(_ct_steam=lambda f: True, history=[], what_we_fight=what_we_fight)
+    monkeypatch.setattr(ctscreen, "sharp", lambda image: True)
+    monkeypatch.setattr(ctscreen, "look", lambda image, party=(): _fight())
+    assert await s._screen_answer("what are we fighting?")
+    assert said == ["Three Gargoyles. Everyone's at full health."]
+    assert asked == [["Crono", "Frog", "Marle"]]

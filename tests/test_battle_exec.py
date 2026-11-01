@@ -609,7 +609,7 @@ async def test_after_a_won_fight_the_model_only_reports_it(monkeypatch):
         async def pause(self, st=None):
             return spoils
 
-        async def win(self, decide, say=None):
+        async def win(self, decide, say=None, turn=None):
             return Outcome(True, "won after 9 commands. Earned 648 EXP.", spoils)
 
     async def grab():
@@ -914,3 +914,95 @@ async def test_the_model_gets_one_battle_command_for_one_asked(monkeypatch):
     assert run.steps[1].result.startswith("not done: the command the player asked for")
     assert sum(e[3] for e in game.enemies) == 8  # one hit, not two
     assert said[-1] == "Crono hit the one on the left."
+
+
+def _counting_muse(counts):
+    """A model that answers each enemy count in turn (None: a failed look)."""
+    from types import SimpleNamespace
+
+    class Muse:
+        s = SimpleNamespace(image_max_side=640)
+
+        def __init__(self):
+            self.counts, self.prompts = list(counts), []
+
+        async def json(self, messages, effort=None, max_tokens=0):
+            self.prompts.append(messages[0]["content"][-1]["text"])
+            n = self.counts.pop(0)
+            if n is None:
+                return {}
+            named = "Gargoyle" in self.prompts[-1]  # told the name the screen showed
+            return {"enemies": ["somewhere"] * n,
+                    "look": "Gargoyles" if named else "golden winged imps"}
+
+    return Muse()
+
+
+PIC = __import__("PIL.Image", fromlist=["Image"]).new("RGB", (64, 36))
+
+
+async def _drain(ag):
+    while ag._counting is not None and not ag._counting.done():
+        await ag._counting
+
+
+async def test_enemies_counted_fewer_twice_are_said_down_once(monkeypatch):
+    from playertwo.battle import Foes
+
+    game = FakeCT(party(), enemies(), ready=(0,))
+    muse = _counting_muse([2, 2])
+    ag, said = _agent(monkeypatch, game, muse)
+    ag.foes = Foes(3, "Gargoyles")
+    ag.recount(PIC, ["Crono", "Frog", "Marle"])
+    ag.recount(PIC, ["Crono", "Frog", "Marle"])  # one count at a time: this one is dropped
+    await _drain(ag)
+    assert said == ["One Gargoyle down, two left."]
+    assert ag.foes.count == 2 and ag.foes.look == "Gargoyles"
+
+
+async def test_a_drop_a_second_look_doesnt_see_isnt_said(monkeypatch):
+    from playertwo.battle import Foes
+
+    game = FakeCT(party(), enemies(), ready=(0,))
+    ag, said = _agent(monkeypatch, game, _counting_muse([2, 3, 4, None]))
+    ag.foes = Foes(3, "Gargoyles")
+    ag.recount(PIC, [])
+    await _drain(ag)
+    assert said == [] and ag.foes.count == 3  # a miscount (bench: 9 in 10 right)
+    ag.recount(PIC, [])
+    await _drain(ag)
+    assert said == [] and ag.foes.count == 4  # more: taken quietly
+    ag.recount(PIC, [])
+    await _drain(ag)
+    assert said == [] and ag.foes.count == 4  # a failed look changes nothing
+
+
+async def test_what_are_we_fighting_counts_them_and_gives_the_partys_hp(monkeypatch):
+    from playertwo.battle import foe_name
+
+    p = party()
+    p[1].hp = 1
+    game = FakeCT(p, enemies(), ready=(0,))
+    muse = _counting_muse([3])
+    ag, _said = _agent(monkeypatch, game, muse)
+    st = game.read(None)
+    st.kind, st.top, st.gloves = "target", "Gargoyle", [(1200, 500)]
+    assert foe_name(st) == "Gargoyle"
+    ag.note_battle(st)  # the reader saw the glove name one
+    line = await ag.what_we_fight(PIC, game.read(None))
+    assert line == "Three Gargoyles. Crono's full, Frog's at 1 of 494, Marle's full."
+    assert "Gargoyle" in muse.prompts[0]  # the name the screen showed, for the look's words
+    st.top = "Frog"
+    assert foe_name(st) == ""  # the glove on an ally
+
+
+def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
+    from playertwo.battle import Intent, party_brief, progress
+
+    p = party()
+    st = FakeCT(p, enemies()).read(None)
+    assert progress(st, Intent("Crono", "attack")) == "Crono attacks."
+    p[1].hp, p[2].hp = 1, 0
+    st = FakeCT(p, enemies()).read(None)
+    assert progress(st, Intent("Crono", "attack")) == "Crono attacks. Frog 1 HP, Marle is down."
+    assert party_brief(st) == "Crono's full, Frog's at 1 of 494, Marle's down."

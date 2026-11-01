@@ -198,10 +198,12 @@ class Executor:
         self.notes: list[str] = []
         self.held: State | None = None  # the screen as it was when paused
         self.missing: set[tuple[str, str]] = set()  # (who or "item", name) not in a list
+        self.foe_names: dict[str, float] = {}  # enemies the bar named under the glove, when
         self._unpause_first = False
         self._acting = ""  # whose command is being put in, once known
         self.landed = False  # whether the last watched heal's HP showed
         self.after: State | None = None  # the last command's screen once it played out
+        self.after_frame: object = None  # and its picture
 
     def lacks(self, intent: Intent, actor: str) -> bool:
         """Whether this command was found missing in this fight (not in the list, or the
@@ -215,6 +217,7 @@ class Executor:
         """A new fight: everyone stands somewhere else, and a list may hold other things."""
         self.ally_at.clear()
         self.missing.clear()
+        self.foe_names.clear()
 
     # -- seeing and pressing ---------------------------------------------------------------
 
@@ -247,6 +250,8 @@ class Executor:
             self._trace(st)
         if st.kind == "command" and st.actor and st.bracket:
             self.ally_at[st.actor] = st.bracket
+        if name := foe_name(st):
+            self.foe_names[name] = time.monotonic()
         return st
 
     async def tap(self, button: str, times: int = 1, force: bool = False) -> None:
@@ -395,7 +400,7 @@ class Executor:
             if watch:
                 st, seen = await self._watch(before, intent)
                 text += ". " + seen
-            self.after = st  # the screen once it played out, before any pause
+            self.after, self.after_frame = st, self.frame  # once it played out, unpaused
             if pause_after and self.t.hold_paused:
                 st = await self._pause_after(st)
             return Outcome(True, text, st, presses=self.presses[start:])
@@ -859,8 +864,10 @@ class Executor:
         return st, said
 
     async def win(self, decide: Callable[[State, str], Awaitable[Intent | None]] | None = None,
-                  say: Callable[[str], None] | None = None) -> Outcome:
-        """Fight until it's won, lost or the player stops it."""
+                  say: Callable[[str], None] | None = None,
+                  turn: Callable[[State], None] | None = None) -> Outcome:
+        """Fight until it's won, lost or the player stops it. `turn`: told of each new
+        turn (the screen after the last turn's hits), to count the enemies left."""
         start = len(self.presses)
         t0 = time.monotonic()
         turns: list[str] = []
@@ -893,6 +900,8 @@ class Executor:
                     st = await self.back_out(st)
                     continue
                 if st.kind == "command" and st.actor:
+                    if turn is not None and turns:
+                        turn(st)
                     intent = plan(st, self.t)
                     why = ""
                     options = [o for o in fallbacks(st, self.t) if not self.lacks(o, st.actor)]
@@ -980,11 +989,25 @@ def message(top: str) -> bool:
 
 
 def progress(st: State, done: Intent) -> str:
-    """A short line on a turn of a fight, for the player to hear now and then."""
+    """A short line on a turn of a fight, for the player to hear now and then: who did
+    what, and who's in danger (everyone's HP each time is noise)."""
     what = "attacks" if done.command == "attack" else f"uses {done.name}" + (
         f" on {done.target}" if done.target else "")
-    hp = ", ".join(f"{m.name} {m.hp}" for m in st.party if m.hp is not None)
-    return f"{done.actor} {what}." + (f" HP: {hp}." if hp else "")
+    low = [f"{m.name} is down" if m.hp == 0 else f"{m.name} {m.hp} HP" for m in st.party
+           if m.hp is not None and m.hp_max and m.hp < m.hp_max / 3]
+    return f"{done.actor} {what}." + (f" {', '.join(low)}." if low else "")
+
+
+def party_brief(st: State) -> str:
+    """The party's HP in a few words: "Crono's full, Frog's at 1 of 494, Marle's down."
+    ('' when it doesn't read)."""
+    if not st.party or any(m.hp is None or not m.hp_max for m in st.party):
+        return ""
+    if all(m.hp >= m.hp_max for m in st.party):
+        return "Everyone's at full health."
+    return ", ".join(f"{m.name}'s down" if m.hp == 0 else f"{m.name}'s full"
+                     if m.hp >= m.hp_max else f"{m.name}'s at {m.hp} of {m.hp_max}"
+                     for m in st.party) + "."
 
 
 def _mp(st: State | None) -> dict[str, int | None]:
@@ -1183,3 +1206,59 @@ def heal_line(intent: Intent, out: Outcome, before: State | None,
     if up:
         return f"{what}: " + ", ".join(f"{n} up to {h}" for n, h in up) + "."
     return f"{what} is on its way."
+
+
+
+# -- Enemies: none of their HP is on screen, so a look counts them ------------------------
+
+NUMBERS = ("no", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight")
+
+
+@dataclass
+class Foes:
+    count: int
+    look: str  # plural: "Gargoyles", "golden winged imps"
+    at: float = 0.0  # when they were counted (monotonic)
+
+    def line(self) -> str:
+        if self.count <= 0:
+            return "No enemies left standing."
+        word = NUMBERS[self.count] if self.count < len(NUMBERS) else str(self.count)
+        look = self.look if self.count > 1 else singular(self.look)
+        return f"{word} {look}."
+
+    def since(self, before: Foes | None) -> str:
+        """What changed since an earlier count, in words ('' if nothing)."""
+        if before is None or self.count >= before.count:
+            return ""
+        gone = before.count - self.count
+        what = singular(before.look) if gone == 1 else before.look
+        left = (f"{NUMBERS[self.count].lower()} left" if 0 < self.count < len(NUMBERS)
+                else "none left")
+        return f"{NUMBERS[gone] if gone < len(NUMBERS) else gone} {what} down, {left}."
+
+
+def plural(name: str) -> str:
+    return name if name.endswith("s") else name + "s"
+
+
+def singular(look: str) -> str:
+    words = look.split()
+    if not words:
+        return look
+    w = words[-1]
+    if w.endswith("ies"):
+        w = w[:-3] + "y"
+    elif w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    return " ".join([*words[:-1], w])
+
+
+def foe_name(st: State) -> str:
+    """The enemy under the target glove, as the bar names it ('' if not a name)."""
+    top = st.top.strip()
+    if st.kind != "target" or len(st.gloves) != 1 or not top or len(top.split()) > 3 \
+            or not re.fullmatch(r"[A-Z][A-Za-z'\-]+( [A-Z0-9][A-Za-z'\-]*)*", top) \
+            or top in ctsteam.NAMES:
+        return ""
+    return top

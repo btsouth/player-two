@@ -20,13 +20,36 @@ from PIL import Image
 from . import ctsteam
 from .ack import FIGHT, RUN
 from .areamap import AreaMap
-from .battle import Executor, Intent, Stop, heal_line, heal_plan, parse_intent
+from .battle import (
+    Executor,
+    Foes,
+    Intent,
+    Stop,
+    foe_name,
+    heal_line,
+    heal_plan,
+    heals,
+    parse_intent,
+    party_brief,
+    plural,
+    revives,
+)
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
 from .muse import Muse, image_part
 from .notes import GameNotes
-from .prompts import AGENT, BATTLE_CT, BATTLE_DECIDE, CONFIRM, GAME_CONTEXT, LANGUAGE, WHO_GLOVE
+from .prompts import (
+    AGENT,
+    BATTLE_CT,
+    BATTLE_DECIDE,
+    CONFIRM,
+    FOES,
+    FOES_NAMED,
+    GAME_CONTEXT,
+    LANGUAGE,
+    WHO_GLOVE,
+)
 from .screen import Frame, thumb
 from .walk import Walker, small
 
@@ -571,6 +594,8 @@ class Agent:
         self._executor: Executor | None = None
         self._battle: State | None = None
         self._battle_seen = 0.0
+        self.foes: Foes | None = None  # the enemies as last counted, this fight
+        self._counting: asyncio.Task | None = None  # a count of them in flight
 
     def hold(self) -> None:
         self.go.clear()
@@ -1083,12 +1108,18 @@ class Agent:
         (A fight with a quiet spell of more than 30 s between requests is still the same
         fight: the reader keeps this fresh.) A turn the reader saw shows where that
         fighter stands, for the target glove later (no model call to tell who it's on)."""
-        if new and self._executor is not None:
-            self._executor.new_fight()
+        if new:
+            self.foes = None
+            if self._counting is not None:
+                self._counting.cancel()
+            if self._executor is not None:
+                self._executor.new_fight()
         self._battle_seen = time.monotonic()
         if st is not None and st.kind == "command" and st.actor and st.bracket \
                 and not st.paused:
             self.executor().ally_at[st.actor] = st.bracket
+        if st is not None and (name := foe_name(st)):
+            self.executor().foe_names[name] = time.monotonic()  # for the count's words
 
     def executor(self) -> Executor:
         if self._executor is None:
@@ -1147,6 +1178,88 @@ class Agent:
                 f" on {intent.target}" if intent.target else "") + "."
             asyncio.get_running_loop().create_task(self._speak(line))
         return intent
+
+    async def count_foes(self, image, party: list[str] = ()) -> Foes | None:
+        """The enemies standing, counted by a look (one model call, 2.5 s median; 24/27
+        right on the battle bench, misses off by one): the screen shows no enemy list or
+        HP. Listing them by where they stand counts better than a number. None when the
+        look fails."""
+        try:
+            img = image if isinstance(image, Image.Image) else Image.fromarray(
+                np.ascontiguousarray(np.asarray(image)[..., ::-1]))
+        except (ValueError, TypeError, IndexError):
+            return None  # not a picture
+        w, h = img.size
+        field = img.crop((0, 0, w, round(h * 0.80)))  # above the windows
+        names = sorted(self._executor.foe_names, key=self._executor.foe_names.get,
+                       reverse=True)[:3] if self._executor is not None else []
+        prompt = FOES.format(party=", ".join(party or getattr(self, "_party", None) or ["Crono"]),
+                             named=FOES_NAMED.format(names=", ".join(names)) if names else "")
+        try:
+            d = await asyncio.wait_for(self.muse.json([{"role": "user", "content": [
+                image_part(field, 1024), {"type": "text", "text": prompt}]}],
+                effort="minimal", max_tokens=1500), 12)
+            where = d.get("enemies")
+            count = len(where) if isinstance(where, list) else int(d.get("count"))
+        except (openai.APIError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
+            if self.on_action:
+                self.on_action("battle_note", {"text": f"count_foes failed: {exc}"})
+            return None
+        if not 0 <= count <= 8:
+            return None
+        look = " ".join(str(d.get("look") or "enemies").split()[:5]).strip(" .") or "enemies"
+        if names and any(n.lower() in look.lower() for n in names):
+            look = plural(next(n for n in names if n.lower() in look.lower()))
+        return Foes(count, look, time.monotonic())
+
+    async def what_we_fight(self, image, st: State) -> str | None:
+        """"What are we fighting?" in a fight: the enemies, counted by a look, and the
+        party's HP in a few words ("Three Gargoyles. Crono's full, Frog's at 1 of 494,
+        Marle's full."). None when the look fails (the agent answers then)."""
+        foes = await self.count_foes(image, [m.name for m in st.party])
+        if foes is None:
+            return None
+        self.foes = foes
+        return f"{foes.line()} {party_brief(st)}".strip()
+
+    def recount(self, image, party: list[str],
+                say: Callable[[str], Awaitable[None]] | None = None) -> None:
+        """Count the enemies again, in the background (one count at a time): fewer than
+        before, when a second look agrees, is said ("One Gargoyle down, two left."). A
+        look is right about 9 times in 10 (battle bench), so a drop is checked before it's
+        said; more than before is taken quietly (one was hidden, or more came)."""
+        if self._counting is not None and not self._counting.done():
+            return
+        self._counting = asyncio.get_running_loop().create_task(
+            self._recount(image, party, say or self._speak))
+
+    async def _recount(self, image, party: list[str],
+                       say: Callable[[str], Awaitable[None]]) -> None:
+        try:
+            await self._recount_once(image, party, say)
+        except Exception as exc:  # noqa: BLE001  a count is news, never a failure
+            if self.on_action:
+                self.on_action("battle_note", {"text": f"recount failed: {exc}"})
+
+    async def _recount_once(self, image, party: list[str],
+                            say: Callable[[str], Awaitable[None]]) -> None:
+        before = self.foes
+        now = await self.count_foes(image, party)
+        if now is None or self.foes is not before:
+            return
+        if before is None or now.count >= before.count:
+            if before is None or now.count > before.count:
+                self.foes = now
+            return
+        if now.count == 0:
+            return  # the fight is over: the game's own spoils say so
+        again = await self.count_foes((await self.grab()).image, party)
+        if again is None or again.count != now.count or self.foes is not before:
+            return
+        self.foes = Foes(now.count, before.look, now.at)
+        line = self.foes.since(before)
+        if line:
+            await say(line)
 
     async def _heal_now(self, actor: str, who: str, run: Run, t0: float) -> str | None:
         """"Heal X" in a fight, chosen here (whoever is up with a healing tech, else an
@@ -1226,11 +1339,21 @@ class Agent:
                         self._spoke_at = time.monotonic()
                         asyncio.get_running_loop().create_task(self._speak(line))
 
-                out = await ex.win(self._decide, say=now_and_then)
+                def turn(st: State) -> None:
+                    # A new turn, after the last one's hits: how many are left (said if
+                    # fewer, in the background).
+                    if ex.frame is not None:
+                        self.recount(ex.frame, [m.name for m in st.party])
+
+                out = await ex.win(self._decide, say=now_and_then, turn=turn)
         else:
             intent = Intent(str(a.get("actor") or ""), str(a.get("command") or "attack"),
                             str(a.get("name") or ""), str(a.get("target") or ""))
+            ex.after_frame = None
             out = await ex.act(intent)
+            if out.ok and ex.after_frame is not None and not (heals(intent) or revives(intent)):
+                self.recount(ex.after_frame, [m.name for m in out.state.party]
+                             if out.state is not None else [])
         st = out.state
         now = ctsteam.describe(st) if st is not None else "the screen can't be read"
         pressed = f" (pressed {' '.join(out.presses)})" if out.presses else ""
