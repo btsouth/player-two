@@ -1256,11 +1256,24 @@ FIGHT_STARTED = ("interrupted: a fight started on the way (the party's HP box is
                  "or run it with the battle tools, then go on")
 
 
+BOX_UP = ("interrupted: a text box (or a menu) is up: read it to the player, press a to go "
+          "on, then go_to_exit again")
+
+
+def over_place(image) -> str:
+    """What the game drew over the place on a Steam frame, by its windows and font: "fight"
+    (the party's HP box), "box" (a text box, a choice or a menu), or "" (nothing)."""
+    from . import ctscreen
+
+    if image is None:
+        return ""
+    kind = ctscreen.look(image).kind
+    return "fight" if kind == "battle" else "box" if kind in ("text", "choice", "menu") else ""
+
+
 def fighting(image) -> bool:
     """Whether a Steam frame shows a fight (the party's HP box, a battle list or glove)."""
-    from . import ctsteam
-
-    return image is not None and ctsteam.read(image, full=False).in_battle
+    return over_place(image) == "fight"
 
 
 async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
@@ -1302,6 +1315,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
 
     shot = None  # the screen last looked at
     boxes = 0  # looks in a row with a text box (or a menu) over the place
+    unboxed: set[int] = set()  # places where the survey's look stands for a box (Steam)
 
     async def answered(before) -> bool:
         """Whether pressing a brought something up (a text box can take a moment)."""
@@ -1367,14 +1381,21 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             "a scene?): look")
                 await asyncio.sleep(0.1)
                 continue
-            if await asyncio.to_thread(rooms.boxed, shot, now):
+            if now.loc not in unboxed and await asyncio.to_thread(rooms.boxed, shot, now):
                 # The place shows, but a text box is over part of it (a scene, someone
                 # who stopped the player): walking can't go on till it's read.
                 steer(None)
                 boxes += 1
                 if boxes >= 3:
-                    return ("interrupted: a text box (or a menu) is up: read it to the "
-                            "player, press a to go on, then go_to_exit again")
+                    if now.steam and not await asyncio.to_thread(over_place, shot):
+                        # Steam drew part of this place unlike the survey (the fair's
+                        # balustrade: "a text box is up" four times, none there). The
+                        # game's windows decide; a box that does come up stops the
+                        # walk as being stuck.
+                        unboxed.add(now.loc)
+                        boxes = 0
+                        continue
+                    return BOX_UP
                 await asyncio.sleep(0.15)
                 continue
             boxes = 0
@@ -1608,9 +1629,10 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             elif now_t - best[2] > 6.0 and len(path) > 1:
                 # No nearer in a while, though it wobbles about (pushing into a corner
                 # the survey thought open, or round someone): that way is shut.
-                if here.steam and await asyncio.to_thread(fighting, shot):
+                over = await asyncio.to_thread(over_place, shot) if here.steam else ""
+                if over:
                     steer(None)
-                    return FIGHT_STARTED
+                    return FIGHT_STARTED if over == "fight" else BOX_UP
                 stalls += 1
                 if path[1] not in goals:
                     room.learned.add(path[1])
@@ -1628,11 +1650,12 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 trail.popleft()
             if now_t - stuck_t > 2.0 and now_t - trail[0][0] > 1.6 and all(
                     p[1] == here.loc and math.dist(p[2:], (here.x, here.y)) < 5 for p in trail):
-                if here.steam and await asyncio.to_thread(fighting, shot):
-                    # A fight on the field looks like the place, the party standing still
-                    # (live: 13 "stuck" steps in a Guardia Forest fight, then "blocked").
+                # A fight on the field looks like the place, the party standing still
+                # (live: 13 "stuck" steps in a Guardia Forest fight, then "blocked").
+                over = await asyncio.to_thread(over_place, shot) if here.steam else ""
+                if over:
                     steer(None)
-                    return FIGHT_STARTED
+                    return FIGHT_STARTED if over == "fight" else BOX_UP
                 stalls += 1
                 rad = math.radians(a)
                 ahead = (int((here.y - 12 * math.cos(rad)) // TILE),

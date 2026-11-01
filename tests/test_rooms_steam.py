@@ -187,7 +187,10 @@ def test_steam_mountain_of_woe():
 @pytest.mark.skipif(not (FRAMES / "forest-041307-04.jpg").exists(), reason="no forest frames")
 def test_a_fight_on_the_field_is_told_from_the_field():
     """The walker stopped 13 times "stuck" in a Guardia Forest fight, then said blocked."""
-    from playertwo.rooms import fighting
+    from playertwo.rooms import over_place
 
-    assert fighting(Image.open(FRAMES / "forest-041307-04.jpg"))
-    assert not fighting(Image.open(FRAMES / "forest-field-north.png"))
+    assert over_place(Image.open(FRAMES / "forest-041307-04.jpg")) == "fight"
+    assert over_place(Image.open(FRAMES / "forest-field-north.png")) == ""
+    # A text box is the game's window and font, not the survey's picture looking unlike
+    # Steam's (the fair's balustrade read as a box four times in a row).
+    assert over_place(Image.open(FRAMES / "box-inn-lodging.png")) == "box"
