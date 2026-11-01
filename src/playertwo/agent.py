@@ -1200,6 +1200,8 @@ class Agent:
         spot = await asyncio.to_thread(atlas.locate, image, getattr(self, "_last_spot", None))
         spot = spot if spot is not None and spot.margin >= 0.02 else None
         self._last_spot = spot
+        if spot is not None:  # the era: of two places alike in two eras, this one's
+            self._last_world = getattr(atlas.map(spot.map), "world", None)
         return spot
 
     async def _where_am_i(self) -> str:
@@ -1585,6 +1587,7 @@ class Agent:
             self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
         if self._rooms is None:
             return None
+        self._rooms.world_hint = getattr(self, "_last_world", None)
         here = await asyncio.to_thread(self._rooms.locate, image)
         return (self._rooms, here) if here is not None else None
 

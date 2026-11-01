@@ -278,6 +278,9 @@ class Rooms:
         self.sprites: list[tuple[np.ndarray, np.ndarray, tuple[float, float]]] = []
         self._colours: np.ndarray | None = None
         self.dark = False  # the last screen looked at was black (a fade between places)
+        # The world map last seen (its location number): of two places that look the
+        # same in two eras, the one that leads out onto it.
+        self.world_hint: int | None = None
         self._steam_pics: dict[int, dict[str, tuple[Seen, Seen]]] | None = None
         self._steam_sizes: set[tuple[int, int]] = set()  # window sizes seen as Steam's
         if (folder / "player.json").exists():
@@ -602,19 +605,37 @@ class Rooms:
                     cam = (x0 + x - b - STEAM_PAD, y0 + y - a - STEAM_PAD)
                     return self._player_steam(v, self.rooms[near.loc], cam, float(score), near)
         for kind, t in ts.items():
-            hit = self._steam_search(t, {loc: p[kind] for loc, p in pics.items()}, *least[kind])
+            some = {loc: p[kind] for loc, p in pics.items()}
+            hit = self._steam_search(t, some, *least[kind],
+                                     twins=lambda a, b, some=some, t=t: twins(some, a, b, t),
+                                     prefer=lambda loc: self.prefer(loc, near))
             if hit is not None:
                 score, loc, x, y = hit
                 cam = (x - b - STEAM_PAD, y - a - STEAM_PAD)
                 return self._player_steam(v, self.rooms[loc], cam, score, near)
         return None
 
+    def prefer(self, loc: int, near: Here | None) -> int:
+        """Which of two places that look the same (a forest in two eras) it more likely
+        is, least first: the one it was just in, then one whose ways out lead onto the
+        world map last seen (world_hint), then the rest."""
+        if near is not None and near.loc == loc:
+            return 0
+        room = self.rooms.get(loc)
+        if room is not None and self.world_hint is not None and self.hops(
+                loc, self.world_hint) is not None and len(self.hops(loc, self.world_hint)) <= 3:
+            return 1
+        return 2
+
     @staticmethod
     def _steam_search(t: np.ndarray, pics: dict[int, tuple[Seen, Seen]], low: float,
-                      margin: float) -> tuple[float, int, int, int] | None:
+                      margin: float, twins=None, prefer=None
+                      ) -> tuple[float, int, int, int] | None:
         """Every place at half size, then exactly around the best three: the best (score,
         place, x, y on its padded picture) if it scores `low` and beats anywhere else
-        (that place further off, the other places) by `margin`."""
+        (that place further off, the other places) by `margin`. twins(a, b): whether two
+        hits (score, place, x, y) are the same picture in two places (eras): they don't
+        count against each other, and prefer(place) (least first) picks between them."""
         import cv2
 
         half = cv2.pyrDown(t)
@@ -642,13 +663,18 @@ class Rooms:
         score, loc, x, y = fine[0]
         if score < low:
             return None
+        same = [f for f in fine[1:] if f[1] != loc and twins is not None
+                and score - f[0] < margin and twins(fine[0], f)]
         # Anywhere else in that place: at half size (as good or better than exactly,
         # being softer), off the best by more than 24 pixels.
         r = maps[loc]
         r[max(0, y // 2 - 12):y // 2 + 12, max(0, x // 2 - 12):x // 2 + 12] = -1
-        other = max([float(r.max())] + [f[0] for f in fine[1:] if f[1] != loc])
+        other = max([float(r.max())] + [f[0] for f in fine[1:] if f[1] != loc
+                                        and f not in same])
         if score - other < margin:
             return None
+        if same and prefer is not None:
+            return min([fine[0], *same], key=lambda f: (prefer(f[1]), -f[0]))
         return score, loc, x, y
 
     def _steam_sprites(self) -> list[tuple[np.ndarray, np.ndarray, tuple[int, int]]]:
@@ -965,6 +991,21 @@ class Rooms:
                         h = min(abs(v[0] - g[0]) + abs(v[1] - g[1]) for g in goals)
                         heapq.heappush(pq, (c + h, v))
         return None
+
+
+def twins(pics: dict[int, tuple[Seen, Seen]], a, b, t: np.ndarray) -> bool:
+    """Whether two hits (score, place, x, y) on the places' pictures show the same
+    picture: one place surveyed in two eras (Guardia Forest in 1000 and 600 A.D.)."""
+    h, w = t.shape[:2]
+    _, la, xa, ya = a
+    _, lb, xb, yb = b
+    pa = pics[la][0].i[ya:ya + h, xa:xa + w].astype(np.float32)
+    pb = pics[lb][0].i[yb:yb + h, xb:xb + w].astype(np.float32)
+    if pa.shape != pb.shape or pa.size == 0:
+        return False
+    pa, pb = pa.ravel() - pa.mean(), pb.ravel() - pb.mean()
+    d = float(np.sqrt((pa @ pa) * (pb @ pb)))
+    return d > 0 and float(pa @ pb) / d >= 0.9
 
 
 def came_up(before, after) -> bool:

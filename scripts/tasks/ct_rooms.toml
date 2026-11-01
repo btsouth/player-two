@@ -346,3 +346,12 @@ to = "0x189"
 target = "the save point"
 location = "0x189"
 limit_s = 180
+
+# The full agent only (no `to`): somewhere outside from inside a place.
+[[task]]
+id = "a-inn-to-market"
+category = "rooms"
+state = "rooms/deep-c"
+request = "take me to the market"
+location = "0x11"
+limit_s = 240
