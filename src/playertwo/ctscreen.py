@@ -314,7 +314,8 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
                          and 0 < r.x0 - run.x1 < 900 and re.fullmatch(r":?\s*\d+", r.text)]
                 if count:
                     lk.parts["focus"] = f"{name}, {count[0].text.lstrip(':').strip()}"
-        desc = [r for r in good if r.y > DESC_Y and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2]
+        desc = [r for r in good if r.y > DESC_Y and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2
+                and not re.search(r"\(C\)|\b(SQUARE|ENIX|STUDIO|SHUEISHA)\b", r.text)]  # title credits
         if desc:
             lk.parts["desc"] = clean(" ".join(r.text for r in sorted(desc, key=lambda r: r.x0)))
             lk.texts.add("desc")

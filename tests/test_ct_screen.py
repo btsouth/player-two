@@ -533,3 +533,11 @@ def test_a_two_line_box_at_the_bottom_is_read_whole():
     text = lk.parts.get("text", "")
     assert lk.kind == "text" and not lk.unsure, lk.parts
     assert text.startswith("Mother: ") and text.count("!") == 2 and len(text.split()) == 9
+
+
+TITLE = LIVE.parent / "night-2026-11-01" / "steam-frames" / "title-menu.png"
+
+
+@pytest.mark.skipif(not TITLE.exists(), reason="no title frame")
+def test_the_title_menu_is_its_cursor_not_the_credits():
+    assert first_line(TITLE) == ("menu", "Resume.")
