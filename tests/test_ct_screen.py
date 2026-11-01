@@ -226,3 +226,24 @@ def test_questions_the_screen_answers_at_once():
     assert ask(FRAMES / "134854-00.jpg", "what items do we have").startswith("On screen: Potion")
     # The field shows none of it: the agent answers (and may open the menu).
     assert ask(FRAMES / "185021-00.jpg", "what's my HP") is None
+
+
+def test_a_text_box_that_reads_badly_goes_to_the_model_once_it_is_whole():
+    r = Reader()
+    box = look("text", typing=("text",), text="Lucca: Hey, Cr0no! Over here")
+    box.unsure = True
+    assert r.update(box, now=0) == ""
+    assert not r.model_read
+    r.update(box, now=0.3)
+    r.update(box, now=0.6)  # three looks alike: whole, though it has no end mark
+    assert r.model_read  # the session hands this frame to the model narrator
+    r.model_read = False
+    r.update(box, now=0.9)
+    assert not r.model_read  # once
+
+
+def test_misread_words_are_caught():
+    assert ctscreen.misread("Com6o Attackl Red0ces HP to 1") and ctscreen.misread("SlQp 5ash")
+    assert not ctscreen.misread("Restores 200 HP to all party members.")
+    assert not ctscreen.misread("Reduces physical damage by 1/3.")
+    assert not ctscreen.misread("Earned 648 EXP.") and not ctscreen.misread("Lightning II")

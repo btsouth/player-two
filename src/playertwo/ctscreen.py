@@ -89,6 +89,7 @@ class Look:
     ms: int = 0
     order: tuple[str, ...] = ()
     names: list[str] = field(default_factory=list)  # characters in order (party blocks)
+    unsure: bool = False  # the text box doesn't read cleanly: the model reads it
 
     @property
     def readable(self) -> bool:
@@ -120,7 +121,9 @@ def battle_look(st: ctsteam.State) -> Look:
             lk.parts["focus"] = st.command
     elif st.kind == "list" and st.entry:
         # (Whether it can be used isn't said: a pause dims every entry, usable or not.)
-        lk.parts["focus"] = st.entry
+        entry = st.entry if st.entry in ctsteam.VOCAB else snap(st.entry, ctsteam.VOCAB, 0.6)
+        if entry in ctsteam.VOCAB or not misread(entry):
+            lk.parts["focus"] = entry
     top = clean(st.top)
     if top and not st.paused and plausible(Run(top, 0, 0, 0, "", 0)):
         lk.parts["top"] = top
@@ -295,16 +298,19 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
         lk.texts.add("question")
         lk.typing.add("question")
         return lk
-    # A text box: lines of words across the top or bottom of the screen.
+    # A text box: lines of words across the top or bottom of the screen. Every run on
+    # those lines is kept (dropping one would skip words); if any reads badly, the box is
+    # unsure, and the model reads it once it has finished typing.
     box = [row for row in lines if row and (row[0].y < 520 or row[0].y > 900)]
-    words = [[r for r in row if plausible(r) and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2]
-             for row in box]
-    words = [row for row in words if row]
-    if words and sum(len(r.text) for row in words for r in row) >= 12:
+    rows = [row for row in box if any(plausible(r) and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2
+                                      for r in row)]
+    if rows and sum(len(r.text) for row in rows for r in row) >= 12:
+        text = clean(" ".join(r.text for row in rows for r in row))
         lk.kind = "text"
-        lk.parts["text"] = clean(" ".join(r.text for row in words for r in row))
+        lk.parts["text"] = text
         lk.texts.add("text")
         lk.typing.add("text")
+        lk.unsure = misread(text) or not all(plausible(r) for row in rows for r in row)
     return lk
 
 
@@ -337,6 +343,7 @@ class Reader:
         self.forget_s = forget_s
         self.party: list[str] = []  # characters in menu order, as screens have shown them
         self.last: list[str] = []  # the parts said by the last update
+        self.model_read = False  # a whole text box that doesn't read cleanly: ask the model
         self.kind = "none"
         self.said: dict[str, str] = {}
         self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
@@ -401,6 +408,10 @@ class Reader:
                     self.said[part] = value
                     continue
                 self.texts[value] = now
+                if part == "text" and lk.unsure:
+                    self.said[part] = value
+                    self.model_read = True  # whole now, but read by the model
+                    continue
             self.said[part] = value
             if part == "danger":
                 self.texts["danger:" + value] = now

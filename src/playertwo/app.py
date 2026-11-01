@@ -744,6 +744,12 @@ class Session:
         self.read_owned, self.read_t = lk.readable, frame.t
         if self.read_prime:
             self.read_prime, line = False, ""
+            self.reader.model_read = False
+        if self.reader.model_read:
+            # A text box that has finished typing but doesn't read cleanly: the model
+            # reads this frame, now that it's whole.
+            self.reader.model_read = False
+            self._start_narration(frame)
         if lk.readable and self.narrating is not None and not self.narrating.done():
             self.narrating.cancel()  # the model's line is about a screen that's gone
         if not line:
