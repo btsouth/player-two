@@ -671,7 +671,7 @@ class Reader:
                 if low:
                     covered.add(name)
             else:
-                out.append(f"{name} healed {hp - old}")
+                out.append(f"{name} got {hp - old} HP back")  # ("Marle healed 429": who did?)
         return ", ".join(out), covered, set()
 
     def _danger_news(self, lk: Look, now: float, covered: set[str], moving: set[str]) -> str:

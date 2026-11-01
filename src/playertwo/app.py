@@ -639,7 +639,9 @@ class Session:
         if not self.rooms:
             return none
         here = await asyncio.to_thread(self.rooms.locate, frame.image)
-        if here is None or here.loc in self.rooms.worlds:
+        weak = here is not None and (not getattr(here, "sure", True)
+                                     or getattr(here, "score", 1.0) < 0.75)
+        if here is None or here.loc in self.rooms.worlds or weak:
             # A world map the atlas knows: where on it, in a few words ("World map, 1000
             # A.D., at Leene Square"), as a place's name (live 3 said only "World map."
             # or "1000 A.D.", or what the woods looked like, never where).

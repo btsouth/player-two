@@ -1006,7 +1006,7 @@ async def test_what_are_we_fighting_counts_them_and_gives_the_partys_hp(monkeypa
     assert foe_name(st) == "Gargoyle"
     ag.note_battle(st)  # the reader saw the glove name one
     line = await ag.what_we_fight(PIC, game.read(None))
-    assert line == "Three Gargoyles. Crono's full, Frog's at 1 of 494, Marle's full."
+    assert line == "Three Gargoyles. Frog's at 1 HP, Crono and Marle are full."
     assert "Gargoyle" in muse.prompts[0]  # the name the screen showed, for the look's words
     st.top = "Frog"
     assert foe_name(st) == ""  # the glove on an ally
@@ -1026,7 +1026,7 @@ async def test_what_are_we_fighting_gives_hp_as_it_is_once_counted(monkeypatch):
         return later
 
     line = await ag.what_we_fight(PIC, asked_with, now=now)
-    assert line == "Three golden winged imps. Crono's full, Frog's full, Marle's at 1 of 430."
+    assert line == "Three golden winged imps. Marle's at 1 HP, Crono and Frog are full."
 
     async def unreadable():
         st = game.read(None)
@@ -1046,7 +1046,7 @@ def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
     p[1].hp, p[2].hp = 1, 0
     st = FakeCT(p, enemies()).read(None)
     assert progress(st, Intent("Crono", "attack")) == "Crono attacked. Marle is down, Frog is at 1 HP."
-    assert party_brief(st) == "Crono's full, Frog's at 1 of 494, Marle's down."
+    assert party_brief(st) == "Frog's at 1 HP, Marle's down, Crono's full."
     p[2].hp = 1
     st = FakeCT(p, enemies()).read(None)
     # Live 3: "Marle uses Cure on Frog. Frog 1 HP, Marle 1 HP."

@@ -668,7 +668,7 @@ def test_hp_changes_while_player_two_acted_are_not_said_after_it():
     assert r.update(fight(101), now=10.3) == ""
     assert r.update(fight(101), now=10.6) == ""
     r.update(fight(500), now=11.0)
-    assert r.update(fight(500), now=11.3) == "Crono healed 399."  # news again after that
+    assert r.update(fight(500), now=11.3) == "Crono got 399 HP back."  # news again after that
 
 
 @needs_frames

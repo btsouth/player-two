@@ -813,8 +813,8 @@ class Executor:
         if intent.command.lower() == "attack" and seen.startswith("No party HP"):
             # Enemies' HP isn't on screen: "nothing changed" sounded like a miss (live,
             # "Crono attacked but nothing changed").
-            seen = ("The attack went in (damage to enemies isn't read from the screen); no "
-                    "party HP changed")
+            seen = ("The attack went in (damage to enemies isn't read from the screen); "
+                    "nobody in the party got hurt")
         if not seen_name and not (healing and not landed):
             seen += (f" {intent.name} is chosen but hadn't gone off yet (it waits its turn "
                      "behind what's playing); it goes off once the fight runs again: this "
@@ -1051,15 +1051,20 @@ def progress(st: State, done: Intent) -> str:
 
 
 def party_brief(st: State) -> str:
-    """The party's HP in a few words: "Crono's full, Frog's at 1 of 494, Marle's down."
-    ('' when it doesn't read)."""
+    """The party's HP in a few words, the ones in trouble first: "Frog's at 1 HP, Marle's
+    down, Crono's full." ('' when it doesn't read). Live 3 said "Crono's at 1 of 780,
+    Frog's full, Marle's full."."""
     if not st.party or any(m.hp is None or not m.hp_max for m in st.party):
         return ""
     if all(m.hp >= m.hp_max for m in st.party):
         return "Everyone's at full health."
-    return ", ".join(f"{m.name}'s down" if m.hp == 0 else f"{m.name}'s full"
-                     if m.hp >= m.hp_max else f"{m.name}'s at {m.hp} of {m.hp_max}"
-                     for m in st.party) + "."
+    hurt = [f"{m.name}'s down" if m.hp == 0 else f"{m.name}'s at {m.hp} HP"
+            if m.hp < m.hp_max / 3 else f"{m.name}'s at {m.hp} of {m.hp_max}"
+            for m in st.party if m.hp < m.hp_max]
+    full = [m.name for m in st.party if m.hp >= m.hp_max]
+    if full:
+        hurt.append(f"{full[0]}'s full" if len(full) == 1 else f"{_and(full)} are full")
+    return ", ".join(hurt) + "."
 
 
 def _mp(st: State | None) -> dict[str, int | None]:
