@@ -482,3 +482,13 @@ def test_what_did_he_say_repeats_the_last_box_once_it_is_gone():
     assert ctscreen.answer("what did Frog say", gone, heard=r.heard) == "Frog: We must hurry."
     assert ctscreen.answer("read that again", gone, heard=r.heard) == "Frog: We must hurry."
     assert ctscreen.answer("what did he say?", gone) is None  # nothing read yet: the agent
+
+
+SETTINGS = LIVE.parent / "night-2026-11-01" / "steam-frames" / "settings-battle-wait.png"
+
+
+@pytest.mark.skipif(not SETTINGS.exists(), reason="no settings frame")
+def test_a_setting_is_said_with_its_value():
+    lk = ctscreen.look(cv2.imread(str(SETTINGS)), PARTY)
+    assert lk.parts["focus"] == "Battle Mode, Wait"
+    assert Reader().update(lk, first=True) == "Battle Mode, Wait."  # its help is cut off

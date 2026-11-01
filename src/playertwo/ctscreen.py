@@ -294,6 +294,15 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
                     and r.x1 <= tip[0] and tip[0] - r.x1 < 300 and r.text.strip().isdigit()]
             if slot and run is not None and run.x0 - tip[0] > 420:
                 lk.parts["focus"] = f"{slot[0].text.strip()}, {name}"  # a save slot
+            if run is not None:
+                # A setting's value is centred under it in capitals: "WAIT", "5 (NORMAL)".
+                mid = (run.x0 + run.x1) / 2
+                val = [r for r in good if 40 < r.y - run.y < 160 and abs((r.x0 + r.x1) / 2 - mid) < 40
+                       and re.fullmatch(r"[A-Z0-9][A-Z0-9 ()/%.:-]*", r.text.strip())]
+                if val:
+                    v = re.sub(r"[()]", "", val[0].text).split()
+                    lk.parts["focus"] += ", " + " ".join(w if w.isdigit() else w.capitalize()
+                                                         for w in v)
             head = [r for r in good if r.y < 160 and len(r.text) > 12 and finished(r.text)
                     and r.text.strip()[-1] in ".?:"]
             if head:
