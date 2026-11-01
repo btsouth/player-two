@@ -545,6 +545,24 @@ def finished(text: str) -> bool:
     return bool(END.search(t) or re.search(r"[a-z]-$", t)) or t in VOCAB
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower().replace("’", "").replace("'", ""))
+
+
+def covered(text: str, lines: list[str], share: float = 0.75) -> bool:
+    """Whether one of these lines says this text: most of its words are in it, in any
+    order ("The man says: Shelters are quite useful. Do you know about them? Yes or No?"
+    covers "Shelters are quite useful. Do you know about them?")."""
+    want = [w for w in _words(text) if len(w) > 1 or w.isdigit()]
+    if not want:
+        return False
+    for line in lines:
+        have = set(_words(line))
+        if sum(w in have for w in want) >= share * len(want):
+            return True
+    return False
+
+
 class Reader:
     """Lines to say from successive looks: each part when it changes, text once it's whole.
 
@@ -575,6 +593,20 @@ class Reader:
         self.danger_at: dict[str, float] = {}  # who's low, as said -> when
         self.battle_at = -1e9  # when a battle was last looked at (a new fight after a gap)
         self.danger_on: set[str] = set()  # danger in this fight said (or covered) and standing
+        self.told: list[str] = []  # Player Two's own lines just now (the agent's), and when
+        self.told_at = -1e9
+
+    def just_said(self, lines: list[str], now: float | None = None) -> None:
+        """Player Two has just said these in its own words (the agent read a box out, or
+        asked about it): text on screen they cover isn't said again (live: "Shelters are
+        quite useful..." in the agent's question, then from the reader once it finished)."""
+        self.told = [t for t in lines if t]
+        self.told_at = time.monotonic() if now is None else now
+
+    def _covered(self, value: str, now: float) -> bool:
+        if not self.told or now - self.told_at > self.forget_s:
+            return False
+        return covered(value, self.told)
 
     def reset(self) -> None:
         self.kind, self.said, self.seen = "none", {}, {}
@@ -695,9 +727,11 @@ class Reader:
             if self.text_since is None:
                 self.text_since = now
             if now - self.text_since > 2.5 and not self.text_handed:
-                # It never reads the same twice (misreads vary): the model reads it now.
+                # It never reads the same twice (misreads vary): the model reads it now,
+                # unless Player Two has just said it.
                 self.said["text"] = lk.parts.get("text", "") or "?"
-                self.model_read = self.text_handed = True
+                self.text_handed = True
+                self.model_read = not self._covered(self.said["text"], now)
                 self.heard = ""  # what it says is the model's to tell
         else:
             self.text_since, self.text_handed = None, False
@@ -740,6 +774,12 @@ class Reader:
                     self.said[part] = value
                     continue
                 self.texts[value] = now
+                if self._covered(value, now):
+                    # Player Two has just said it (the agent read it out): taken as said.
+                    self.said[part] = value
+                    if part == "text":
+                        self.heard, self.text_handed = value, True
+                    continue
                 if part in lk.typing and lk.unsure:
                     self.said[part] = value
                     if not self.text_handed:

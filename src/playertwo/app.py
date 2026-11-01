@@ -829,20 +829,32 @@ class Session:
         seen = getattr(agent, "_battle_seen", 0.0)
         if isinstance(seen, float) and seen:
             self.reader.battle_at = max(self.reader.battle_at, seen)
-        line = self.reader.update(lk)
+        try:
+            line = self.reader.update(lk)
+        except Exception as exc:  # noqa: BLE001  the model narrates what the reader can't
+            # This screen is the model's (a look that raised would leave the reader and
+            # the narrator both waiting on it, silent).
+            self.events.emit("error", where="reader", message=str(exc)[:300] or repr(exc))
+            self.reader.reset()
+            self.read_owned, self.read_t = False, frame.t
+            return
+        if self.read_prime:
+            # The first look after Player Two acted, taken in quietly: what it said is
+            # said, and a fight on screen is one it was in (the spoils of a fight it won:
+            # no enemies after "we won").
+            self.read_prime, line = False, ""
+            self.reader.model_read = self.reader.fight_started = False
+            self.reader.prime()
         if lk.battle is not None and hasattr(agent, "note_battle"):
             # Where each fighter stands and what the glove names, for Player Two's next
             # command in this fight; a new fight forgets the last one's.
             agent.note_battle(lk.battle, new=self.reader.fight_started)
         opened = lk.readable and not self.read_owned
         self.read_owned, self.read_t = lk.readable, frame.t
-        if self.read_prime:
-            self.read_prime, line = False, ""
-            self.reader.model_read = False
-            self.reader.prime()
-        if ((line or opened) and self.narrating is not None and not self.narrating.done()
-                and self.narrating is not self.read_model
-                and self.narrating is not self.describing):
+        stale = bool((line or opened) and self.narrating is not None
+                     and not self.narrating.done() and self.narrating is not self.read_model
+                     and self.narrating is not self.describing)
+        if stale:
             self.narrating.cancel()  # the model's line is about a screen that's gone
         if self.reader.model_read:
             # A text box that has finished typing but doesn't read cleanly: the model
@@ -853,7 +865,8 @@ class Session:
         elif self.reader.fight_started:
             # The reader says turns and HP; what the party is up against is a look's.
             self.reader.fight_started = False
-            if self.narrating is None or self.narrating.done():
+            # (A narration cancelled just above as stale isn't done yet, but it's over.)
+            if self.narrating is None or self.narrating.done() or stale:
                 self.narrating = self.read_model = asyncio.create_task(
                     self._fight_start(frame, lk.battle))
         elif ("turn" in self.reader.last and lk.battle is not None
@@ -871,10 +884,14 @@ class Session:
         cursor = {"focus", "turn"}
         interrupt = (parts <= cursor and self.read_last_parts <= cursor) or (
             bool(parts & {"text", "question"}) and bool(self.read_last_parts & {"text", "question"}))
-        # Only the reader's own line is cut off: an answer, the agent or a description
-        # the player asked for plays out.
+        # Only the reader's own line is cut off: an answer, the agent, the model reading a
+        # box or the enemies, or a description the player asked for plays out. (A
+        # streamed line is the voice's last_spoken only once it has ended, so the model's
+        # are known by their task while they run.)
         playing = getattr(self.voice, "last_spoken", None)
-        if not self.voice.idle() and playing is not None and playing != self.read_last_line:
+        model = any(t is not None and not t.done() for t in (self.read_model, self.describing))
+        if not self.voice.idle() and (model or (playing is not None
+                                                and playing != self.read_last_line)):
             interrupt = False
         self.read_last_parts, self.read_last_line = parts, clean_for_speech(line)
         self.narrator.recent.append(line)
@@ -1267,6 +1284,7 @@ class Session:
         return True
 
     async def _agent(self, text: str) -> None:
+        began = time.time()
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         self.pending = None
@@ -1296,8 +1314,12 @@ class Session:
                          turns=run.turns, seconds=round(run.seconds, 2))
         # The narrator gets one look at the screen the agent left, from a clean start: a
         # line of dialogue that came up as it finished is story the player would miss.
-        # What the agent said is in the narrator's recent lines, so it isn't said again.
+        # What the agent said is in the narrator's recent lines, so it isn't said again,
+        # and the reader takes a box it read out (or asked about) as said.
         with contextlib.suppress(Exception):
+            self.reader.just_said([e["text"] for e in self.events.recent
+                                   if e["kind"] in ("say", "ask") and e["t"] >= began
+                                   and e.get("text")])
             frame = await self.grab_now()
             self.watcher.accept(frame)
             self.silent_streak, self.quiet_until = 0, 0.0

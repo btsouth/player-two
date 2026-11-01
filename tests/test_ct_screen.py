@@ -810,3 +810,191 @@ async def test_what_are_we_fighting_is_answered_from_a_count_and_the_party_box(m
     assert await s._screen_answer("what are we fighting?")
     assert said == ["Three Gargoyles. Everyone's at full health."]
     assert asked == [["Crono", "Frog", "Marle"]]
+
+
+def test_a_box_player_two_just_said_isnt_said_again_but_the_next_one_is():
+    """Live (talk-to-10): the agent asked "The man says: Shelters are quite useful. Do you
+    know about them? ..." and finished with the box up; the reader then said the box."""
+    r = Reader()
+    r.just_said(["Okay, I'll talk to the man by the table.",
+                 "The man says: Shelters are quite useful. Do you know about them? Yes is "
+                 "highlighted. Should I pick Yes or No?"], now=0)
+    q = look("choice", typing=("question",),
+             question="Shelters are quite useful. Do you know about them?",
+             focus="Yes selected, or No")
+    q.order = ("question", "focus", "desc")
+    assert r.update(q, now=0.1) == ""
+    assert r.update(q, now=0.4) == "Yes selected, or No."  # where the hand is, not the box
+    assert r.update(q, now=0.7) == ""
+    box = look("text", typing=("text",), text="Man: They keep monsters out for a night.")
+    r.update(box, now=1.0)
+    assert r.update(box, now=1.3) == "Man: They keep monsters out for a night."
+    assert r.heard == "Man: They keep monsters out for a night."
+    # A box the agent read out word for word: "what did he say?" still has it.
+    r.just_said(['Melchior: Melchior the swordsmith, at your service!'], now=2)
+    said = look("text", typing=("text",), text="Melchior: Melchior the swordsmith, at your service!")
+    assert r.update(said, now=2.1) == "" and r.update(said, now=2.4) == ""
+    assert r.heard == "Melchior: Melchior the swordsmith, at your service!"
+    # Nor is a box that doesn't read cleanly handed to the model to read again.
+    r.just_said(["Mother: Come on, sleepyhead! It's time to get up!"], now=10)
+    smudged = look("text", typing=("text",), text="Mother: Come on, s1eepyhead! It's time to get up!")
+    smudged.unsure = True
+    for k in range(5):
+        assert r.update(smudged, now=10.1 + k) == ""
+    assert not r.model_read
+    # Long after, the same words are news again.
+    r2 = Reader()
+    r2.just_said(["Lodging is 10 G."], now=0)
+    lodging = look("text", typing=("text",), text="Lodging is 10 G.")
+    r2.update(lodging, now=40)
+    assert r2.update(lodging, now=40.3) == "Lodging is 10 G."
+
+
+def _reading_session(monkeypatch, looks):
+    """A session with just enough for _read: what was said, with its interrupt flag."""
+    import asyncio
+    from collections import deque
+    from types import SimpleNamespace
+
+    from playertwo.app import Session
+
+    s = Session.__new__(Session)
+    s.reader, s.reading, s.read_t, s.read_owned = Reader(), None, 0.0, False
+    s.read_thumb, s.read_prime, s.read_last_parts = None, False, set()
+    s.read_model, s.foes_at, s.describing, s.read_last_line = None, 0.0, None, ""
+    s.paused, s.agent_task, s.narrating = False, None, None
+    s.utt, s.transcribing, s.hands_active = None, False, False
+    s.narrator = SimpleNamespace(recent=deque(maxlen=4), verbosity="normal", team_up=False)
+    s.events = SimpleNamespace(emit=lambda kind, **k: s.errors.append(k) if kind == "error"
+                               else None)
+    s.errors, s.said = [], []
+
+    async def say(text, interrupt=True):
+        s.said.append((text, interrupt))
+
+    s.voice = SimpleNamespace(say=say, idle=lambda: True, last_spoken="")
+    s._tasks = set()
+
+    async def count_foes(image, party):
+        await asyncio.sleep(0.01)
+        return __import__("playertwo.battle", fromlist=["Foes"]).Foes(3, "Gargoyles")
+
+    s.agent = SimpleNamespace(_ct_steam=lambda f: True, foes=None, _battle_seen=0.0,
+                              count_foes=count_foes, note_battle=lambda st, new=False: None,
+                              recount=lambda image, party, say=None: None)
+    it = iter(looks)
+    monkeypatch.setattr(ctscreen, "look", lambda image, party=(): next(it))
+    return s
+
+
+async def test_the_box_the_agent_left_up_isnt_read_again_after_it(monkeypatch):
+    """talk to X: the agent says their line, finishes with the box up; the reader's quiet
+    first look and the ones after it don't say the box again."""
+    import asyncio
+
+    from PIL import Image
+
+    from playertwo.screen import Frame
+
+    box = look("text", typing=("text",), text="Innkeeper: Lodging is 10 G. Would you like "
+               "to stay for the night?")
+    s = _reading_session(monkeypatch, [box] * 4)
+    s.read_prime = True
+    s.reader.just_said(['Innkeeper: Lodging is 10 G. Would you like to stay for the night?'])
+    img = Image.new("RGB", (1920, 1080))
+    for t in (1.0, 1.3, 1.6, 1.9):
+        await s._read(Frame(img, t))
+        await asyncio.sleep(0)
+    assert s.said == []
+    assert s.reader.heard.startswith("Innkeeper: Lodging is 10 G.")
+
+
+async def test_no_enemies_after_a_fight_player_two_won(monkeypatch):
+    """The agent won a fight and finished on the spoils (still read as a battle, more
+    than 8 s after it last saw the fight): the first look after it is quiet, and no enemy
+    count follows "we won"."""
+    from PIL import Image
+
+    from playertwo.screen import Frame
+
+    s = _reading_session(monkeypatch, [_fight(), _fight()])
+    s.read_prime = True
+    img = Image.new("RGB", (1920, 1080))
+    await s._read(Frame(img, 1.0))
+    await s._read(Frame(img, 1.3))
+    assert s.narrating is None and s.said == []
+    assert not s.reader.fight_started
+
+
+async def test_a_fight_starting_mid_narration_still_gets_its_enemies(monkeypatch):
+    """A model narration of the field was running as the fight came up: it's cancelled as
+    stale (not done yet at that moment), and the enemy count still comes."""
+    import asyncio
+
+    from PIL import Image
+
+    from playertwo.screen import Frame
+
+    s = _reading_session(monkeypatch, [look("none"), _fight()])
+    img = Image.new("RGB", (1920, 1080))
+    await s._read(Frame(img, 1.0))
+    old = s.narrating = asyncio.get_running_loop().create_task(asyncio.sleep(5))
+    await s._read(Frame(img, 2.0))
+    assert old.cancelling() or old.cancelled()
+    assert s.narrating is not old
+    await s.narrating
+    assert [t for t, _i in s.said] == ["Fight.", "Three Gargoyles."]
+
+
+async def test_a_cursor_move_doesnt_cut_off_the_models_enemy_line_or_a_description(
+        monkeypatch):
+    """A streamed line is the voice's last_spoken only once it ends: while the model's
+    enemy line or a description plays, the reader's next cursor line waits its turn."""
+    import asyncio
+
+    from PIL import Image
+
+    from playertwo.screen import Frame
+
+    img = Image.new("RGB", (1920, 1080))
+    for which in ("read_model", "describing"):
+        s = _reading_session(monkeypatch, [look(focus="Attack"), look(focus="Item")])
+        s.voice.idle = lambda: False  # something is playing
+        await s._read(Frame(img, 1.0))
+        s.voice.last_spoken = s.read_last_line  # the stream hasn't ended
+        task = asyncio.get_running_loop().create_task(asyncio.sleep(5))
+        setattr(s, which, task)
+        s.narrating = task
+        await s._read(Frame(img, 2.0))
+        await asyncio.sleep(0)
+        assert s.said[-1] == ("Item.", False), which
+        assert not task.cancelled()
+        task.cancel()
+        # Once it's over, cursor moves cut off the reader's own last line as before.
+        s.voice.last_spoken = s.read_last_line
+        setattr(s, which, None)
+        s.narrating = None
+        it = iter([look(focus="Tech")])
+        monkeypatch.setattr(ctscreen, "look", lambda image, party=(): next(it))
+        await s._read(Frame(img, 3.0))
+        await asyncio.sleep(0)
+        assert s.said[-1] == ("Tech.", True)
+
+
+async def test_a_look_the_reader_chokes_on_goes_to_the_model(monkeypatch):
+    """If the reader raises on a look, that screen is the model narrator's (before, the
+    frame was never marked as looked at, and both stayed silent on it)."""
+    from PIL import Image
+
+    from playertwo.screen import Frame
+
+    s = _reading_session(monkeypatch, [look(focus="Equipment")])
+    s.read_owned = True
+
+    def broken(lk, now=None, first=False):
+        raise IndexError("list index out of range")
+
+    s.reader.update = broken
+    await s._read(Frame(Image.new("RGB", (1920, 1080)), 5.0))
+    assert s.read_t == 5.0 and not s.read_owned
+    assert s.errors and "index" in s.errors[0]["message"]
