@@ -219,14 +219,14 @@ class GlyphLib:
         if not gl or not len(self.y):
             return "", 0.0
         fm = np.array([feature(g) for g in gl], np.float32)
-        d = np.abs(self.X[None, :, :] - fm[:, None, :]).sum(axis=2)
-        idx = d.argmin(axis=1)
+        dist, idx = cv2.batchDistance(fm, np.ascontiguousarray(self.X, np.float32), cv2.CV_32F,
+                                      normType=cv2.NORM_L1, K=1)  # nearest by L1, in C
         s, worst = "", 0.0
         for k, g in enumerate(gl):
             if k and g.x0 - gl[k - 1].x1 >= space_px:
                 s += " "
-            s += self.y[idx[k]]
-            worst = max(worst, float(d[k, idx[k]]))
+            s += self.y[int(idx[k, 0])]
+            worst = max(worst, float(dist[k, 0]))
         return s, worst
 
 

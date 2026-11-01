@@ -17,6 +17,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
+import cv2
 import numpy as np
 
 from . import ctsteam
@@ -28,6 +29,8 @@ CANVAS = ctsteam.CANVAS
 MIN_WIDTH = 1600
 SURE = 20.0  # a run whose worst glyph is further than this from the library may be misread
 DESC_Y = 1220  # field menus' description bars are below this
+DIALOGUE = 0.75  # dialogue is drawn 4/3 the size of menu text: it's read scaled to menu size
+BOX_BANDS = ((0, 520), (900, 1440))  # text boxes sit at the top or the bottom
 # Words that may stand alone as a menu entry or an option.
 OPTIONS = ("Yes", "No", "Empty", "Resume", "New Game", "Load Game", "Extras", "Quit",
            "Use / Switch", "Sort list", "Consumables", "ON", "OFF", "WAIT", "ACTIVE",
@@ -324,8 +327,15 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     # those lines is kept (dropping one would skip words); if any reads badly, the box is
     # unsure, and the model reads it once it has finished typing.
     box = [row for row in lines if row and (row[0].y < 520 or row[0].y > 900)]
-    rows = [row for row in box if any(plausible(r) and len(re.findall(r"[A-Za-z]{2,}", r.text)) >= 2
-                                      for r in row)]
+    rows = _box_rows(box)
+    if any(len(r.text) >= 8 and r.x1 - r.x0 > 300 and len(re.findall(r"[A-Za-z0-9]{2,}", r.text))
+           >= 2 for row in box for r in row):
+        # Long lines that may be dialogue, which is drawn bigger: read them at its size.
+        big = _box_rows(_dialogue_lines(img))
+        if _clean_chars(big) > _clean_chars(rows):
+            rows, hands = big, []
+    if hands:
+        return lk  # a menu whose highlighted entry doesn't read: the model sees it
     if rows and sum(len(r.text) for row in rows for r in row) >= 12:
         text = clean(" ".join(r.text for row in rows for r in row))
         lk.kind = "text"
@@ -335,6 +345,26 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
         lk.unsure = misread(text) or not all(plausible(r) and r.worst <= SURE
                                              for row in rows for r in row)
     return lk
+
+
+def _box_rows(lines: list[list[Run]]) -> list[list[Run]]:
+    return [row for row in lines if any(plausible(r) and len(re.findall(r"[A-Za-z]{2,}", r.text))
+                                        >= 2 for r in row)]
+
+
+def _clean_chars(rows: list[list[Run]]) -> int:
+    return sum(len(r.text) for row in rows for r in row if plausible(r) and r.worst <= SURE)
+
+
+def _dialogue_lines(img: np.ndarray) -> list[list[Run]]:
+    """Lines in the text box bands read at dialogue size, in canvas coordinates."""
+    out = []
+    for y0, y1 in BOX_BANDS:
+        band = cv2.resize(img[y0:y1], None, fx=DIALOGUE, fy=DIALOGUE, interpolation=cv2.INTER_AREA)
+        for row in runs_in(ctsteam.lib(), band, (0, 0, band.shape[1], band.shape[0]), local=True):
+            out.append([Run(r.text, round(r.x0 / DIALOGUE), round(r.x1 / DIALOGUE),
+                            y0 + round(r.y / DIALOGUE), r.colour, r.worst) for r in row])
+    return out
 
 
 def sharp(image) -> bool:

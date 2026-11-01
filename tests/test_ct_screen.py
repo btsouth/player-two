@@ -139,6 +139,19 @@ def test_half_typed_menu_descriptions_are_left_unsaid():
 
 
 @needs_frames
+def test_dialogue_is_read_in_its_bigger_type_with_the_speaker():
+    lk = ctscreen.look(cv2.imread(str(FRAMES / "004556-00.jpg")), PARTY)
+    text = lk.parts.get("text", "")
+    assert lk.kind == "text" and not lk.unsure, lk.parts
+    assert text.startswith("Frog: ") and text.endswith(".") and len(text.split()) >= 10
+    assert Reader().update(lk, first=True) == text
+    # A menu whose highlighted entry doesn't read isn't taken for a text box.
+    for name in ("140416-04", "170901-08"):
+        assert ctscreen.look(cv2.imread(str(FRAMES / f"{name}.jpg")), PARTY).kind == "none"
+    assert ctscreen.look(cv2.imread(str(FRAMES / "170948-24.jpg")), PARTY).focus == "Lucca"
+
+
+@needs_frames
 def test_choices_say_the_question_then_the_cursor():
     assert first_line(LIVE / "steam-2026-10-31" / "s3.png") == (
         "choice", "Resume bookmarked game? No selected, or Yes.")
