@@ -250,3 +250,25 @@ def test_the_menu_after_the_night_gets_a_few_tries(monkeypatch):
 
     out = asyncio.run(Inn(sh, SimpleNamespace(vitals=vitals, party=["Crono"])).rest(400))
     assert len(tries) == 3 and "everyone full" in out
+
+
+@pytest.mark.skipif(not (FRAMES / "menu-main-1000ad-crono-marle.png").exists(),
+                    reason="no menu frame")
+def test_the_menu_page_hp_and_mp_with_misread_labels():
+    """"MF l 70/ 70" is Crono's HP, "MP : 8/" "8" his MP; the gold under the time."""
+    from playertwo.menu import FieldMenu
+
+    img = Image.open(FRAMES / "menu-main-1000ad-crono-marle.png")
+
+    async def grab():
+        return img
+
+    async def press(b, ms):
+        pass
+
+    async def nothing():
+        return None
+
+    fm = FieldMenu(press, grab, wait_s=0.1)
+    fm.open = fm.close = nothing
+    assert asyncio.run(fm.vitals()) == ([(70, 70, 8, 8), (65, 65, 12, 12)], 366)

@@ -223,33 +223,37 @@ class FieldMenu:
             await asyncio.sleep(0.15)
 
     async def vitals(self) -> tuple[list[tuple[int, int, int, int]], int | None]:
-        """The party's HP and MP as the main menu page shows them ([(hp, top, mp, top)],
-        the active party then the rest), and the gold; the menu is closed after."""
+        """The active party's HP and MP as the main menu page shows them ([(hp, top, mp,
+        top)], top down; -1 for an MP that didn't read), and the gold; the menu is closed
+        after."""
         await self.open()
         _tips, lines = await self.look()
         await self.close()
         out: list[tuple[int, int, int, int]] = []
-        cells = []
+        # Each block's stats: HP then MP, a pair of numbers each, in its column (the
+        # labels misread: "MF l 70/ 70"; the numbers can split: "8/" "8").
+        cells: list[tuple[int, int, int, int]] = []  # column, y, value, top
         for row in lines:
-            # A label and its numbers can be one run ("HP : 455/ 494") or two.
-            runs = sorted(row, key=lambda r: r.x0)
-            for k, r in enumerate(runs):
-                text = r.text if re.search(r"\d+\s*/\s*\S", r.text) or k + 1 >= len(runs) \
-                    else f"{r.text} {runs[k + 1].text}"
-                m = re.match(r"\s*(H[PF]|M[PpF])\s*[:;l1]?\s*(\S+)\s*/\s*(\S+)", text)
-                if m:
-                    a, b = ctsteam.numfix(m.group(2)), ctsteam.numfix(m.group(3))
-                    if a.isdigit() and b.isdigit():
-                        cells.append((r.x0 // 700, r.y, m.group(1)[0], int(a), int(b)))
-        for col, y, kind, a, b in sorted(cells):
-            if kind != "H":
-                continue
-            mp = next(((c, d) for col2, y2, k2, c, d in cells
-                       if k2 == "M" and col2 == col and 0 < y2 - y < 150), None)
-            if mp is not None:
-                out.append((a, b, *mp))
+            for col in (0, 1):
+                runs = sorted((r for r in row if 950 < r.x0 and (r.x0 >= 1700) == bool(col)),
+                              key=lambda r: r.x0)
+                text = " ".join(r.text for r in runs)
+                for m in re.finditer(r"(\S+)\s*/\s*(\S+)", text):
+                    a, b = ctsteam.numfix(m.group(1)), ctsteam.numfix(m.group(2))
+                    a, b = re.sub(r"^\D+", "", a), re.sub(r"\D+$", "", b)
+                    if a.isdigit() and b.isdigit() and int(a) <= int(b):
+                        cells.append((col, runs[0].y, int(a), int(b)))
+        cells = sorted(c for c in cells if c[0] == 0)  # the active party (not the reserve)
+        k = 0
+        while k < len(cells):
+            col, y, a, b = cells[k]
+            nxt = cells[k + 1] if k + 1 < len(cells) else None
+            if nxt and nxt[0] == col and 0 < nxt[1] - y < 110:
+                out.append((a, b, nxt[2], nxt[3]))
+                k += 2
             else:
-                out.append((a, b, -1, -1))  # MP unread
+                out.append((a, b, -1, -1))  # an HP whose MP didn't read
+                k += 1
         gold = next((int(m.group(1)) for row in lines for r in row
                      if (m := re.fullmatch(r"(\d{1,7})\s*G", r.text.strip()))), None)
         return out, gold

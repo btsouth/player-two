@@ -334,8 +334,9 @@ INN_Q = re.compile(r"stay|rest|night|lodging|inn\b|sleep", re.IGNORECASE)
 def vitals_line(names: list[str], vit: list[tuple[int, int, int, int]]) -> tuple[str, bool]:
     """'Crono 70/70 HP 8/8 MP, Marle ...' and whether everyone read is full."""
     parts, full = [], bool(vit)
-    for k, (hp, top, mp, mtop) in enumerate(vit[:len(names) or 3]):
-        who = names[k] if k < len(names) else f"member {k + 1}"
+    named = len(names) == len(vit)  # the menu's names misread often (Crono's hair)
+    for k, (hp, top, mp, mtop) in enumerate(vit[:3]):
+        who = names[k] if named else f"the {('first', 'second', 'third')[k]} in the party"
         mp_s = f", {mp}/{mtop} MP" if mp >= 0 else ""
         parts.append(f"{who} {hp}/{top} HP{mp_s}")
         full = full and hp == top and (mp < 0 or mp == mtop)
