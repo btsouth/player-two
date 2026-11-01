@@ -384,3 +384,111 @@ class Reader:
         if out and lk.kind == "menu" and lk.focus in MAIN and opened:
             out.insert(0, "Menu")
         return " ".join(s if s[-1] in ".?!" else s + "." for s in out)
+
+
+# ---------------------------------------------------------------------------------------
+# Questions the screen answers by itself, in a fraction of a second.
+
+ASK_HP = re.compile(r"\b(my|our|the party'?s?|every(one|body)'?s|the team'?s|(crono|marle|lucca|"
+                    r"robo|frog|ayla|magus)'?s?)\s+(hp|health|hit points)\b|\bhow('s| is| are) "
+                    r"(every(one|body)|the party|we|my party|my team)\b|^(what'?s |what is )?"
+                    r"(the |our )?(party )?(hp|health)\??$")
+ASK_PARTY = re.compile(r"\bwho('s| is| are)? (is |are )?(in|with) (my|our|the) (party|team)\b|"
+                       r"\bwho('s| is) with (me|us)\b|\bwho am i with\b")
+ASK_SAY = re.compile(r"\bwhat (does|did|do) (that|it|this|the \w+) say\b|\bread (that|it|this|"
+                     r"the \w+)( again| out| to me)?\b|\bwhat('s| is| are) (that|the|they|he|she)"
+                     r"( \w+)? saying\b")
+ASK_ITEMS = re.compile(r"\bwhat (items|stuff|potions|things)\b|\bwhat('s| is) in (my|our|the) "
+                       r"(bag|inventory)\b|\bwhat do (i|we) have\b")
+ASK_FOE = re.compile(r"\bwhat (are|am) (we|i) fighting\b|\bwho (are|am) (we|i) fighting\b|"
+                     r"\bwhat (enemies|monsters|enemy|monster)\b")
+
+
+def _plain(question: str) -> str:
+    q = " ".join(question.lower().replace("’", "'").split()).strip(" .!")
+    return re.sub(r"^(hey )?player two,?\s*", "", q)
+
+
+def asks(question: str) -> bool:
+    """Whether this is a question the screen might answer by itself (not a command like
+    "heal Frog's HP")."""
+    from .ack import QUESTION
+
+    q = _plain(question)
+    return bool(QUESTION.search(q)) and any(p.search(q) for p in (ASK_HP, ASK_PARTY, ASK_SAY,
+                                                                  ASK_ITEMS, ASK_FOE))
+
+
+def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
+    """A question answered from the screen as read, or None when the screen doesn't show
+    the answer (the agent looks, and may open a menu)."""
+    if not asks(question):
+        return None
+    q = _plain(question)
+    st = lk.battle
+    if ASK_SAY.search(q):
+        said = [lk.parts[p] for p in ("title", "question", "top", "text", "desc") if lk.parts.get(p)]
+        if lk.kind == "choice" and lk.parts.get("focus"):
+            said.append(lk.parts["focus"])
+        if said:
+            return " ".join(s if s[-1] in ".?!" else s + "." for s in said)
+        return None
+    if ASK_FOE.search(q):
+        if st is not None and st.kind == "target" and lk.parts.get("top"):
+            top = lk.parts["top"]
+            if len(top.split()) <= 3 and not top.endswith("."):
+                return f"The target now is {top}."
+        return None
+    if ASK_PARTY.search(q):
+        if st is not None and st.party:
+            names = [m.name for m in st.party]
+        elif party:
+            names = list(party[:3])
+        else:
+            return None
+        return (", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]) + "."
+    if ASK_HP.search(q):
+        who = [n for n in ctsteam.NAMES if re.search(rf"\b{n.lower()}", q)]
+        if st is not None and st.party and all(m.hp is not None for m in st.party):
+            out = []
+            for m in st.party:
+                if who and m.name not in who:
+                    continue
+                out.append(f"{m.name} is knocked out" if m.hp == 0 else
+                           f"{m.name} {m.hp} of {m.hp_max} HP")
+            return ", ".join(out) + "."
+        hp = _menu_hp(lk)
+        if hp and len(party) >= len(hp):
+            return ", ".join(f"{n} {h} of {m} HP" for n, (h, m) in zip(party, hp, strict=False)) + "."
+        return None
+    if ASK_ITEMS.search(q):
+        items, unread = [], 0
+        for row in lk.lines:
+            for i, r in enumerate(row):
+                w = snap(r.text, ctsteam.ITEMS, 0.8)
+                if w not in ctsteam.ITEMS:
+                    # An entry in the list that didn't read: the answer would leave it out.
+                    unread += 300 < r.y < 1000 and len(r.text) > 3 and not r.text.startswith(":")
+                    continue
+                n = next((x.text.lstrip(":").strip() for x in row[i + 1:i + 2]
+                          if re.fullmatch(r":?\s*\d+", x.text)), "")
+                items.append(f"{w} {n}".strip())
+        if st is not None and st.kind == "list":
+            items = [e for row in st.entries for e in row if e in ctsteam.ITEMS] or items
+        if len(items) >= 2 and (not unread or st is not None):
+            return "On screen: " + ", ".join(items) + "."
+        return None
+    return None
+
+
+def _menu_hp(lk: Look) -> list[tuple[int, int]]:
+    """HP of the active party on the field menu's main page, top to bottom."""
+    if lk.kind != "menu" or lk.focus not in MAIN:
+        return []
+    out = []
+    for row in lk.lines:
+        for r in row:
+            m = re.match(r"HP\s*[:;]\s*(\d+)\s*/\s*(\d+)$", ctsteam.numfix(r.text).strip())
+            if m and 900 < r.x0 < 1300:
+                out.append((r.y, int(m.group(1)), int(m.group(2))))
+    return [(h, mx) for _y, h, mx in sorted(out)]

@@ -169,6 +169,7 @@ async def test_the_session_says_what_the_reader_reads_and_leaves_the_rest_to_the
     s.reader, s.reading, s.read_t, s.read_owned = Reader(), None, 0.0, False
     s.read_thumb, s.read_prime, s.read_last_parts = None, False, set()
     s.paused, s.agent_task, s.narrating = False, None, None
+    s.watcher = SimpleNamespace(settle_s=0.3)
     s.utt, s.transcribing, s.hands_active = None, False, False
     s.narrator = SimpleNamespace(recent=deque(maxlen=4))
     said, events = [], []
@@ -198,3 +199,30 @@ async def test_the_session_says_what_the_reader_reads_and_leaves_the_rest_to_the
     s.listening = lambda: False
     s._maybe_narrate()  # not seen by the reader yet: wait
     assert s.pending is not None and s.narrating is None
+
+
+def test_only_questions_are_answered_from_the_screen():
+    assert ctscreen.asks("Player Two, what's my HP?") and ctscreen.asks("how's everyone doing")
+    assert ctscreen.asks("what does that say") and ctscreen.asks("read that again")
+    assert ctscreen.asks("who's in my party") and ctscreen.asks("what items do I have")
+    assert not ctscreen.asks("heal Frog's HP") and not ctscreen.asks("use a potion")
+    assert not ctscreen.asks("what is the HP of the boss")  # not shown: the agent looks
+
+
+@needs_frames
+def test_questions_the_screen_answers_at_once():
+    def ask(path, q):
+        return ctscreen.answer(q, ctscreen.look(cv2.imread(str(path)), PARTY), PARTY)
+
+    battle = FRAMES / "134639-00.jpg"
+    assert ask(battle, "what's my HP") == ("Crono 780 of 780 HP, Frog 1 of 494 HP, "
+                                           "Marle 430 of 430 HP.")
+    assert ask(battle, "what's Frog's HP?") == "Frog 1 of 494 HP."
+    assert ask(battle, "who's in my party") == "Crono, Frog and Marle."
+    assert ask(battle, "what does it say") == "Combo Attack: Reduces HP to 1."
+    assert ask(FRAMES / "135428-00.jpg", "how's everyone doing") == (
+        "Crono 227 of 811 HP, Frog 241 of 494 HP, Marle 188 of 430 HP.")
+    assert ask(FRAMES / "140314-00.jpg", "what are we fighting") == "The target now is Gargoyle."
+    assert ask(FRAMES / "134854-00.jpg", "what items do we have").startswith("On screen: Potion")
+    # The field shows none of it: the agent answers (and may open the menu).
+    assert ask(FRAMES / "185021-00.jpg", "what's my HP") is None

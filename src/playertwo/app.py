@@ -604,8 +604,8 @@ class Session:
             return
         frame, change = self.pending
         if self._reads(frame):
-            if self.read_t < frame.t:
-                return  # the reader hasn't seen this screen yet
+            if self.read_t < frame.t - self.watcher.settle_s:
+                return  # the reader hasn't seen this still screen yet
             if self.read_owned:
                 self.pending = None  # the reader says what this screen needs
                 return
@@ -1079,9 +1079,38 @@ class Session:
         if phrase:
             self.side_task = self.spawn(self.where(phrase))
             return
+        if await self._screen_answer(text):
+            return
         if self.agent_task and not self.agent_task.done():
             self.agent_task.cancel()
         self.agent_task = asyncio.create_task(self._agent(text))
+
+    async def _screen_answer(self, text: str) -> bool:
+        """Answer from the screen as read, in a fraction of a second, when it shows the
+        answer (Chrono Trigger on Steam: HP, the party, items, what text says)."""
+        latest = self.latest
+        if latest is None or not self._reads(latest) or not ctscreen.asks(text):
+            return False
+        if self.agent_task and not self.agent_task.done():
+            return False  # mid-request: the agent hears it
+        t0 = time.monotonic()
+        try:
+            frame = await self.grab_now()
+            lk = await asyncio.to_thread(ctscreen.look, frame.image, self.reader.party)
+            line = ctscreen.answer(text, lk, self.reader.party)
+        except Exception as exc:  # noqa: BLE001  the agent answers instead
+            self.events.emit("error", where="screen_answer", message=str(exc)[:300])
+            return False
+        if not line:
+            return False
+        self.events.emit("say", text=line, source="screen",
+                         latency=round(time.monotonic() - t0, 2))
+        self.events.emit("agent", request=text, outcome=line, steps=[], turns=[],
+                         seconds=round(time.monotonic() - t0, 2))
+        self.narrator.recent.append(line)
+        self.agent.history.append(f"{text} -> {line}")
+        await self.voice.say(line)
+        return True
 
     async def _agent(self, text: str) -> None:
         if self.narrating and not self.narrating.done():
