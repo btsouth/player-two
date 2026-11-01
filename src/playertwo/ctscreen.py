@@ -678,7 +678,7 @@ class Reader:
         for t in self.told:
             if name not in t:
                 continue
-            if text.endswith("is down") and re.search(r"\b(down|knocked out)\b", t, re.I):
+            if text.endswith("is down") and re.search(r"\b(down|knocked out)\b", t, re.IGNORECASE):
                 return True
             if num and re.search(rf"\b{num.group()}\b", t):
                 return True

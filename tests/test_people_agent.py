@@ -261,7 +261,7 @@ def test_no_answer_to_the_models_question_ends_the_request(tmp_path, monkeypatch
 
     muse = AskingMuse([("ask_player", {"question": "Take a look, or no thanks?"}),
                        ("hold", {"direction": "up", "ms": 800})])
-    agent, sim, said, _rooms = agent_in(tmp_path, monkeypatch, ask=ask, muse=muse)
+    agent, _sim, said, _rooms = agent_in(tmp_path, monkeypatch, ask=ask, muse=muse)
     run = asyncio.run(agent.run("what should I do here?"))
     assert len(muse.seen) == 1  # no second turn
     assert said[-1] == "Okay, I'll wait till you decide."
