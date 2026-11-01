@@ -1941,7 +1941,7 @@ class Agent:
                          "tool_calls": [c.model_dump() for c in calls] or None})
             if not calls:
                 # A reply in words, not a tool call; sometimes labelled ("Finish: ...").
-                text = re.sub(r"^\s*(finish|say)\s*:\s*", "", msg.content or "", flags=re.I)
+                text = re.sub(r"^\s*(finish|say)\s*:\s*", "", msg.content or "", flags=re.IGNORECASE)
                 if text.strip():
                     await self._speak(text)
                     run.outcome = text
