@@ -13,5 +13,5 @@ date +%s.%N > "$OUT.start"
 echo "Recording $MON to $OUT (Ctrl+C to stop)"
 AUDIO="default_output|default_input"
 [ "${DEMO_MIC:-1}" = 0 ] && AUDIO="default_output"
-exec gpu-screen-recorder -w "$MON" -f 60 -k h264 -q very_high \
+exec gpu-screen-recorder -w "$MON" -f 60 -k h264 -q very_high -cursor no \
   -a "$AUDIO" -ac aac -o "$OUT"
