@@ -22,9 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ct_states import CT, STATES, game
-
 import ct_ram
+from ct_states import CT, STATES, game
 
 
 class Battle(CT):

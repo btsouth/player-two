@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
-import battle_judge as J  # noqa: E402
-import ct_ram  # noqa: E402
+import battle_judge as J
+import ct_ram
 
 
 def reading(battle, party, enemies, items=10):
