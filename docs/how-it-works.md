@@ -5,12 +5,41 @@ The parts, in the order a moment of play goes through them. File names are under
 
 - **Screen watcher** (`screen.py`): samples the game window a few times a second, learns which parts
   are always moving (a flickering TV, rain), and fires once when a new screen has stopped moving.
-- **Narrator** (`narrator.py`): streams Muse Spark's answer into the voice sentence by sentence, so
-  speech starts before the model has finished.
-- **Agent** (`agent.py`): a tool loop with `press`, `hold`, `walk_to`, `talk_to`, `keep_walking`,
-  `exits`, `area_map`, `walk_to_map`, `say`, `ask_player`, `remember` and `finish`. A rule in code stops
-  any press sequence just before an A that follows any other press, so it always looks at the
-  highlight before confirming, and it can't press A twice and skip a line you didn't hear.
+- **Reader** (`glyphread.py`, with a game profile in `ctsteam.py` and `ctscreen.py`): reads a
+  game's own pixel font, cursor and HP bars with no model, in about a tenth of a second. Every
+  frame is scaled to one canvas, text pixels are found as bright cores inside the font's dark
+  outline, cut into glyphs and named by their nearest match in a library learned from real frames
+  whose text was labelled by hand (`scripts/ct_glyph_learn.py`; a line is only learned when its
+  glyph count matches the label). The cursor is found by template matching. A run of text is only
+  trusted when it reads as words, so a busy background never turns into made-up text. `ctscreen`
+  turns frames into what a screen reader would say: whose turn it is, what the cursor is on, a
+  Yes/No choice with the highlighted option, dialogue once it has stopped typing out, who is in
+  danger, each said once when it changes. Chrono Trigger on Steam is the only profile so far.
+- **Narrator** (`narrator.py`): says what the reader read. Screens the reader can't make sense of,
+  and every screen in games without a profile, go to Muse Spark, whose answer streams into the
+  voice sentence by sentence, so speech starts before the model has finished. It stays silent
+  while the agent is acting, so it never talks over what you asked for.
+- **Instant echo** (`ack.py`): says your request back in your own words the moment it arrives,
+  with no model call ("Okay, Crono will use Cyclone"), so a misheard request is caught at once. It
+  states what it will try, never a result.
+- **Agent** (`agent.py`): Muse Spark in a tool loop. The general tools are `press`, `hold`,
+  `walk_to`, `talk_to`, `keep_walking`, `exits`, `area_map`, `walk_to_map`, `wait`, `say`,
+  `ask_player`, `remember` and `finish`. With a game's maps it also gets `where_am_i`,
+  `go_to_place`, `go_to_exit` and `travel`; with a walkthrough, `guide` and `next_goal`; in
+  Chrono Trigger on Steam, the executors below. A rule in code stops any press sequence just
+  before an A that follows any other press, so it always looks at the highlight before
+  confirming, and it can't press A twice and skip a line you didn't hear.
+- **Executors** (`battle.py`, `shop.py`, `menu.py`, Chrono Trigger on Steam): the model says what
+  to do once, and local code does it. `battle` takes one command ("Crono, Cyclone on the one on the
+  left"): it unpauses, picks the fighter's command window, the command, the list entry and the
+  target, checks each press against the reader, confirms, watches it play out and pauses again,
+  then reports what changed (HP and MP before and after, the message bar). Anything unexpected
+  (the hand gone, the entry not in the list, the fighter knocked out) stops it, paused, with the
+  reason in words. `fight` with "win" loops over the same steps: attack while everyone is healthy,
+  and on a surprise ask Muse Spark for the next command while the game is paused. "Run" holds the
+  two shoulder buttons. `shop` walks to a seller, talks, buys N of an item, and reads the gold
+  before and after; it also rests at an inn and reads everyone's HP after. `field_menu` uses a
+  tech or an item on someone outside a fight, or changes a battle setting.
 - **Walking** (`walk.py`): first, in each new area, it taps the d-pad one way and back and
   watches what starts and stops moving with it: that's your character, not someone else with the
   same red hair, and not a party member catching up, and that went the way the d-pad was held.
@@ -43,10 +72,31 @@ The parts, in the order a moment of play goes through them. File names are under
   gap (the model thinking, a button pressed by hand) it finds the screen on the map again, and it
   starts a new map in a new place. The model sees it with what hasn't been seen yet in dark grey,
   points at a spot, and `walk_to_map` walks there even if it's off screen.
+- **World maps** (`atlas.py`): telling world-map icons apart and knowing a game's geography is
+  where a vision model fails (it took a village for the castle, and put the fair west of town
+  when it's north). A sighted friend would look at a map, so this does too. An atlas is a game's
+  map images, with each place's spot on them, labelled once with Muse Spark
+  (`scripts/label_atlas.py`) and checked by a person, plus where you can walk, surveyed by walking
+  the map in an emulator with the game's memory saying where the character is
+  (`scripts/survey.py`). The screen is found on the map by image matching, the route is planned on
+  the walkable ground, and the walk checks where it is several times a second. `where_am_i`
+  answers from it, relative to the nearest places.
+- **Rooms and towns** (`rooms.py`): the same idea indoors. `scripts/survey_rooms.py` walks every
+  place in the emulator, notes which tiles can be walked and where each way out goes, and
+  stitches the place into one picture; Muse Spark names the people and exits on it. In play, the
+  screen is found on that picture, the character on it by its look, and `go_to_exit` walks to a
+  named way out or person, through other places when it's further. The Steam version's redrawn
+  screens are found on the SNES pictures.
+- **The Epoch** (`epoch.py`): flying Chrono Trigger's time machine across the sea and to another
+  era with `go_to_era`. Tested on the SNES version only.
+- **Guides** (`guide.py`, `quests.py`): a walkthrough you put in `~/.config/player-two/guides/` is
+  searched for "how do I get to ...?", and turned once into a list of story steps (one Muse Spark
+  call per chapter, `scripts/build_quests.py`) for "what do I do next?".
 - **Game notes** (`notes.py`): what the agent learns about a game (which button opens the menu,
-  how battles go, where a place is) is kept in a plain text file a game in
+  how battles go, where a place is) is kept in a plain text file per game in
   `~/.config/player-two/games/`, and read at the start of every session. A newer note replaces
-  a similar older one, so a correction doesn't leave both.
+  a similar older one, so a correction doesn't leave both. A game pack (`<game>.pack.txt` in the
+  same folder) is read the same way: how the game works, written once per game.
 - **Controller** (`controls.py`): a uinput Xbox 360 pad on Linux, ViGEm on Windows, or keyboard
   keys for PC-only games.
 - **Hands-free listening** (`listen.py`): Silero VAD (a 2 MB model on the CPU, well under a
@@ -62,8 +112,22 @@ The parts, in the order a moment of play goes through them. File names are under
   otherwise the most recent window that isn't a terminal, browser or app. `window = "..."` picks
   one by name.
 
-## Tests on real game frames
+## Tests and benches
 
 `tests/test_real_frames.py` checks walking, fades and the area map on Chrono Trigger frames
 recorded while holding the d-pad, at full and slow capture rates. The recordings are game footage,
-so they aren't in the repo; the tests skip without them (`P2_RECORDINGS` points at them).
+so they aren't in the repo; the tests skip without them (`P2_RECORDINGS` points at them). Tests
+that need the maps or real Steam frames skip the same way.
+
+The benches need an isolated desktop (omabox) and a copy of the game, so they don't run as is
+elsewhere:
+
+- `scripts/emu_tasks.py` and `scripts/rooms_bench.py` run the SNES version in RetroArch, give
+  Player Two (or just the walker) a task, and judge it by reading the game's memory: where the
+  character ended up, whether a fight is still on. `scripts/atlas_walk.py` does the same for the
+  world-map walker alone. On the SNES version, world-map trips passed 144/144 with the walker
+  alone and 48/52 and 50/54 with the agent choosing the place; trips inside towns and buildings
+  95/104 with the walker alone and 22/24 with the agent.
+- `scripts/narrator_bench.py` narrates labelled Steam frames and scores what had to be said, what
+  was made up, and how soon the first word came.
+- `scripts/play_tasks.py` runs tasks on a real Steam copy, with Muse Spark judging the last screen.
