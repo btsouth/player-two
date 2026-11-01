@@ -66,6 +66,9 @@ FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
 FILLER = {ontopic.stem(w) for w in (
     "inside", "outside", "here", "now", "arrived", "made", "there", "finally", "right",
     "safely", "safe", "back", "all", "set", "done", "ready", "got", "okay", "standing")}
+# A line saying what's about to happen, not what has.
+INTENT = re.compile(r"(?i)\s*(going|heading|walking|taking|trying|let me|i'll|i will|"
+                    r"i'm going|okay|ok|on it|got it, i'll)\b")
 # Said when the model's lines were off the point twice in one request (ontopic.py).
 LOST_THREAD = "Sorry, I lost my train of thought there. Could you ask me that again?"
 WANDER_LIMIT_S = 40.0
@@ -711,8 +714,11 @@ class Agent:
         if not words or re.search(r"\b(not|no|never|can't|couldn't|won't|isn't|didn't)\b|"
                                   r"n't\b", text.lower().replace("\u2019", "'")):
             return False
-        before = {w for line in self.said for w in ontopic.content(line)}
-        return all(w in before for w in words)
+        # Only what was said as done or seen counts: "Going to Leene Square." doesn't say
+        # we're there.
+        facts = [line for line in self.said if not INTENT.match(line)]
+        before = {w for line in facts for w in ontopic.content(line)}
+        return bool(before) and all(w in before for w in words)
 
     async def _on_topic(self, text: str) -> bool:
         """Whether a line the model wrote may be said: most are about what they were given

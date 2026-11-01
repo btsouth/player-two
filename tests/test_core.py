@@ -1020,3 +1020,9 @@ def test_a_closing_line_that_only_says_it_again_isnt_said():
         [("finish", {"text": "The inn isn't open."})]])
     run(agent.run("take me to the inn"))
     assert said[-1] == "The inn isn't open."  # a "not" is news
+    agent, _pad, said, _asked, _muse = TestAgent().make([
+        [("say", {"text": "Going to Leene Square."})],
+        [("press", {"buttons": ["up"]})],
+        [("finish", {"text": "We're at Leene Square."})]])
+    run(agent.run("take me to the fair"))
+    assert said[-1] == "We're at Leene Square."  # "going to" isn't being there
