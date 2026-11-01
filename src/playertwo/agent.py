@@ -1202,6 +1202,7 @@ class Agent:
         self._last_spot = spot
         if spot is not None:  # the era: of two places alike in two eras, this one's
             self._last_world = getattr(atlas.map(spot.map), "world", None)
+            self._world_xy = (spot.x, spot.y)  # (and the door: alike in two towns)
         return spot
 
     async def _where_am_i(self) -> str:
@@ -1588,6 +1589,7 @@ class Agent:
         if self._rooms is None:
             return None
         self._rooms.world_hint = getattr(self, "_last_world", None)
+        self._rooms.world_spot = getattr(self, "_world_xy", None)
         here = await asyncio.to_thread(self._rooms.locate, image)
         return (self._rooms, here) if here is not None else None
 

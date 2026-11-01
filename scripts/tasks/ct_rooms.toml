@@ -486,3 +486,101 @@ request = "take me outside"
 to = "0x1F1"
 location = "0x1F1"
 limit_s = 180
+
+# Porre, 600 AD (from world-600-dorino, walked south).
+[[task]]
+id = "r-porre-inn-out"
+category = "rooms"
+state = "rooms/deep-9c"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-porre-cafe-out"
+category = "rooms"
+state = "rooms/deep-9b"
+request = "let's leave"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-porre-elder-out"
+category = "rooms"
+state = "rooms/deep-9a"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-tata-out"
+category = "rooms"
+state = "rooms/deep-98"
+request = "take me outside"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 180
+
+[[task]]
+id = "r-porre-innkeeper"
+category = "rooms"
+state = "rooms/door-9c"
+request = "talk to the innkeeper"
+to = "0x9C"
+target = "the innkeeper"
+talk = true
+location = "0x9C"
+limit_s = 180
+
+[[task]]
+id = "r-porre-oldman"
+category = "rooms"
+state = "rooms/door-9a"
+request = "talk to the old man"
+to = "0x9A"
+target = "the old man"
+talk = true
+location = "0x9A"
+limit_s = 180
+
+[[task]]
+id = "r-porre-waitress"
+category = "rooms"
+state = "rooms/door-9b"
+request = "talk to the waitress"
+to = "0x9B"
+target = "the waitress"
+talk = true
+location = "0x9B"
+limit_s = 180
+
+# Truce Canyon, 600 AD (monsters about: a fight on the way is the battle agent's).
+[[task]]
+id = "r-canyon-out"
+category = "rooms"
+state = "rooms/deep-70"
+request = "get me out of here"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240
+
+[[task]]
+id = "r-canyon-in"
+category = "rooms"
+state = "rooms/door-70"
+request = "take me to the clearing"
+to = "0x71"
+location = "0x71"
+limit_s = 240
+
+[[task]]
+id = "r-canyon-71-out"
+category = "rooms"
+state = "rooms/deep-71"
+request = "take me out of the canyon"
+to = "0x1F1"
+location = "0x1F1"
+limit_s = 240

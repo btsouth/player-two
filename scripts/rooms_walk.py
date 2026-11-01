@@ -66,6 +66,10 @@ async def main() -> int:
         goal = int(args.to, 16)
         rooms.world_hint = goal if goal in rooms.worlds else next(
             (w for w in sorted(rooms.worlds) if rooms.hops(goal, w)), None)
+        # and where on it it went in (as the agent saw the world map): the goal's door
+        doors = [e.at for e in getattr(rooms.rooms.get(goal), "exits", [])
+                 if e.to == rooms.world_hint and e.at]
+        rooms.world_spot = tuple(doors[0]) if doors else None
     target = None
     if args.target:
         room = rooms.rooms.get(int(args.to, 16))

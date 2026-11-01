@@ -283,6 +283,9 @@ class Rooms:
         # The world map last seen (its location number): of two places that look the
         # same in two eras, the one that leads out onto it.
         self.world_hint: int | None = None
+        # Where on it (its pixels): of two places alike in one era (two towns' elders'
+        # houses), the one whose door is nearest.
+        self.world_spot: tuple[float, float] | None = None
         self._steam_pics: dict[int, dict[str, tuple[Seen, Seen]]] | None = None
         self._steam_sizes: set[tuple[int, int]] = set()  # window sizes seen as Steam's
         if (folder / "player.json").exists():
@@ -674,16 +677,21 @@ class Rooms:
         cam = (int(min(max(e.at[0] - fx, lo_x), hi_x)), int(min(max(e.at[1] - fy, lo_y), hi_y)))
         return Here(e.to, cam, e.at[0], e.at[1], 0.0, False, steam)
 
-    def prefer(self, loc: int, near: Here | None) -> int:
+    def prefer(self, loc: int, near: Here | None) -> float:
         """Which of two places that look the same (a forest in two eras) it more likely
         is, least first: the one it was just in, then one whose ways out lead onto the
-        world map last seen (world_hint), then the rest."""
+        world map last seen (world_hint), its door nearest where it was last seen on it
+        (world_spot) first, then the rest."""
         if near is not None and near.loc == loc:
             return 0
         room = self.rooms.get(loc)
         if room is not None and self.world_hint is not None and self.hops(
                 loc, self.world_hint) is not None and len(self.hops(loc, self.world_hint)) <= 3:
-            return 1
+            if self.world_spot is None:
+                return 1
+            doors = [e.at for e in room.exits if e.to == self.world_hint and e.at]
+            far = min((math.dist(a, self.world_spot) for a in doors), default=5000.0)
+            return 1 + min(far, 5000.0) / 10000
         return 2
 
     @staticmethod
@@ -1206,8 +1214,10 @@ def on_ground(room: Room, x: float, y: float) -> bool:
 
 
 def standing(room: Room, cam: tuple[int, int]) -> list[tuple[float, float]]:
-    """Where the people who don't walk about stand, in a view at `cam`."""
-    return [(p.at[0] - cam[0], p.at[1] - cam[1]) for p in room.people if not p.moves]
+    """Where the people who don't walk about stand, in a view at `cam` (not save points
+    and the like: those are walked over)."""
+    return [(p.at[0] - cam[0], p.at[1] - cam[1]) for p in room.people
+            if not p.moves and p.kind in ("person", "animal")]
 
 
 def line_up(t: tuple[int, int], at: tuple[float, float], face: tuple[int, int]) -> float:
@@ -1443,31 +1453,46 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                         lines = 0
                         continue
                     if talk and press is not None:
-                        await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
-                        before = await shoot()
-                        press("a")
-                        await asyncio.sleep(0.6)
-                        if not await answered(before):
-                            pressed += 1
-                            if pressed >= 3:
-                                return (f"arrived: at {target} ({time.monotonic() - t0:.0f} "
-                                        "s), facing them, but pressing a brought nothing up: "
-                                        "look")
-                            # Nothing: a step nearer the way it faces (someone without a
-                            # counter between answers only from right beside them), and
-                            # lined up again, closer (the game answers only straight on).
-                            log(f"rooms: nothing came up ({pressed}): a step nearer, "
-                                "lining up again")
-                            steer(angle_to(fx, fy))
-                            await asyncio.sleep(tap)
-                            steer(None)
+                        # Pressed straight on, then a step nearer (someone without a
+                        # counter between answers only from right beside them), then a
+                        # little to each side: a shop's counter answers within ~10 px of
+                        # where the game has it, which isn't always where they're drawn.
+                        base = line_up(tile, at, (fx, fy))
+                        for k, side in enumerate((0, 0, -5, 5, -10, 10)):
+                            if k == 1:
+                                log("rooms: nothing came up: a step nearer")
+                                steer(angle_to(fx, fy))
+                                await asyncio.sleep(tap)
+                                steer(None)
+                            elif k > 1:
+                                log(f"rooms: nothing came up: {abs(side)} px "
+                                    f"{'back' if side < 0 else 'on'} along the way across")
+                                for _ in range(4):
+                                    cur = await look()
+                                    if cur is None or cur.loc != here.loc:
+                                        break
+                                    d = base + side - (cur.x if fy else cur.y)
+                                    if abs(d) <= 2:
+                                        break
+                                    steer(angle_to(d, 0) if fy else angle_to(0, d))
+                                    await asyncio.sleep(tap / 2 if abs(d) < 8 and not
+                                                        here.steam else tap)
+                                    steer(None)
+                                    await asyncio.sleep(STEAM_LEAD if here.steam else 0.05)
+                                steer(angle_to(fx, fy))
+                                await asyncio.sleep(max(0.08, tap))
+                                steer(None)
                             await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
-                            lines = 0
-                            continue
-                        return (f"arrived: at {target}, facing them, and pressed a to talk "
-                                f"({time.monotonic() - t0:.0f} s): read their line to the "
-                                "player word for word; a question in it (rest? buy?) is "
-                                "the player's to answer")
+                            before = await shoot()
+                            press("a")
+                            await asyncio.sleep(0.6)
+                            if await answered(before):
+                                return (f"arrived: at {target}, facing them, and pressed a "
+                                        f"to talk ({time.monotonic() - t0:.0f} s): read their "
+                                        "line to the player word for word; a question in it "
+                                        "(rest? buy?) is the player's to answer")
+                        return (f"arrived: at {target} ({time.monotonic() - t0:.0f} s), "
+                                "facing them, but pressing a brought nothing up: look")
                     return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"
                 settled = False
                 goals = set(ends)
