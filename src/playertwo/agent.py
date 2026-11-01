@@ -1832,6 +1832,12 @@ class Agent:
                     acted = True
                     self._said_before_act = len(self.said)
                     result = self._check_walk(c.function.name, result)
+                    if (c.function.name in ("go_to_place", "go_to_exit", "go_to_era")
+                            and result.startswith("arrived")) or result.startswith("new_area"):
+                        # A new place: the wandering budget is for finding the way in one
+                        # place (live, 2026-11-01: 40 s spent looking round the fair left
+                        # none for walking up to the counter in Truce Market).
+                        self._wander_s = 0.0
                     if result.startswith("new_area"):
                         # Which way it was going when it got here: the way back is behind.
                         self._came_in = (str(args.get("direction") or "")

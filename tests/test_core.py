@@ -585,6 +585,31 @@ class TestAgentHonesty:
         results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
         assert "cut off" not in results[0] and "cut off" in results[1]
 
+    def test_the_wandering_budget_starts_again_in_a_new_place(self, monkeypatch):
+        from playertwo import agent as agent_mod
+
+        agent, _, _, _, muse = self.make([
+            [("walk_to", {"target": "a stall"})],
+            [("go_to_place", {"place": "Truce Market"})],
+            [("talk_to", {"target": "the shopkeeper"})],
+            [("talk_to", {"target": "the shopkeeper"})],
+            [("finish", {"text": "Talked to him."})],
+        ])
+        clock = iter(range(0, 100_000, 50))  # every look at the clock is 50 s later
+        monkeypatch.setattr(agent_mod.time, "monotonic", lambda: next(clock))
+
+        async def act(name, a):
+            if name == "go_to_place":
+                return "arrived: went into Truce Market (5 s)"
+            return "arrived: next to it, facing it"
+
+        agent._act = act
+        run(agent.run("buy potions"))
+        results = [m["content"] for m in muse.seen[-1] if m["role"] == "tool"]
+        assert not results[2].startswith("not done")  # a new place: walking goes again
+        assert results[3].startswith("not done")  # its own budget used up there
+
+
     def test_skipping_text_the_player_asked_to_skip_is_allowed(self):
         agent, pad, _, _, _ = self.make([
             [("press", {"buttons": ["a", "a", "a"], "skipping": True})],
