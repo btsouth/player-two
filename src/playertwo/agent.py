@@ -1888,6 +1888,9 @@ class Agent:
                               "go_to_exit again with the name they pick")
             got = (await self.ask(pick.ask)).split(" (heard hands-free")[0]
             if not got:
+                # Ends the request: no more model turns guessing (live 3: 166 s of
+                # other tries, each asking the same again, and "Got it" with no answer).
+                self._unanswered = "I'll wait till you tell me which one."
                 return None, (f"asked the player \"{pick.ask}\" and got no answer: "
                               "finish and say you'll wait for their pick")
             key = people.answer(got, pick.options, me)
@@ -2357,6 +2360,7 @@ class Agent:
         self._settled_pick = None  # who the player picked when asked, this request
         self._theirs = None  # who the player's own words meant, this request
         self._theirs_done = False  # gone to them: later calls are the model's own
+        self._unanswered = ""  # what to say when a question went unanswered: the end
         self.cancelled = False
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
@@ -2415,6 +2419,9 @@ class Agent:
                 and "pressed a" not in result
             if done and not self.cancelled:
                 await self._speak("We're there.")
+            if self._unanswered and not self.cancelled:
+                await self._speak(self._unanswered)  # asked which one, no answer
+                done = True
             if self.cancelled or done:
                 run.outcome = "cancelled" if self.cancelled else \
                     (self.said[-1] if self.said else result)
@@ -2579,6 +2586,8 @@ class Agent:
                             "No answer. Don't do it; finish and say you'll wait.")
                         if answer:
                             budget = max(budget, _turn + 1 + self.max_turns // 2)
+                        else:
+                            self._unanswered = "Okay, I'll wait till you decide."
                 elif c.function.name == "remember":
                     result = self.notes.add(self.game, str(args.get("note") or ""),
                                             str(args.get("instead_of") or ""))
@@ -2619,6 +2628,8 @@ class Agent:
                                          else way(getattr(self, "_facing", None)))
                 step.result = result
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
+                if self._unanswered and finished is None:
+                    finished = self._unanswered  # asked and no answer: done here
             if self.cancelled:
                 run.outcome = "cancelled"
                 out_of_turns = False

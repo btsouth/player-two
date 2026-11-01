@@ -216,3 +216,53 @@ def test_whos_here_words():
     assert local_action("where am i") == "describe"
     assert local_action("look around") == "describe"
     assert local_action("who's the boss here") is None
+
+
+def test_no_answer_to_which_one_ends_the_request(tmp_path, monkeypatch):
+    """Live 3: "talk to the old man by the stalls", asked which one and not answered: the
+    model went on for 166 s, said "Got it" and asked the same three more times."""
+    asked = []
+
+    async def ask(question):
+        asked.append(question)
+        return ""
+
+    muse = Muse()
+    agent, sim, said, rooms = agent_in(tmp_path, monkeypatch, ask=ask, muse=muse)
+    rooms.rooms[2].people += [Person("the old man by the window", "person", (72.0, 60.0)),
+                              Person("the old man by the stairs", "person", (280.0, 60.0))]
+    run = asyncio.run(agent.run("talk to the old man"))
+    assert len(asked) == 1 and not muse.seen  # no model turn after it
+    assert said[-1] == "I'll wait till you tell me which one."
+    assert run.outcome == "I'll wait till you tell me which one."
+    assert not sim.pressed
+
+
+class AskingMuse(Muse):
+    """A model that asks the player something, then (if it gets another turn) walks."""
+
+    def __init__(self, calls):
+        super().__init__()
+        self.calls = list(calls)
+
+    async def tools(self, messages, tools, effort=None, max_tokens=3000):
+        self.seen.append(messages)
+        name, args = self.calls.pop(0)
+        dump = {"id": "c0", "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)}}
+        return SimpleNamespace(content="", tool_calls=[SimpleNamespace(
+            id="c0", function=SimpleNamespace(name=name, arguments=json.dumps(args)),
+            model_dump=lambda: dump)])
+
+
+def test_no_answer_to_the_models_question_ends_the_request(tmp_path, monkeypatch):
+    async def ask(question):
+        return ""
+
+    muse = AskingMuse([("ask_player", {"question": "Take a look, or no thanks?"}),
+                       ("hold", {"direction": "up", "ms": 800})])
+    agent, sim, said, _rooms = agent_in(tmp_path, monkeypatch, ask=ask, muse=muse)
+    run = asyncio.run(agent.run("what should I do here?"))
+    assert len(muse.seen) == 1  # no second turn
+    assert said[-1] == "Okay, I'll wait till you decide."
+    assert run.outcome == "Okay, I'll wait till you decide."
