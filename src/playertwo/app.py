@@ -804,6 +804,8 @@ class Session:
             # count, so the next frame gets a fresh one.
             self.read_thumb = None
             return
+        self.reader.verbosity = self.narrator.verbosity
+        self.reader.team_up = self.narrator.team_up
         line = self.reader.update(lk)
         opened = lk.readable and not self.read_owned
         self.read_owned, self.read_t = lk.readable, frame.t

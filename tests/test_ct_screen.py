@@ -172,7 +172,7 @@ async def test_the_session_says_what_the_reader_reads_and_leaves_the_rest_to_the
     s.paused, s.agent_task, s.narrating = False, None, None
     s.watcher = SimpleNamespace(settle_s=0.3)
     s.utt, s.transcribing, s.hands_active = None, False, False
-    s.narrator = SimpleNamespace(recent=deque(maxlen=4))
+    s.narrator = SimpleNamespace(recent=deque(maxlen=4), verbosity="normal", team_up=False)
     said, events = [], []
     s.events = SimpleNamespace(emit=lambda kind, **k: events.append((kind, k)))
 
@@ -281,7 +281,7 @@ async def test_a_box_the_reader_hands_to_the_model_isnt_cut_off_by_the_next_look
     s.read_last_line, s.describing = "", None
     s.paused, s.agent_task, s.narrating = False, None, None
     s.utt, s.transcribing, s.hands_active = None, False, False
-    s.narrator = SimpleNamespace(recent=deque(maxlen=4))
+    s.narrator = SimpleNamespace(recent=deque(maxlen=4), verbosity="normal", team_up=False)
     s.events = SimpleNamespace(emit=lambda kind, **k: None)
     s._tasks = set()
     started = []
@@ -422,3 +422,26 @@ def test_a_fight_coming_up_asks_the_model_what_the_party_faces_once():
     r.fight_started = False
     r.update(look("battle", turn="Crono's turn", focus="Attack"), now=2)
     assert not r.fight_started  # the same fight
+
+
+def test_text_that_pauses_then_types_on_is_read_on_from_where_it_stopped():
+    r = Reader()
+
+    def box(t):
+        return look("text", typing=("text",), text=t)
+
+    r.update(box("Crono! Crono!"), now=0)
+    assert r.update(box("Crono! Crono!"), now=0.3) == "Crono! Crono!"
+    r.update(box("Crono! Crono! Come on, sleep"), now=0.6)
+    r.update(box("Crono! Crono! Come on, sleepyhead!"), now=0.9)
+    assert r.update(box("Crono! Crono! Come on, sleepyhead!"), now=1.2) == "Come on, sleepyhead!"
+
+
+def test_quiet_and_team_up_say_less():
+    r = Reader()
+    r.verbosity = "quiet"
+    lk = look("battle", top="Earned 648 EXP.", danger="Frog 1 HP")
+    assert r.update(lk, now=0) == "Frog 1 HP."
+    r2 = Reader()
+    r2.team_up = True
+    assert r2.update(look(focus="Equipment"), now=0) == ""

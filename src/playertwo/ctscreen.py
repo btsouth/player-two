@@ -369,6 +369,8 @@ class Reader:
         self.last: list[str] = []  # the parts said by the last update
         self.model_read = False  # a whole text box that doesn't read cleanly: ask the model
         self.fight_started = False  # a battle just came up: the model says what we face
+        self.verbosity = "normal"  # the narrator's setting: "quiet" says less
+        self.team_up = False  # the game reads its own menus
         self.hp: dict[str, tuple[int, int]] = {}  # party HP as last read steadily
         self.hp_new: dict[str, tuple[int, int]] = {}  # and as the last look read it
         self.text_since: float | None = None  # when a box that doesn't read cleanly came up
@@ -448,6 +450,8 @@ class Reader:
         if lk.kind == "none":
             return ""
         hits = self._hits(lk)
+        if self.verbosity == "quiet":
+            hits = ""  # quiet: text, decisions and danger only
         if lk.kind == "text" and lk.unsure:
             if self.text_since is None:
                 self.text_since = now
@@ -462,6 +466,9 @@ class Reader:
             if part == "danger" and hits:
                 out.append(hits)
             value = lk.parts.get(part, "")
+            if (self.verbosity == "quiet" and part in ("top", "desc", "title")
+                    or self.team_up and lk.kind in ("menu", "choice")):
+                value = ""  # the game's own narrator reads its menus (team up)
             old_value, n = self.seen.get(part, ("", 0))
             n = n + 1 if value == old_value else 1
             self.seen[part] = (value, n)
@@ -492,9 +499,13 @@ class Reader:
                         self.model_read = True  # whole now, but read by the model
                         self.text_handed = part == "text"
                     continue
+            before = self.said.get(part, "")
             self.said[part] = value
             if part == "danger":
                 self.texts["danger:" + value] = now
+            if part in lk.typing and before and value.startswith(before) and len(value) > len(before):
+                # It paused after a sentence, then typed on: only the rest is new.
+                value = value[len(before):].strip()
             out.append(value)
         self.texts = {t: w for t, w in self.texts.items() if now - w < self.forget_s}
         self.last = [p for p in (lk.order or ORDER) if self.said.get(p) and lk.parts.get(p) in out]
