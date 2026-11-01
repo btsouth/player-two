@@ -217,28 +217,44 @@ class Voice:
                 first = False
             self.mixer.push_speech(samples)
 
-    async def say_stream(self, deltas, interrupt: bool = True) -> str:
-        """Speak streamed model text, starting as soon as the first sentence is complete."""
+    async def say_stream(self, deltas, interrupt: bool = True, gate=None, tag: str = "") -> str:
+        """Speak streamed model text, starting as soon as the first sentence is complete.
+
+        gate: awaited before each sentence starts; when it returns False, the rest isn't
+        said (narration waiting for a gap in the game's own speech). tag: marks the
+        sentences in the mixer, so they can be told apart while they play."""
         if interrupt:
             self.stop()
         queued = self._gen
         async with self._lock:
-            return await self._say_stream(deltas, queued)
+            return await self._say_stream(deltas, queued, gate, tag)
 
-    async def _say_stream(self, deltas, mine: int) -> str:
+    async def _say_stream(self, deltas, mine: int, gate=None, tag: str = "") -> str:
         if mine != self._gen:
             return ""
         gen = self._gen
         buf = ""
         spoken: list[str] = []
+        said: list[str] = []  # what reached the speaker (spoken, less anything gated off)
+        gated = False
         pending: asyncio.Task | None = None
 
         async def speak_chunk(chunk: str, prev: asyncio.Task | None) -> None:
+            nonlocal gated
             samples = await asyncio.to_thread(self._synth, chunk)
             if prev is not None:
                 await prev
+            if gated or gen != self._gen:
+                return
+            if gate is not None and not await gate():
+                gated = True
+                return
             if gen == self._gen:
-                self.mixer.push_speech(samples)
+                if tag:
+                    self.mixer.push_speech(samples, tag)
+                else:
+                    self.mixer.push_speech(samples)
+                said.append(chunk)
 
         chunks_left: list[asyncio.Task] = []
 
@@ -272,6 +288,8 @@ class Voice:
             for task in chunks_left:
                 task.cancel()
             raise
+        if gate is not None:
+            spoken = said
         self.last_spoken = " ".join(spoken)
         return self.last_spoken
 

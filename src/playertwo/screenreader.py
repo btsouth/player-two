@@ -377,12 +377,23 @@ class ScreenReaderVoice:
         self.last_spoken = text
         await self._send(text)
 
-    async def say_stream(self, deltas, interrupt: bool = True) -> str:
+    async def say_stream(self, deltas, interrupt: bool = True, gate=None, tag: str = "") -> str:
         if interrupt:
             self.stop()
         gen = self._gen
         buf = ""
         spoken: list[str] = []
+        gated = False
+
+        async def send(text: str) -> None:
+            # gate: wait for a gap in the game's own speech; False drops the rest.
+            nonlocal gated
+            if gated or (gate is not None and not await gate()):
+                gated = True
+                return
+            spoken.append(text)
+            await self._send(text)
+
         async for delta in deltas:
             if gen != self._gen:
                 return " ".join(spoken)
@@ -391,13 +402,11 @@ class ScreenReaderVoice:
             for done in parts[:-1]:
                 done = clean_for_speech(done)
                 if speakable(done):
-                    spoken.append(done)
-                    await self._send(done)
+                    await send(done)
             buf = parts[-1]
         tail = clean_for_speech(buf)
         if speakable(tail) and gen == self._gen:
-            spoken.append(tail)
-            await self._send(tail)
+            await send(tail)
         self.last_spoken = " ".join(spoken)
         return self.last_spoken
 

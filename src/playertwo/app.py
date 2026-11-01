@@ -20,10 +20,11 @@ from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, ControlsError, open_controls
+from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
-from .prompts import BATTLE_START, PLACE_FEEL, PLACE_SAID
+from .prompts import BATTLE_START, PLACE_FEEL, PLACE_SAID, VOICE_NOW, VOICED_GAME
 from .screen import (
     Capture,
     CaptureError,
@@ -331,6 +332,16 @@ class Session:
         self.follow_until = 0.0
         self.spoke_at = 0.0
         self.narrating_text = ""
+        # Hearing the game's own voices (gameaudio.py): None until started, or where it
+        # can't listen. Whether the narration being said is audio description (dropped
+        # when no gap comes), and when the last such line was said.
+        self.ears: GameEars | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.narration_ad = False
+        self.ad_said_at = 0.0
+        self.holding: asyncio.Task | None = None
+        self.holds = 0  # times the narration being said was held for the game's voices
+        self._hints: dict[str, str] = {}
         # When Player Two was speaking lately, as [start, end] times.
         self.spans: deque[list[float]] = deque(maxlen=64)
         # The speech (by when it began) and how many "Player Two, stop"s in it were acted on.
@@ -417,6 +428,7 @@ class Session:
         before, self.game = self.game, found
         name = self.s.game or (found if isinstance(found, str) else "")
         self.narrator.game = self.agent.game = name
+        self._hints = {}  # a pack may have been added since
         self.keywords = game_keywords(name)
         self.events.emit("game", name=name, found=found is not False)
         if not announce or before is None:
@@ -690,9 +702,22 @@ class Session:
         t = time.monotonic()
 
         self.narrating_text = ""
+        # The game says this screen's lines itself: no reading them, only a few words on
+        # what's seen, and only in a gap in its speech.
+        try:
+            voice = self._voice_note(frame)
+        except Exception:  # noqa: BLE001  can't tell: narrate as if the game were silent
+            voice = ""
+        self.narration_ad = bool(voice)
+        self.holds = 0
+
+        def narrate(more: str = ""):
+            if voice:
+                return self.narrator.narrate(frame, more, voice=voice)
+            return self.narrator.narrate(frame, more) if more else self.narrator.narrate(frame)
 
         async def deltas():
-            gen = self.narrator.narrate(frame, extra) if extra else self.narrator.narrate(frame)
+            gen = narrate(extra)
             # The model starts at once; the place's name (if this is a new one) goes first,
             # and the first time there, what it's like.
             first = asyncio.ensure_future(anext(gen, None))
@@ -723,7 +748,7 @@ class Session:
                     await gen.aclose()
                     if line:
                         self.narrator.recent.append(head)
-                    gen = self.narrator.narrate(frame, PLACE_FEEL if ask else PLACE_SAID)
+                    gen = narrate(PLACE_FEEL if ask else PLACE_SAID)
                     first = asyncio.ensure_future(anext(gen, None))
                 d = await first
                 while d is not None:
@@ -735,7 +760,11 @@ class Session:
                 await gen.aclose()
 
         try:
-            text = await self.voice.say_stream(deltas(), interrupt=interrupt)
+            if self._ears_on():
+                text = await self.voice.say_stream(deltas(), interrupt=interrupt,
+                                                   gate=self._narration_gap, tag="narration")
+            else:
+                text = await self.voice.say_stream(deltas(), interrupt=interrupt)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001  say it, back off, keep watching
@@ -748,8 +777,11 @@ class Session:
         if text:
             self.silent_streak = 0
             self.quiet_until = 0.0
+            if voice:
+                self.ad_said_at = time.monotonic()
             self.events.emit("say", text=text, source="narrator",
-                             latency=round(time.monotonic() - t, 2))
+                             latency=round(time.monotonic() - t, 2),
+                             **({"voiced": True} if voice else {}))
         else:
             self.silent_streak += 1
             self.quiet_until = time.monotonic() + min(16.0, 2.0 ** self.silent_streak)
@@ -777,6 +809,8 @@ class Session:
                 self.pending = None  # the reader says what this screen needs
                 return
         cut = change >= self.SCENE_CUT and time.monotonic() >= self.soft_until
+        if self._hold_for_game(frame, cut):
+            return  # the game's own voices: wait for a gap, and let a voice start first
         if not cut and not self.voice.idle():
             return  # let the last line finish; we'll narrate the newest screen after
         if not cut and time.monotonic() < self.quiet_until:
@@ -785,6 +819,153 @@ class Session:
         # A whole new scene (a battle starting, a menu opening) cuts off old talk about
         # the last one, like a friend would.
         self.narrating = asyncio.create_task(self._narrate(frame, interrupt=cut))
+
+    # Hearing the game (gameaudio.py): a blind player hears the game's own voices, so
+    # Player Two never talks over them, doesn't read their subtitles, and fits a few words
+    # about what's seen into the gaps, like an audio description track.
+
+    # After a screen settles in a game that has spoken, wait this long before narrating
+    # it: a voice that comes with a new line of text has been heard by then (the detector
+    # needs about a quarter second of it).
+    VOICE_WAIT_S = 0.45
+    # Narration waits for a gap in the game's speech at most this long. Then audio
+    # description is dropped (the moment has passed), and anything else (a menu, a prompt,
+    # text no one speaks) is said anyway: singing in a game's music sounds like speech, and
+    # it mustn't keep the player from hearing what's on screen.
+    GAP_MAX_S = 3.0
+    # At most one line of audio description this often, unless the scene cuts.
+    AD_SPACING_S = 5.0
+
+    async def start_ears(self) -> None:
+        """Start listening to the game's own sound (Linux; a no-op elsewhere). The speech
+        detector's model is fetched the first time (2 MB), off the event loop."""
+        if not self.s.hear_game:
+            return
+        self.loop = asyncio.get_running_loop()
+        ears = GameEars(self._game_identity, on_speech=self._ears_heard)
+        try:
+            if await asyncio.to_thread(ears.start):
+                self.ears = ears
+        except Exception as exc:  # noqa: BLE001  without ears, narration is as before
+            self.events.emit("error", where="game_ears", message=str(exc)[:300])
+
+    def stop_ears(self) -> None:
+        ears, self.ears = getattr(self, "ears", None), None
+        if ears is not None:
+            ears.stop()
+
+    def _game_identity(self) -> tuple[int | None, str]:
+        """The game window's process and Steam app id (read from the ears' thread); none
+        for a game whose pack says it never speaks, so nothing is listened to."""
+        if self._voiced_hint() == "none":
+            return None, ""
+        return window_identity(getattr(self.capture, "target", None))
+
+    def _voiced_hint(self) -> str:
+        """The game pack's "Voiced:" line: "all", "none" or "" (listen)."""
+        game = getattr(self.narrator, "game", "") or ""
+        if not game:
+            return ""
+        hints = getattr(self, "_hints", None)
+        if hints is None:
+            hints = self._hints = {}
+        if game not in hints:
+            notes = getattr(getattr(self, "agent", None), "notes", None)
+            try:
+                pack = voiced_hint(notes.pack(game)) if notes is not None else ""
+            except Exception:  # noqa: BLE001  no pack: listen
+                pack = ""
+            hints[game] = pack or known_voicing(game)
+        return hints[game]
+
+    def _ears_on(self) -> bool:
+        return getattr(self, "ears", None) is not None and self._voiced_hint() != "none"
+
+    def _voice_note(self, frame: Frame) -> str:
+        """What the narrator is told about the game's own voices on this screen: they're
+        saying its lines (speech heard since it changed), the game speaks all its lines
+        (its pack says so), or nothing (read the text)."""
+        hint = self._voiced_hint()
+        if hint == "none":
+            return ""
+        ears = getattr(self, "ears", None)
+        if ears is not None:
+            changed = frame.changed_at if frame.changed_at is not None else frame.t - 0.3
+            # Speech still going a moment after the screen changed, or starting with it:
+            # the words on it are being spoken. A line cut off by the press that changed
+            # the screen ended before that; a voice starting long after it settled (a
+            # passer-by, a bark) isn't this text's.
+            until = min(time.monotonic(), frame.t + self.VOICE_WAIT_S + 1.0)
+            if ears.heard_between(max(changed, frame.t - 1.0) + 0.25, until):
+                return VOICE_NOW
+        return VOICED_GAME if hint == "all" else ""
+
+    def _hold_for_game(self, frame: Frame, cut: bool) -> bool:
+        """Whether narration of this screen waits: the game is talking, or a voice may be
+        about to start with this screen's text, or audio description was just given."""
+        if not self._ears_on():
+            return False
+        ears = self.ears
+        now = time.monotonic()
+        if ears.speaking():
+            # A cutscene keeps bringing new screens, so it waits for gaps; a still screen
+            # waits only so long (see GAP_MAX_S).
+            return now - frame.t < self.GAP_MAX_S
+        if self._voiced_hint() == "" and ears.ever() and now < frame.t + self.VOICE_WAIT_S:
+            return True
+        return bool(not cut and now - self.ad_said_at < self.AD_SPACING_S
+                    and self._voice_note(frame))
+
+    async def _narration_gap(self) -> bool:
+        """Before each sentence of narration: wait for a gap in the game's speech. When
+        none comes in time, audio description isn't said (False); anything else is."""
+        end = time.monotonic() + self.GAP_MAX_S
+        while self._ears_on() and self.ears.speaking():
+            if time.monotonic() >= end:
+                return not self.narration_ad
+            await asyncio.sleep(0.05)
+        return True
+
+    def _ears_heard(self, start: float) -> None:
+        """The game started to speak (called from the ears' thread)."""
+        loop = getattr(self, "loop", None)
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self._game_spoke)
+
+    # A line of narration is held for the game's voices at most this many times; then
+    # audio description is dropped and anything else goes on (gaps too short to fit it).
+    MAX_HOLDS = 2
+
+    def _game_spoke(self) -> None:
+        """Narration being said stops the moment the game speaks, and starts its sentence
+        over once the game stops. If the game goes on too long, audio description is
+        dropped and anything else goes on over it (see GAP_MAX_S)."""
+        if not self._ears_on() or self.mixer.current_tag() != "narration":
+            return
+        if self.holding is not None and not self.holding.done():
+            return  # already held
+        self.holds = getattr(self, "holds", 0) + 1
+        if self.holds > self.MAX_HOLDS:
+            if self.narration_ad:
+                self.voice.stop()  # the gaps are too short for it
+            return
+        self.mixer.hold_speech(True)
+        self.events.emit("note", text="game speaking: narration held")
+        self.holding = asyncio.create_task(self._hold_until_gap())
+
+    async def _hold_until_gap(self) -> None:
+        end = time.monotonic() + self.GAP_MAX_S
+        try:
+            while self._ears_on() and self.ears.speaking() and self.mixer.held:
+                if time.monotonic() >= end:
+                    # Only the held narration: an answer the player asked for that took
+                    # its place (it cleared the lane) isn't touched.
+                    if self.narration_ad and self.mixer.current_tag() == "narration":
+                        self.voice.stop()  # stale by now
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            self.mixer.hold_speech(False)
 
     async def _typed_out(self, most: float = 2.5) -> Frame:
         """The screen once text has finished typing out after a press (or after `most`
@@ -2082,6 +2263,7 @@ class Session:
         if self.s.hands_free and not await self.start_hands_free():
             self.problems.append(HANDS_FREE_PROBLEM)
         await asyncio.to_thread(self.voice.warm_up)
+        self.spawn(self.start_ears())  # never holds up the greeting (a first-time download)
         # Find the game before saying hello, so the greeting can name it.
         try:
             frame = await self.grab_now(show=True)
@@ -2125,6 +2307,7 @@ class Session:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        self.stop_ears()
         if self.window is not None:
             self.window.close()
         self.controls.close()

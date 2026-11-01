@@ -19,6 +19,20 @@ The parts, in the order a moment of play goes through them. File names are under
   and every screen in games without a profile, go to Muse Spark, whose answer streams into the
   voice sentence by sentence, so speech starts before the model has finished. It stays silent
   while the agent is acting, so it never talks over what you asked for.
+- **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two never
+  talks over the game's own voices. It listens to the game's own sound stream on PipeWire or
+  PulseAudio (found from the game window's process, so Player Two's own voice is never in
+  it), and the speech detector used for hands-free listening (Silero VAD) tells voices from
+  music and effects, frame by frame. Narration waits for a gap in the game's speech, and a
+  sentence already playing stops within about a quarter second of a voice starting and
+  starts over once it ends (or is dropped after a few seconds, the moment gone). Subtitles of
+  lines the game is saying aloud aren't read; in a voiced cutscene the narrator adds only
+  what's seen, in a short sentence, like an audio description track. Text no one speaks is
+  read as before. A game pack's `Voiced: all` or `Voiced: none` line settles it for games
+  that always or never speak; otherwise each screen is judged by what's heard. Measured with
+  `scripts/game_speech_bench.py` on game audio (XCOM 2's cinematic music and effects,
+  Chrono Trigger's music, and lines laid over them at known times). Linux only for now;
+  `hear_game = false` turns it off.
 - **Places** (`narrator.py`, `rooms.py`): "what does it look like?" gets a few sentences of
   setting, light, colours and mood from Muse Spark, after the place's name from the room survey.
   The first time you walk into a surveyed place in a session, its name comes with one line on

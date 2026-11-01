@@ -123,6 +123,24 @@ ATMOSPHERE_LENGTH = {"terse": "two short sentences, about 25 words",
                      "normal": "two to four short sentences, about 50 words",
                      "detailed": "four or five sentences, about 80 words"}
 
+# The game's own voices are saying this screen's lines (heard on its sound stream).
+VOICE_NOW = """\
+The game's voice actors are saying this screen's lines aloud right now, and the player \
+hears them: they can't see, but they can hear. Don't read the dialogue or subtitles, and \
+don't say who is talking or what they said. Like an audio description track, add only \
+what the voices don't give: what visibly happens (who appears, what they do, a new \
+place), in one short sentence of at most twelve words. If nothing new is happening, \
+reply <silent>. A choice, menu or prompt the player has to answer is still read as \
+usual."""
+
+# The game pack says every dialogue line and subtitle in this game is spoken.
+VOICED_GAME = """\
+This game speaks all its dialogue and subtitles aloud, and the player hears them, so \
+never read dialogue lines or subtitles. Other text nobody speaks (menus, choices, \
+prompts, tutorial boxes, item and skill text) is read as usual. In a cutscene, like an \
+audio description track, say only what visibly happens that the voices don't, in one \
+short sentence, or <silent>."""
+
 # The first time Player Two sees a place it has no line ready for (not surveyed).
 PLACE_FEEL = """\
 The player has just arrived somewhere new to them. If this screen is a place they're \

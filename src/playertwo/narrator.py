@@ -79,11 +79,14 @@ class Narrator:
             parts.append(GAME_CONTEXT.format(game=self.game))
         return "\n".join(p for p in parts if p)
 
-    def messages(self, frame: Frame, extra: str = "") -> list[dict]:
+    def messages(self, frame: Frame, extra: str = "", voice: str = "") -> list[dict]:
+        """voice: what the game's own voices are doing (prompts.VOICE_NOW, VOICED_GAME),
+        when its lines are spoken aloud."""
         said = "\n".join(f"- {r}" for r in self.recent) or "- (nothing yet)"
+        text = "\n\n".join(x for x in (f"You said recently:\n{said}", voice, extra) if x)
         content = [
             image_part(frame.image, self.muse.s.image_max_side),
-            {"type": "text", "text": f"You said recently:\n{said}\n\n{extra}".strip()},
+            {"type": "text", "text": text.strip()},
         ]
         return [{"role": "system", "content": self.system()},
                 {"role": "user", "content": content}]
@@ -127,16 +130,18 @@ class Narrator:
         x, y = set(_words(a)), set(_words(b))
         return bool(x and y) and len(x & y) / len(x | y) >= 0.75
 
-    async def narrate(self, frame: Frame, extra: str = "") -> AsyncIterator[str]:
+    async def narrate(self, frame: Frame, extra: str = "", voice: str = ""
+                      ) -> AsyncIterator[str]:
         """Stream what to say about a newly settled frame. Yields nothing when silent.
-        `extra`: what this look is for, when it isn't an ordinary one."""
+        `extra`: what this look is for, when it isn't an ordinary one. `voice`: the game is
+        speaking this screen's lines itself (see messages)."""
         t = time.monotonic()
         text = ""  # what was said (a repeated opening left out)
         head = ""
         decided = False
         silent = False
         repeated = False  # the opening repeated: hold the rest and keep only what's new
-        stream = self.muse.stream(self.messages(frame, extra))
+        stream = self.muse.stream(self.messages(frame, extra, voice))
         try:
             async for delta in stream:
                 if decided:

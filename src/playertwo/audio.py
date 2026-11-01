@@ -31,7 +31,10 @@ class Mixer:
     def __init__(self, sink: str = "device"):
         self._lock = threading.Lock()
         self._speech: deque[np.ndarray] = deque()
+        self._tags: deque[str] = deque()  # what each queued sentence is ("narration")
         self._speech_pos = 0
+        # Speech held back while the game's own voices talk (see hold_speech).
+        self.held = False
         self._cues: list[list] = []  # [stereo samples, position]
         self.idle = threading.Event()
         self.idle.set()
@@ -119,11 +122,12 @@ class Mixer:
         if self._stream is not None:
             self._stream.close(ignore_errors=True)
 
-    def push_speech(self, mono: np.ndarray) -> None:
+    def push_speech(self, mono: np.ndarray, tag: str = "") -> None:
         if not self.playing():
             return  # nowhere to play it; queueing would leave everyone waiting on it
         with self._lock:
             self._speech.append(np.asarray(mono, dtype=np.float32))
+            self._tags.append(tag)
             self.idle.clear()
         if self.sink == "file":
             self.recorded.append(np.asarray(mono, dtype=np.float32))
@@ -132,8 +136,23 @@ class Mixer:
     def clear_speech(self) -> None:
         with self._lock:
             self._speech.clear()
+            self._tags.clear()
             self._speech_pos = 0
+            self.held = False
             self.idle.set()
+
+    def current_tag(self) -> str | None:
+        """The tag of the sentence playing (or next to play), None when there's none."""
+        with self._lock:
+            return self._tags[0] if self._tags else None
+
+    def hold_speech(self, on: bool) -> None:
+        """Pause the speech lane (cues go on), or let it go again. The sentence that was
+        playing starts over from its beginning when let go, so no half word is left."""
+        with self._lock:
+            if on and not self.held:
+                self._speech_pos = 0
+            self.held = on
 
     def cue(self, mono: np.ndarray, pan: float = 0.0, gain: float = 0.6) -> None:
         """Play a short sound. pan is -1 (left) to 1 (right)."""
@@ -149,6 +168,7 @@ class Mixer:
     def drain_offline(self) -> None:
         with self._lock:
             self._speech.clear()
+            self._tags.clear()
             self._speech_pos = 0
             self.idle.set()
 
@@ -156,7 +176,7 @@ class Mixer:
         out.fill(0)
         with self._lock:
             filled = 0
-            while filled < frames and self._speech:
+            while filled < frames and self._speech and not self.held:
                 buf = self._speech[0]
                 take = min(frames - filled, len(buf) - self._speech_pos)
                 chunk = buf[self._speech_pos : self._speech_pos + take]
@@ -166,6 +186,8 @@ class Mixer:
                 self._speech_pos += take
                 if self._speech_pos >= len(buf):
                     self._speech.popleft()
+                    if self._tags:
+                        self._tags.popleft()
                     self._speech_pos = 0
             if not self._speech:
                 self.idle.set()
