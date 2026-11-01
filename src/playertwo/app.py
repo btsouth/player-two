@@ -565,8 +565,9 @@ class Session:
     async def _place(self, frame: Frame) -> str:
         """The surveyed place this screen shows, when it's a different one from the last
         named (Chrono Trigger on Steam: the room survey knows it in about 0.3 s). The
-        game never shows these names, and the model must never make one up."""
-        if not self._reads(frame):
+        game never shows these names, and the model must never make one up. (Room matching
+        works on small frames too, unlike reading the font.)"""
+        if not self.agent._ct_steam(frame):
             return ""
         from .rooms import Rooms
 

@@ -121,7 +121,28 @@ def score(e: dict, said: str) -> dict:
     out["made_up"] = made_up
     tp = e.get("true_place")
     out["unshown_true"] = bool(tp) and has(said, tp) and tp not in e.get("shown", [])
+    if e["kind"] == "field" and tp:
+        out["place"] = has(said, tp)
     return out
+
+
+_ROOMS: list = []
+
+
+def place_of(image) -> str:
+    """The surveyed place on screen, as Session._place names it (no memory of the last)."""
+    from playertwo.rooms import Rooms
+
+    if not _ROOMS:
+        _ROOMS.append(Rooms.for_game("Chrono Trigger"))
+    rooms = _ROOMS[0]
+    here = rooms.locate(image) if rooms else None
+    if here is None or here.loc in rooms.worlds:
+        return ""
+    name = rooms.name(here.loc)
+    if name.startswith("place 0x"):
+        return ""
+    return name.split(",")[0] if len(name.split()) > 4 else name
 
 
 # The party in menu order, as the screens before these showed it (the reader remembers it).
@@ -184,7 +205,10 @@ async def run(args) -> None:
                         first = first if text else (f2 or 0) + (time.monotonic() - t0 - (f2 or 0))
                         text = f"{text} {more}".strip()
                     elif not lk.readable:
+                        # As the session does: a surveyed place's name first, then the model.
+                        place = await asyncio.to_thread(place_of, frame.image)
                         text, first = await narrate_model(narr, frame)
+                        text = f"{place}. {text}".strip() if place else text
                 else:
                     text, first = await narrate_model(narr, frame)
                 err = ""
@@ -231,10 +255,12 @@ def summarize(args) -> None:
         med = firsts[len(firsts) // 2] if firsts else float("nan")
         p90 = firsts[int(0.9 * (len(firsts) - 1))] if firsts else float("nan")
         silent = sum(not r["said"] for _e, r, _sc in rs)
+        places = [sc["place"] for _e, _r, sc in rs if "place" in sc]
         print(f"{label:<15} n={len(rs):>3} read={mean(reads):.2f} exact={sum(exact)}/{len(exact)}"
               f" must={mean(must):.2f} danger={mean(dz):.2f} partial_read={sum(part)}/{len(part)}"
               f" made_up={sum(made)}/{len(made)} words={mean([sc['words'] for *_x, sc in rs]):.1f}"
-              f" silent={silent} first_med={med:.2f} p90={p90:.2f}")
+              f" silent={silent} first_med={med:.2f} p90={p90:.2f}"
+              + (f" place_named={sum(places)}/{len(places)}" if places else ""))
     kinds = sorted({e["kind"] for e, _r, _s in rows})
     for k in kinds:
         show(k, [x for x in rows if x[0]["kind"] == k])
