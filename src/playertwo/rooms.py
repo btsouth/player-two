@@ -1252,6 +1252,17 @@ def lead(here: Here, trail) -> tuple[float, float]:
     return here.x + dx * k, here.y + dy * k
 
 
+FIGHT_STARTED = ("interrupted: a fight started on the way (the party's HP box is up): win "
+                 "or run it with the battle tools, then go on")
+
+
+def fighting(image) -> bool:
+    """Whether a Steam frame shows a fight (the party's HP box, a battle list or glove)."""
+    from . import ctsteam
+
+    return image is not None and ctsteam.read(image, full=False).in_battle
+
+
 async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                    limit: float = 90.0, start: Here | None = None, label: str = "",
                    spot: tuple[float, float] | Target | None = None, press=None,
@@ -1597,6 +1608,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             elif now_t - best[2] > 6.0 and len(path) > 1:
                 # No nearer in a while, though it wobbles about (pushing into a corner
                 # the survey thought open, or round someone): that way is shut.
+                if here.steam and await asyncio.to_thread(fighting, shot):
+                    steer(None)
+                    return FIGHT_STARTED
                 stalls += 1
                 if path[1] not in goals:
                     room.learned.add(path[1])
@@ -1614,6 +1628,11 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 trail.popleft()
             if now_t - stuck_t > 2.0 and now_t - trail[0][0] > 1.6 and all(
                     p[1] == here.loc and math.dist(p[2:], (here.x, here.y)) < 5 for p in trail):
+                if here.steam and await asyncio.to_thread(fighting, shot):
+                    # A fight on the field looks like the place, the party standing still
+                    # (live: 13 "stuck" steps in a Guardia Forest fight, then "blocked").
+                    steer(None)
+                    return FIGHT_STARTED
                 stalls += 1
                 rad = math.radians(a)
                 ahead = (int((here.y - 12 * math.cos(rad)) // TILE),

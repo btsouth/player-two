@@ -182,3 +182,12 @@ def test_steam_mountain_of_woe():
         h = r.locate(rgb(p))
         assert h is not None and h.loc == 0x189, p.name
         assert h.tile in r.rooms[0x189].walk, p.name
+
+
+@pytest.mark.skipif(not (FRAMES / "forest-041307-04.jpg").exists(), reason="no forest frames")
+def test_a_fight_on_the_field_is_told_from_the_field():
+    """The walker stopped 13 times "stuck" in a Guardia Forest fight, then said blocked."""
+    from playertwo.rooms import fighting
+
+    assert fighting(Image.open(FRAMES / "forest-041307-04.jpg"))
+    assert not fighting(Image.open(FRAMES / "forest-field-north.png"))
