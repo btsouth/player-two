@@ -309,6 +309,8 @@ QUESTIONS = [
     ("140406-00", "what's my HP", ["Crono", "811", "347", "430"]),
     ("175358-00", "what's Frog's HP", ["Frog", "494"]),
     ("h-menu-summit", "how's everyone doing", ["811", "455", "199"]),
+    ("h-004556-00", "what's that person saying", ["Frog", "So this is the prison that holds "
+                                                  "the Guru of Life"]),
 ]
 
 

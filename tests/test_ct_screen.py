@@ -469,3 +469,16 @@ def test_quiet_and_team_up_say_less():
     r2 = Reader()
     r2.team_up = True
     assert r2.update(look(focus="Equipment"), now=0) == ""
+
+
+def test_what_did_he_say_repeats_the_last_box_once_it_is_gone():
+    r = Reader()
+    box = look("text", typing=("text",), text="Frog: We must hurry.")
+    r.update(box, now=0)
+    assert r.update(box, now=0.3) == "Frog: We must hurry."
+    gone = look("none")
+    r.update(gone, now=1)
+    assert ctscreen.answer("what did he say?", gone, heard=r.heard) == "Frog: We must hurry."
+    assert ctscreen.answer("what did Frog say", gone, heard=r.heard) == "Frog: We must hurry."
+    assert ctscreen.answer("read that again", gone, heard=r.heard) == "Frog: We must hurry."
+    assert ctscreen.answer("what did he say?", gone) is None  # nothing read yet: the agent

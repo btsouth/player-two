@@ -415,6 +415,7 @@ class Reader:
         self.said: dict[str, str] = {}
         self.seen: dict[str, tuple[str, int]] = {}  # part -> (value, looks in a row)
         self.texts: dict[str, float] = {}  # text said -> when
+        self.heard = ""  # the last text box read out, for "what did he say?"
 
     def reset(self) -> None:
         self.kind, self.said, self.seen = "none", {}, {}
@@ -537,6 +538,8 @@ class Reader:
                     continue
             before = self.said.get(part, "")
             self.said[part] = value
+            if part == "text":
+                self.heard = value
             if part == "danger":
                 self.texts["danger:" + value] = now
             if part in lk.typing and before and value.startswith(before) and len(value) > len(before):
@@ -560,7 +563,8 @@ ASK_HP = re.compile(r"\b(my|our|the party'?s?|every(one|body)'?s|the team'?s|(cr
 COMMAND = re.compile(r"\b(if so|and then|then (heal|use|cast|attack|revive)|heal|revive|cure)\b")
 ASK_PARTY = re.compile(r"\bwho('s| is| are)? (is |are )?(in|with) (my|our|the) (party|team)\b|"
                        r"\bwho('s| is) with (me|us)\b|\bwho am i with\b")
-ASK_SAY = re.compile(r"\bwhat (does|did|do) (that|it|this|the \w+) say\b|\bread (that|it|this|"
+ASK_SAY = re.compile(r"\bwhat (does|did|do) (that|it|this|he|she|they|the \w+|crono|marle|"
+                     r"lucca|robo|frog|ayla|magus) (just )?say\b|\bread (that|it|this|"
                      r"the \w+)( again| out| to me)?\b|\bwhat('s| is| are) (that|the|they|he|she)"
                      r"( \w+)? saying\b")
 ASK_ITEMS = re.compile(r"\bwhat (items|stuff|potions|things)\b|\bwhat('s| is) in (my|our|the) "
@@ -586,9 +590,10 @@ def asks(question: str) -> bool:
                                                                   ASK_ITEMS, ASK_FOE))
 
 
-def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
+def answer(question: str, lk: Look, party: list[str] = (), heard: str = "") -> str | None:
     """A question answered from the screen as read, or None when the screen doesn't show
-    the answer (the agent looks, and may open a menu)."""
+    the answer (the agent looks, and may open a menu). `heard`: the last text box read out,
+    for "what did he say?" once it's gone."""
     if not asks(question):
         return None
     q = _plain(question)
@@ -601,7 +606,7 @@ def answer(question: str, lk: Look, party: list[str] = ()) -> str | None:
             said.append(lk.parts["focus"])
         if said:
             return " ".join(s if s[-1] in ".?!" else s + "." for s in said)
-        return None
+        return heard or None
     if ASK_FOE.search(q):
         if st is not None and st.kind == "target" and lk.parts.get("top"):
             top = lk.parts["top"]
