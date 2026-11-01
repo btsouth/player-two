@@ -7,6 +7,7 @@ import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from PIL import Image
@@ -52,7 +53,7 @@ class FakeShop:
     """The fair's item seller: a line, then the shop screen (Buy/Sell/Equip, the goods,
     the count), then a goodbye line. Lines and hands as the menu reader gives them."""
 
-    GOODS = [("Potion", 10), ("Panacea", 10), ("Athenian Water", 200), ("Shelter", 150)]
+    GOODS: ClassVar = [("Potion", 10), ("Panacea", 10), ("Athenian Water", 200), ("Shelter", 150)]
 
     def __init__(self, funds=400, confirm=False):
         self.mode, self.funds, self.row, self.count = "talk", funds, 0, 1
