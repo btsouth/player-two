@@ -96,7 +96,11 @@ def trip(box: Box, task: dict, states: Path, game: str, run: int = 1) -> dict:
     name = f"frames/{task['id']}-{run}"  # ROOMS_FRAMES: screens kept (the box's home inside)
     frames = box.home / name
     keep = ["env", f"ROOMS_FRAMES=/home/sbx/{name}"] if os.environ.get("ROOMS_FRAMES") else []
-    out = box.ob("run", "--pass", "PLAYER_TWO_KEYS", "--pass", "PLAYER_TWO_KEYMAP", "--",
+    # PLAYER_TWO_DASH=1: walks run (b held) on straight stretches. PYTHONPATH: another
+    # checkout's code (a worktree) with this venv.
+    passed = [a for v in ("PLAYER_TWO_DASH", "PYTHONPATH") if os.environ.get(v)
+              for a in ("--pass", v)]
+    out = box.ob("run", "--pass", "PLAYER_TWO_KEYS", "--pass", "PLAYER_TWO_KEYMAP", *passed, "--",
                  *keep, PY, str(ROOT / "scripts" / "rooms_walk.py"), game, task["to"],
                  "--limit", str(task.get("walk_s", 90)),
                  *(["--exit", task["exit"]] if task.get("exit") else []),

@@ -210,8 +210,9 @@ class Sim:
         dy = ("down" in ds) - ("up" in ds)
         if dx or dy:
             self.facing = (dx, dy)
+        speed = 320 if self.dashing else 160
         for mx, my in ((dx, 0), (0, dy)):
-            nx, ny = self.x + mx * 160 * dt, self.y + my * 160 * dt
+            nx, ny = self.x + mx * speed * dt, self.y + my * speed * dt
             if (int(ny) // 16, int(nx) // 16) in self.walk:
                 self.x, self.y = nx, ny
 
@@ -219,7 +220,16 @@ class Sim:
         self.update()
         self.angle = angle
 
+    dashing = False
+    dashes = 0
+
+    def dash(self, on):
+        self.update()
+        self.dashes += on and not self.dashing
+        self.dashing = on
+
     def press(self, button, hold_ms=100):
+        assert not self.dashing  # the run button let go before any press
         self.pressed.append((button, self.x, self.y, self.facing))
         self.talking = self.talking or (button == "a" and self.answers is not None and
                                         self.answers(self.x, self.y, self.facing))
@@ -263,6 +273,35 @@ async def test_walk_to_talk_across_a_counter(tmp_path):
     ends = rooms.stand_by(room, target.at, True)
     assert tile in ends, (x, y)
     assert facing == ends[tile]
+
+
+async def test_running_on_the_straight_and_walking_to_line_up(tmp_path):
+    """b held on a straight run (twice the speed), let go for turns, lining up and the
+    press: the walk still ends lined up across the counter (SNES box: 12/12 trips with
+    it, 20 to 26% quicker to the fair's sellers)."""
+    from playertwo.rooms import Target, walk_out
+
+    rooms, img = two_floors(tmp_path)
+    room = rooms.rooms[2]
+    sim = Sim(img, room.walk, 280.0, 173.0)
+    target = Target(2, (152.0, 77.9), True, "the innkeeper")
+    ends = rooms.stand_by(room, target.at, True)
+    sim.answers = lambda x, y, f: ends.get((int(y) // 16, int(x) // 16)) == f
+    out = await walk_out(rooms, 2, sim.shoot, sim.steer, lambda: _true(), lambda _t: None,
+                         20.0, spot=target, press=sim.press, talk=True, dash=sim.dash)
+    assert out.startswith("arrived"), out
+    assert sim.dashes >= 1 and not sim.dashing
+    _, x, y, facing = sim.pressed[0]
+    tile = (int(y) // 16, int(x) // 16)
+    assert tile in ends and facing == ends[tile], (x, y)
+
+
+def test_straight_ahead():
+    from playertwo.rooms import straight_ahead
+
+    assert straight_ahead([(5, 5)]) == 0
+    assert straight_ahead([(5, 5), (5, 6), (5, 7), (5, 8), (6, 8)]) == 3
+    assert straight_ahead([(5, 5), (6, 5), (6, 6)]) == 1
 
 
 async def _true():

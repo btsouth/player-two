@@ -68,6 +68,10 @@ STEAM_FOLLOW = (152, 120)
 STEAM_LOW = 31
 STEAM_TAP = 0.1  # Steam misses a 60 ms tap; 100 ms is one step
 STEAM_LEAD = 0.2  # input lag and the look's own time: turns start this much early (s)
+# Running (b held): from a straight run of this many steps, let go this many before its
+# end (a turn, the last steps to someone), so turns and lining up are at walking pace.
+DASH_ON = 4
+DASH_OFF = 2
 # Things named in a place that are ways out: the survey's own ways out stand for them (a
 # spot is only where its name was put on the picture, and can't be walked through).
 WAY_OUT = re.compile(r"\b(exit|entrance|door|doorway|stairs?|staircase|way out|gate)\b", re.IGNORECASE)
@@ -1326,18 +1330,50 @@ def fighting(image) -> bool:
     return over_place(image) == "fight"
 
 
+def straight_ahead(path: list[tuple[int, int]]) -> int:
+    """How many steps the path goes on the way its first step goes (a run to dash)."""
+    if len(path) < 2:
+        return 0
+    d = (path[1][0] - path[0][0], path[1][1] - path[0][1])
+    n = 1
+    while n + 1 < len(path) and (path[n + 1][0] - path[n][0],
+                                 path[n + 1][1] - path[n][1]) == d:
+        n += 1
+    return n
+
+
 async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                    limit: float = 90.0, start: Here | None = None, label: str = "",
                    spot: tuple[float, float] | Target | None = None, press=None,
-                   talk: bool = False) -> str:
+                   talk: bool = False, dash=None) -> str:
     """Walk to the place `goal` (a location number; a world map for "outside") through
     the ways out, place by place, with the screen alone: where the character is comes
     from the pictures several times a second. label: which way out into it, by its name
     (a world map's sides). spot: a place in `goal` to walk to (in its pixels), or a
     Target there (someone is walked up to and faced), not a way into it. talk: press
-    a (`press`) facing them, to talk (or to open, search, use)."""
+    a (`press`) facing them, to talk (or to open, search, use). dash(on): holds the run
+    button down on a straight run of DASH_ON steps or more, and lets go DASH_OFF steps
+    before a turn, for lining up, for a way out and before any press."""
     t0 = time.monotonic()
     person = isinstance(spot, Target) and spot.person
+    walk_steer, running = steer, False
+
+    def run(on: bool) -> None:
+        nonlocal running
+        if dash is not None and on != running:
+            dash(on)
+            running = on
+
+    def steer(a):  # every turn but the run along a path walks: no dash
+        run(False)
+        walk_steer(a)
+
+    if press is not None:
+        press_on = press
+
+        def press(button):
+            run(False)
+            press_on(button)
     # A save point is stood on. Pressing a there does nothing in Chrono Trigger (live on
     # Steam: a on the Mountain of Woe's sparkle brought nothing up, a step away it
     # climbed the chain beside it, 232 s and no save): saving is the menu's Save.
@@ -1669,7 +1705,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             if last:  # onto where to stand: its middle (clear of whoever's beside it)
                 aim = centre(path[1])
             a = angle_to(aim[0] - px, aim[1] - py)
-            steer(a)
+            ahead = straight_ahead(path)
+            run(not last and (ahead >= DASH_ON or (running and ahead > DASH_OFF)))
+            walk_steer(a)
             if last:
                 # A short step at a time: walking on, it would slide past while it looks.
                 await asyncio.sleep(tap)
@@ -1733,7 +1771,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             f"{tile} in {rooms.name(here.loc)}")
             await asyncio.sleep(0.02)
     finally:
-        steer(None)
+        steer(None)  # (and lets go of the run button)
     where = rooms.name(here.loc) if here else "somewhere unknown"
     return f"timeout: still in {where}, on the way to {target}"
 

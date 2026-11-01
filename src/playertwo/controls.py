@@ -39,6 +39,10 @@ class Controls:
         go. For walking somewhere in a loop that keeps correcting the direction."""
         raise NotImplementedError
 
+    def dash(self, on: bool) -> None:
+        """Hold (or let go of) the run button, b, while steering: Chrono Trigger runs
+        with b held. Only where a button can be held on its own; elsewhere nothing."""
+
     def chord(self, buttons: list[str], ms: int) -> None:
         """Hold several buttons down together (L and R at once to run from a fight)."""
         import threading
@@ -75,6 +79,9 @@ class DryRun(Controls):
 
     def steer(self, angle: float | None, strength: float = 1.0) -> None:
         self.log.append("steer:off" if angle is None else f"steer:{round(angle)}")
+
+    def dash(self, on: bool) -> None:
+        self.log.append(f"dash:{'on' if on else 'off'}")
 
 
 def steer_dirs(angle: float | None) -> list[str]:
@@ -172,6 +179,10 @@ class LinuxPad(Controls):
             self.ui.write(e.EV_ABS, axis, v)
         self._syn()
 
+    def dash(self, on: bool) -> None:
+        self._set("b", on)
+        self._syn()
+
     def close(self) -> None:
         self.ui.close()
 
@@ -238,6 +249,10 @@ class WindowsPad(Controls):
                 self.pad.press_button(button=self.keys[d])
             else:
                 self.pad.release_button(button=self.keys[d])
+        self.pad.update()
+
+    def dash(self, on: bool) -> None:
+        self._set("b", on)
         self.pad.update()
 
 
@@ -377,7 +392,15 @@ class HyprlandKeys(WaylandKeys):
                 self._state(k, "down")
         self._held = (keys, None) if keys else None
 
+    def dash(self, on: bool) -> None:
+        if on != getattr(self, "_dashing", False):
+            self._state(self.map["b"], "down" if on else "up")
+            self._dashing = on
+
     def close(self) -> None:
+        if getattr(self, "_dashing", False):
+            with contextlib.suppress(ControlsError):
+                self.dash(False)
         if self._held:
             keys, self._held = self._held[0], None
             for k in keys:

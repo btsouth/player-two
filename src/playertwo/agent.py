@@ -2045,7 +2045,7 @@ class Agent:
         try:
             out = await walk_out(rooms, t.loc, shoot, self.controls.steer,
                                  self.walker_keep_going, walker.log, 60.0, here, "", t,
-                                 self.controls.press, talk)
+                                 self.controls.press, talk, dash=self._dash())
         finally:
             await told
         if out.startswith("arrived"):
@@ -2109,12 +2109,21 @@ class Agent:
         await self._speak(f"Going to {plain_place(name)}, out of here first.")
         self._going_to = name
         out = await walk_out(rooms, m.world, shoot, self.controls.steer,
-                             self.walker_keep_going, walker.log, 90.0, here, label)
+                             self.walker_keep_going, walker.log, 90.0, here, label,
+                             dash=self._dash())
         if not out.startswith("arrived"):
             self._going_to = None
             return (f"on the way out of {rooms.name(here.loc)} to {name}: {out}", found)
         walker.memory = None
         return out, found
+
+    def _dash(self):
+        """The run button for walks inside places (b held on straight runs), when
+        PLAYER_TWO_DASH=1: off until checked live on Steam (does b run there, and does
+        the walker still line up at that speed)."""
+        if os.environ.get("PLAYER_TWO_DASH", "") not in ("1", "on", "yes", "true"):
+            return None
+        return getattr(self.controls, "dash", None)
 
     async def _inside(self, image, sure: bool = False):
         """(rooms, where) when the screen is inside a place the room survey knows. sure:
@@ -2179,7 +2188,7 @@ class Agent:
             result = await walk_out(rooms, choices[label][0], shoot, self.controls.steer,
                                     self.walker_keep_going, walker.log, limit, here,
                                     "" if target is not None else label, target,
-                                    self.controls.press, bool(talk))
+                                    self.controls.press, bool(talk), dash=self._dash())
         finally:
             await told
         self._talked_to = target if talk else None
