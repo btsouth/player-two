@@ -23,13 +23,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from playertwo import ontopic  # noqa: E402
-from playertwo.agent import TOOLS, CT_TOOLS  # noqa: E402
-from playertwo.prompts import AGENT, BATTLE_CT  # noqa: E402
+from playertwo import ontopic
+from playertwo.agent import CT_TOOLS, TOOLS
+from playertwo.prompts import AGENT, BATTLE_CT
 
 OFF = [
-    "If a tackle involves contact that endangers the safety of an opponent, it must be "
-    "sanctioned as serious foul play.",
+    ("If a tackle involves contact that endangers the safety of an opponent, it must be "
+     "sanctioned as serious foul play."),
     "Preheat the oven to 350 degrees and grease a nine inch baking pan.",
     "The mitochondria is the powerhouse of the cell.",
     "In 1066, William the Conqueror defeated Harold Godwinson at the Battle of Hastings.",
@@ -147,7 +147,7 @@ async def judge(held: list[tuple[str, str, str]], off: list[str]) -> None:
     rng = random.Random(11)
     asks = [req for _ln, req, _p in held] or ["what's on the screen?"]
     jobs = [(ln, req, True) for ln, req, _p in held] + [
-        (ln, rng.choice(asks + ["what's the battle mode set to?", "buy three potions",
+        (ln, rng.choice([*asks, "what's the battle mode set to?", "buy three potions",
                                 "where am I?", "heal Frog"]), False) for ln in off]
     sem = asyncio.Semaphore(6)
     times: list[float] = []

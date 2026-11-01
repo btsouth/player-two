@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import re
 
+
+def _set(text: str) -> set[str]:
+    return set(text.split())
+
+
 # Words that say nothing of what a line is about.
-STOP = set("""
+STOP = _set("""
 a an the and or but if then than so as of to in on at by for with from into onto off up down
 out over under about after before again once all any both each few more most other some such
 only own same too very just now still already yet also even ever never not no nor here there
@@ -29,11 +34,11 @@ look looks looked looking say says said tell told want wants need needs like kno
 think one two three four five six seven eight nine ten first last next back right left
 okay ok yes sure well oh hey there's that's what's here's isn't aren't wasn't weren't don't
 doesn't didn't haven't hasn't hadn't
-""".split())
+""")
 
 # What any line from a game helper may talk about, in any game, without the screen or
 # the request saying it first.
-GAME = set("""
+GAME = _set("""
 game play player playing level hp mp health heal heals healed healing hurt damage hit hits
 fight fights fighting fought battle battles enemy enemies foe foes monster monsters attack
 attacked attacks win won lose lost run ran away escape flee party character characters turn
@@ -46,7 +51,7 @@ experience exp points tech techs skill skills magic spell setting settings optio
 mode wait active button buttons press pressed controller pad cursor selected select pick picked
 choose chose choice question yes no done finished stop stopped try tried trying again sorry
 couldn't can't unable time moment second seconds minute
-""".split())
+""")
 
 WORD = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
 
