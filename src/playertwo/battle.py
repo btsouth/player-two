@@ -442,6 +442,14 @@ class Executor:
         name = intent.name.strip()
         if not name:
             raise Stop(f"say which {intent.command.lower()} to use")
+        if not any(e for r in st.entries for e in r):
+            await asyncio.sleep(0.3)  # still drawing, or really empty
+            st = await self.look()
+            if st.kind == "list" and not any(e for r in st.entries for e in r):
+                st = await self.back_out(st)
+                what = "techs" if intent.command.lower().startswith("tech") else "items"
+                raise Stop(f"{actor or 'their'} {intent.command.lower()} list is empty: no "
+                           f"{what} to use yet, so {name} can't be done")
         key = "item" if intent.command.lower().startswith("item") else f"tech:{actor}"
         order = self.lists.get(key, [])
         way = "down"

@@ -279,9 +279,16 @@ def read(image, full: bool = True) -> State:
                 st.entry_rc = (ri, hand_col)
     if st.kind == "list" and not any(e in VOCAB and not e.startswith("[")
                                      for row in st.entries for e in row):
-        # Not a battle list (a text box with a choice, a field menu): no known names.
-        st.kind, st.entries, st.usable_rows, st.entry, st.entry_rc = "none", [], [], "", None
-        st.usable = None
+        mp = sum(any(r.text.startswith("MP") and r.x0 >= LIST_END_X for r in row)
+                 for row in lines)
+        if mp >= 2 and not any(e for row in st.entries for e in row):
+            # A tech list with nothing in it, only the MP column: no techs learned yet
+            # (live, 2026-11-01: Marle at level 1). Open, and empty.
+            st.entries, st.usable_rows, st.entry, st.entry_rc, st.usable = [], [], "", None, None
+        else:
+            # Not a battle list (a text box with a choice, a field menu): no known names.
+            st.kind, st.entries, st.usable_rows, st.entry, st.entry_rc = "none", [], [], "", None
+            st.usable = None
     if st.kind == "command" and st.actor_col is not None and st.actor_col < len(st.party):
         # The column the hand is in says whose command it is. The yellow name can't be
         # trusted alone: a critical-HP actor is drawn grey, and pausing dims every name.

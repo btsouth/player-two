@@ -128,6 +128,13 @@ def test_the_hand_on_a_used_up_items_empty_slot():
     assert st.entry == "" and st.entry_rc == (2, 0)
 
 
+@pytest.mark.skipif(not (LIVE / "btrace" / "012116-2913.jpg").exists(),
+                    reason="no empty tech list frame")
+def test_an_empty_tech_list_is_an_open_list_with_nothing_in_it():
+    st = ctsteam.read(cv2.imread(str(LIVE / "btrace" / "012116-2913.jpg")))
+    assert (st.kind, st.entries, st.entry, st.entry_rc) == ("list", [], "", None)
+
+
 def test_target_glove_and_the_enemy_name_in_the_bar():
     st = ctsteam.read(load("140314-00"))
     assert st.kind == "target" and st.top == "Gargoyle" and len(st.gloves) == 1

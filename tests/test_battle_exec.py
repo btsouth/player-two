@@ -200,6 +200,8 @@ class FakeCT:
             party[self.hand_col].colour = "yellow"
             st.bracket = self.party[self.hand_col].at
             st.hand = (300, 1200)
+        elif self.mode == "list" and not self.list:
+            st.kind, st.hand = "list", (300, 1232)  # an empty tech list: the MP column only
         elif self.mode == "list":
             st.kind = "list"
             rows = [self.list[k:k + 2] for k in range(0, len(self.list), 2)]
@@ -285,6 +287,18 @@ async def test_a_revive_starts_from_a_used_up_items_empty_slot():
     assert out.ok, out.text
     assert p[0].hp == 100
     assert game.log[:7] == ["down", "down", "a", "up", "right", "a", "a"]
+
+
+async def test_a_tech_when_none_are_learned_yet_stops_and_says_so():
+    # Live, Guardia Forest 2026-11-01: Marle at level 1 has no techs; the empty list read
+    # as "not a battle" and the agent tried for minutes.
+    p = party()
+    p[2].techs = []
+    game = FakeCT(p, enemies(), ready=(2,))
+    out = await executor(game).act(Intent("Marle", "tech", "Aura", "Crono"))
+    assert not out.ok
+    assert "list is empty" in out.text and "Aura" in out.text
+    assert game.mode == "command"  # backed out to the commands
 
 
 async def test_after_a_pause_start_and_the_command_go_in_one_burst():
