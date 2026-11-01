@@ -2419,6 +2419,13 @@ class Agent:
                 and "pressed a" not in result
             if done and not self.cancelled:
                 await self._speak("We're there.")
+            if there and only and not talk_to and not self.cancelled \
+                    and result.startswith("arrived: standing on the save point"):
+                # On it, and how to save, with no model turn (live 3: "You're already
+                # standing on the save point" after a 14 s walk).
+                await self._speak("We're on the save point. To save, open the menu; "
+                                  "Save is lit there.")
+                done = True
             if self._unanswered and not self.cancelled:
                 await self._speak(self._unanswered)  # asked which one, no answer
                 done = True

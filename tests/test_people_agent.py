@@ -266,3 +266,15 @@ def test_no_answer_to_the_models_question_ends_the_request(tmp_path, monkeypatch
     assert len(muse.seen) == 1  # no second turn
     assert said[-1] == "Okay, I'll wait till you decide."
     assert run.outcome == "Okay, I'll wait till you decide."
+
+
+def test_take_me_to_the_save_point_says_so_with_no_model_turn(tmp_path, monkeypatch):
+    """Live 3: after a 14 s walk onto the save point the model said "You're already
+    standing on the save point"."""
+    muse = Muse()
+    agent, sim, said, rooms = agent_in(tmp_path, monkeypatch, muse=muse)
+    rooms.rooms[2].people.append(Person("the save point", "save point", (232.0, 125.0)))
+    run = asyncio.run(agent.run("take me to the save point"))
+    assert run.steps[0].result.startswith("arrived: standing on the save point"), run.steps
+    assert not muse.seen and not sim.pressed
+    assert said[-1] == "We're on the save point. To save, open the menu; Save is lit there."
