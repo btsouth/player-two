@@ -88,6 +88,10 @@ class Person:
     at: tuple[float, float]  # their feet, in the place's pixels
     moves: bool = False  # walks about: may not be just there
     look: str = ""  # their cut-out (people/<look>, the survey's), to find them on screen
+    # Other names they go by ("Melchior", "swordsmith", "old man") and their line when
+    # talked to: what the player may call them by (people.resolve).
+    aka: tuple[str, ...] = ()
+    said: str = ""
 
 
 @dataclass
@@ -263,7 +267,8 @@ class Rooms:
                                if not WAY_OUT.search(k)}, moving=bool(d.get("moving")),
                         people=[Person(p["name"], p.get("kind") or "person",
                                        tuple(p["at"]), bool(p.get("moves")),
-                                       p.get("look") or "")
+                                       p.get("look") or "", tuple(p.get("aka") or ()),
+                                       str(p.get("said") or ""))
                                 for p in d.get("people", []) if p.get("name")
                                 and p.get("kind") != "none"])
             room.small = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2),

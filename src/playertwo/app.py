@@ -45,6 +45,16 @@ LOCAL = [
       r"|she) say|again|come again|what|what was that|sorry|pardon|huh"), "repeat"),
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
       r"|what do you see|what'?s (going on|happening)"), "describe"),
+    # Inside a place the room survey knows: who and what is round the player, from the
+    # survey (no model); elsewhere, the screen described.
+    ((r"who'?s (here|in here|around( here| me| us)?|nearby|near me|close by|close)"
+      r"|who is (here|in here|around( here| me| us)?|nearby|near me|close by)"
+      r"|who can i (talk|speak) to( here)?|who('?s| is) there to talk to"
+      r"|what'?s (around|near) (me|us)|what is (around|near) (me|us)|what'?s (nearby|close by)"
+      r"|what is nearby|(is )?(any ?one|any ?body) (here|around)"
+      r"|who('?s| is| are) (the people )?(here|around)|who'?s here with (me|us)"), "around"),
+    ((r"who else|who else is (here|there|around)|any ?one else|any ?body else"
+      r"|who('?s| is) further (off|away)"), "around_more"),
     (r"help|what can you do|what can i say|commands|list (the )?commands", "help"),
     # Moving dialogue along without a model turn: a press of a, then the narrator reads
     # the new line. Not "continue": that's a title screen option.
@@ -88,8 +98,8 @@ def local_action(text: str) -> str | None:
 
 HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
         "open the menu, or: use a potion on Yosuke. You can also say: next, to press A and "
-        "hear the next line, describe, repeat, stop, help, what's wrong, terse, more "
-        "detail, slower, faster, pause narration, resume narration, watch my health, or "
+        "hear the next line, describe, who's here, repeat, stop, help, what's wrong, terse, "
+        "more detail, slower, faster, pause narration, resume narration, watch my health, or "
         "goodbye.")
 
 MIC_PROBLEM = ("I can't find a microphone, so I can't hear you. I opened the Player Two "
@@ -1523,6 +1533,21 @@ class Session:
                 return  # the reader reads the new line the moment it has typed out
             with contextlib.suppress(Exception):
                 self._start_narration(await self._typed_out(), describe=self.paused)
+        elif action in ("around", "around_more"):
+            # Answered from the room survey in a moment, no model: who's round the player
+            # and which way. Not inside a surveyed place: the screen, described.
+            t0 = time.monotonic()
+            try:
+                text = await self.agent.around_here(more=action == "around_more")
+            except Exception as exc:  # noqa: BLE001  the screen is described instead
+                self.events.emit("error", where="around", message=str(exc)[:300])
+                text = ""
+            if text:
+                self.events.emit("around", seconds=round(time.monotonic() - t0, 2))
+                self.narrator.recent.append(text)
+                await self.announce(text, interrupt=True)
+                return
+            await self._local("describe")
         elif action == "describe":
             try:
                 frame = await self.grab_now()

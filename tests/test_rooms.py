@@ -322,7 +322,13 @@ async def test_agent_talks_to_someone_by_the_room_map(tmp_path, monkeypatch):
     _, x, y, facing = sim.pressed[-1]
     ends = rooms.stand_by(rooms.rooms[2], (152.0, 77.9), True)
     assert ends.get((int(y) // 16, int(x) // 16)) == facing
-    wanted, choices, hints = picks[0]
+    assert not picks  # a name: no model needed (people.resolve)
+    # Words that fit no one the survey knows: the model picks.
+    sim.pressed.clear()
+    sim.talking = False
+    out = await agent._act("talk_to", {"target": "the one behind the desk"})
+    assert out.startswith("arrived"), out
+    _wanted, choices, hints = picks[0]
     # Only people and things for talk_to; each with which way it is.
     assert set(choices) == {"the innkeeper (in here)", "the cat (in here)",
                             "the shopkeeper (the inn, downstairs)"}
