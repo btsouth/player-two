@@ -324,6 +324,13 @@ class Shop:
         # The seller's goodbye: read, then pressed on, so no box is left over the place
         # (live: the next "take me outside" stopped on it).
         said: list[str] = []
+        end = time.monotonic() + 1.6  # the goodbye comes up a moment after the screen goes
+        while time.monotonic() < end:
+            lk = await self._box()
+            if getattr(lk, "kind", "none") == "text":
+                break
+            await asyncio.sleep(0.2)
+            self.frame = await self._grab()
         for _ in range(4):
             lk = await self._box()
             line = (getattr(lk, "parts", {}) or {}).get("text", "") if lk is not None else ""
