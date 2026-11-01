@@ -150,6 +150,17 @@ def not_sold_line(result: str, item: str) -> str:
     return f"This shop doesn't sell {plural(item, 2)}. It has {listed} gold."
 
 
+def rested_line(result: str) -> str:
+    """A night at the inn that went as it should, from the gold and the menu's HP read
+    after it: "Rested for 10 gold, 390 left. Everyone's at full health." ("" when the
+    gold or everyone's HP didn't read: the model says what did)."""
+    m = re.search(r"Stayed the night \((\d+) G: \d+ to (\d+) G\)\. Now: .*\(everyone full\)",
+                  result)
+    if not m:
+        return ""
+    return f"Rested for {m.group(1)} gold, {m.group(2)} left. Everyone's at full health."
+
+
 # -- fights ----------------------------------------------------------------------------
 
 _ACTOR = rf"(?:(?P<actor>{'|'.join(NAMES)}),? )?"
@@ -450,12 +461,12 @@ async def _fight(agent: Agent, said: str, battle: State, run: Run,
 
     mode = "win" if FIGHT.search(said) else "run" if RUN.search(said) else ""
     if mode:
+        agent._fought = None
         result = await agent._act("fight", {"mode": mode})
         run.steps.append(Step("fight", {"mode": mode}, time.monotonic() - t0, result))
         if agent.cancelled:
             run.outcome = "cancelled"
             return True, ""
-        ex = agent.executor()
         fought = getattr(agent, "_fought", None)
         line = won_line(result, fought.state if fought is not None else None) \
             if mode == "win" else ran_line(result)
@@ -554,6 +565,10 @@ async def _shop(agent: Agent, buy: tuple[int, str] | None, run: Run,
         run.outcome = "cancelled"
         return True, ""
     if not rest and run.outcome and BOUGHT.search(result):
+        return True, ""
+    if rest and (line := rested_line(result)):
+        await agent._speak(line)
+        run.outcome = line
         return True, ""
     if not rest and (line := not_sold_line(result, buy[1])):
         await agent._speak(line)

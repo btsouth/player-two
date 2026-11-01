@@ -277,13 +277,13 @@ async def test_walk_to_talk_across_a_counter(tmp_path):
 
 async def test_running_on_the_straight_and_walking_to_line_up(tmp_path):
     """b held on a straight run (twice the speed), let go for turns, lining up and the
-    press: the walk still ends lined up across the counter (SNES box: 12/12 trips with
+    press: the walk still ends lined up across the counter (SNES box: 6/6 trips with
     it, 20 to 26% quicker to the fair's sellers)."""
     from playertwo.rooms import Target, walk_out
 
     rooms, img = two_floors(tmp_path)
     room = rooms.rooms[2]
-    sim = Sim(img, room.walk, 280.0, 173.0)
+    sim = Sim(img, room.walk, 296.0, 77.0)  # row 4, col 18: eight tiles straight across
     target = Target(2, (152.0, 77.9), True, "the innkeeper")
     ends = rooms.stand_by(room, target.at, True)
     sim.answers = lambda x, y, f: ends.get((int(y) // 16, int(x) // 16)) == f

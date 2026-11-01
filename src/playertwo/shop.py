@@ -406,8 +406,11 @@ class Shop:
         for _ in range(5):
             if v.funds is None:
                 break
+            was = v.kind
             await self.tap("b")
-            v = await self.until(lambda v: v.funds is None, 0.8)
+            # Back a step (the list to Buy, Sell, Equip) or out: either is this b done
+            # (live 3: the funds still show on Buy, Sell, Equip, and each b waited 0.8 s).
+            v = await self.until(lambda v, was=was: v.funds is None or v.kind != was, 0.8)
         if v.funds is not None:
             return "The shop screen is still up."
         # The seller's goodbye: read, then pressed on, so no box is left over the place
