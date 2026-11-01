@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
-from playertwo.agent import nearest_of_kind
+import pytest
+
+from playertwo.agent import nearest_of_kind, way_round
 from playertwo.atlas import Atlas
+from playertwo.rooms import Rooms
 
 M = SimpleNamespace(places={"Truce Inn": (420, 300), "Porre Inn": (410, 830),
                             "Truce Mayor's Manor": (400, 330),
@@ -66,3 +69,21 @@ def test_others_of_kind_for_a_shut_way_unless_the_town_was_named():
     assert others_of_kind(M, "Truce Inn", "take me to the inn", (440, 280)) == ["Porre Inn"]
     assert others_of_kind(M, "Porre Inn", "the inn in Porre", (440, 280)) == []
     assert others_of_kind(M, "Leene Square", "the fair", (440, 280)) == []
+
+
+@pytest.mark.skipif(Atlas.folder_for("Chrono Trigger") is None
+                    or Rooms.folder_for("Chrono Trigger") is None,
+                    reason="no Chrono Trigger atlas and room survey here")
+def test_from_the_castles_side_the_way_back_is_through_the_forest():
+    """Live 2026-11-01: after "take me to Guardia Castle" the party stands on the castle's
+    side of Guardia Forest, which open ground doesn't leave: every trip from there said
+    "no way" or went for Medina Square on another continent."""
+    a = Atlas.for_game("Chrono Trigger")
+    m, r = a.map("1000 A.D."), Rooms.for_game("Chrono Trigger")
+    castle_side = (304.0, 224.0)  # where the guards leave the party, by the atlas
+    assert way_round(a, m, r, "Leene Square", castle_side) == (
+        "Guardia Forest", (280, 240), "outside, toward Truce Market")
+    assert way_round(a, m, r, "Guardia Forest", castle_side)[:2] == (
+        "Guardia Forest", (280, 240))  # into the forest by its north door
+    assert way_round(a, m, r, "Guardia Castle", castle_side) is None  # walkable
+    assert way_round(a, m, r, "Leene Square", (441.0, 262.0)) is None  # from Crono's house

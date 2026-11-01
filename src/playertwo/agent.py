@@ -451,6 +451,38 @@ def nearest_of_kind(m, name: str, said: str, at: tuple[float, float]) -> str:
     return min([name, *same], key=lambda n: math.dist(m.places[n], at))
 
 
+def way_round(atlas, m, rooms, name: str, here: tuple[float, float]
+              ) -> tuple[str, tuple[float, float], str] | None:
+    """When open ground doesn't reach `name` from here (the castle's side of Guardia
+    Forest, after a trip to the castle), a place to go through: one with a way out that
+    comes out on this side (its door here) and another that comes out where `name` can be
+    walked to. (that place, its door here, the way out to take), or None."""
+    import math
+
+    goal, door = m.places[name], m.entrance(name)
+    if rooms is None or getattr(m, "world", None) is None or \
+            atlas.route(m, here, goal, door) is not None:
+        return None
+    best = None
+    for room in rooms.rooms.values():
+        outs = {}
+        for e in room.exits:
+            if e.to == m.world and any(e.at):
+                outs.setdefault(tuple(e.at), e)
+        if len(outs) < 2:
+            continue
+        ins = [a for a in outs if atlas.route(m, here, a) is not None]
+        ends = [b for b in outs if atlas.route(m, b, goal, door) is not None]
+        for a in ins:
+            for b in ends:
+                if math.dist(a, b) < 16:
+                    continue  # the same side
+                d = math.dist(here, a) + math.dist(b, goal)
+                if best is None or d < best[0]:
+                    best = (d, rooms.name(room.loc), a, outs[b].label)
+    return best[1:] if best else None
+
+
 def others_of_kind(m, name: str, said: str, at: tuple[float, float]) -> list[str]:
     """The other places of the same kind as `name`, nearest first, for when the way to it
     turns out shut; none when the player said which town ("the inn in Porre")."""
@@ -1256,7 +1288,7 @@ class Agent:
         """Walk to a named place on a world map by the game's atlas (see atlas.walk_to).
         Which place the player means is Muse's pick from the map's names and the other
         names the walkthrough uses for them, not shared words ("Truce" isn't Truce Inn)."""
-        from .atlas import walk_to
+        from .atlas import RISE, walk_to
         from .epoch import epoch_ok, era_named, era_of, era_only, left_flying, needs_epoch
         from .quests import Quests, atlas_aliases, pick_place
 
@@ -1298,11 +1330,18 @@ class Agent:
             return (f"no single place on the map for {place!r} ({found}). Places: {names}. "
                     "Ask the player which, or call go_to_place with an exact name")
         m, name = found
+        door_at = None
         if spot is not None and m.name == spot.map:
             name = nearest_of_kind(m, name, place, (spot.x, spot.y))
             via = await self._through(m, name, (spot.x, spot.y))
             if via is not None:  # Guardia Castle: in by Guardia Forest and out its far end
                 return await self._go_through(atlas, m, name, spot, *via)
+            rnd = await asyncio.to_thread(way_round, atlas, m, await self._rooms_data(), name,
+                                          (spot.x, spot.y - RISE))
+            if rnd is not None and rnd[0] == name:
+                door_at = rnd[1]  # in by its other door, on this side
+            elif rnd is not None:  # and back from the castle's side the same way
+                return await self._go_through(atlas, m, name, spot, rnd[0], rnd[2], rnd[1])
         walker = self.walker()
 
         async def shoot():
@@ -1319,14 +1358,16 @@ class Agent:
         else:
             result = await walk_to(atlas, m, name, shoot, self.controls.steer,
                                    self.controls.press, keep_going, walker.log, limit,
-                                   spot)
+                                   spot, at=door_at)
             if result.startswith(("blocked", "no way")) and spot is not None:
                 # "The market" whose way is shut at this point in the story: the next
                 # nearest market, before flying anywhere.
                 said = getattr(self, "_request", "") or place  # the player's, not the model's
                 for other in others_of_kind(m, name, said, (spot.x, spot.y))[:2]:
-                    if not m.opens(other):
-                        continue
+                    if not m.opens(other) or atlas.route(
+                            m, (spot.x, spot.y - RISE), m.places[other],
+                            m.entrance(other)) is None:
+                        continue  # shut, or no way there either (another continent)
                     await told
                     told = asyncio.create_task(self._speak(
                         f"Can't get to {name} from here. Going to {other} instead."))
@@ -1393,6 +1434,14 @@ class Agent:
         await told
         return result
 
+    async def _rooms_data(self):
+        """The room survey (rooms.Rooms) for this game, loaded once, or None."""
+        if getattr(self, "_rooms", None) is None:
+            from .rooms import Rooms
+
+            self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
+        return self._rooms
+
     async def _through(self, m, name: str, at: tuple[float, float] | None = None
                        ) -> tuple[str, str] | None:
         """A place whose icon doesn't open, reached through another place on the map:
@@ -1423,8 +1472,10 @@ class Agent:
             return None  # already on its side (come out of the forest's far end)
         return best[1], best[2]
 
-    async def _go_through(self, atlas, m, name: str, spot, via: str, way_out: str) -> str:
-        """Into `via` on the map, out of it by `way_out`, and on to `name`."""
+    async def _go_through(self, atlas, m, name: str, spot, via: str, way_out: str,
+                          door_at: tuple[float, float] | None = None) -> str:
+        """Into `via` on the map (at `door_at`, when it's another door of it than its
+        named one), out of it by `way_out`, and on to `name`."""
         from .atlas import walk_to
 
         walker = self.walker()
@@ -1438,7 +1489,8 @@ class Agent:
         told = asyncio.create_task(self._speak(f"Going to {name}, through {via}."))
         try:
             first = await walk_to(atlas, m, via, shoot, self.controls.steer,
-                                  self.controls.press, keep_going, walker.log, 90.0, spot)
+                                  self.controls.press, keep_going, walker.log, 90.0, spot,
+                                  at=door_at)
             if not first.startswith("arrived"):
                 return f"on the way to {name}, which is reached through {via}: {first}"
             await asyncio.sleep(1.0)  # the fade into it
