@@ -437,6 +437,16 @@ OUT = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|u
 TRIP = re.compile(r"(?:(?:please |can you |could you )?(?:take|bring|get) (?:me|us) |"
                   r"(?:let'?s |please )?(?:go|head|walk|run) )(?:back )?(?:over )?"
                   r"(?:in)?to (?P<place>.{3,60})")
+# "Talk to the old man": inside a surveyed place, straight to them (people.resolve).
+TALK_TO = re.compile(r"(?:(?:please |can you |could you |let'?s |i want to |i'd like to )?"
+                     r"(?:go )?(?:talk|speak|chat) (?:to|with) )(?P<who>.{2,60})")
+
+
+def plain_place(name: str) -> str:
+    """A place's name the way it's said ("the west house in Truce"): rooms.plain_place."""
+    from .rooms import plain_place as plain
+
+    return plain(name)
 
 
 @dataclass
@@ -1029,6 +1039,7 @@ class Agent:
             if out.startswith("arrived") and "pressed a" in out:
                 line = await self._settled_line()
                 if line:
+                    self._heard(getattr(self, "_talked_to", None), line)
                     out += (f'. Their line, typed out in full: "{line}" (say it once, as is; '
                             "don't say part of it)")
             return out
@@ -1546,9 +1557,12 @@ class Agent:
         if spot is None:
             inside = await self._inside(image)
             if inside is not None:
-                from .rooms import describe
+                from .people import around
 
-                return describe(*inside) + "; go_to_exit goes through any of them."
+                text, n = around(*inside, 0, 6)
+                self._around = (inside[1].loc, min(n, 6))
+                return (f"{text} (Say it in a sentence or two, nearest first, with which way "
+                        "each is. go_to_exit goes to any of them or through a way out.)")
             last = f" Last on the world map near {progress.visited[-1]}." \
                 if progress.visited else ""
             return ("not on a world map (inside a place, a menu, a battle or a fade): "
@@ -1674,7 +1688,8 @@ class Agent:
         # Said at once, while it starts walking: the player can't see it set off (unless
         # it was said on the way out of a place).
         told = asyncio.create_task(self._speak(
-            "" if getattr(self, "_going_to", None) == name else f"Going to {name}."))
+            "" if getattr(self, "_going_to", None) == name else
+            f"Going to {plain_place(name)}."))
         self._going_to = None
         if spot is not None and (m.name != spot.map or
                                  left_flying(self.notes.folder, self.game or "")):
@@ -1712,8 +1727,9 @@ class Agent:
             progress = self._progress()
             progress.went(name)
             progress.save(self.notes.folder, self.game or "")
-            await self._speak(f"We're at {name}.")
-            result += (f'. The player has heard "Going to {name}." and "We\'re at {name}." '
+            said = plain_place(name)
+            await self._speak(f"We're at {said}.")
+            result += (f'. The player has heard "Going to {said}." and "We\'re at {said}." '
                        "Add one short line only if something on screen needs them (someone "
                        "talking, a choice); otherwise finish.")
         return result
@@ -1759,12 +1775,154 @@ class Agent:
         return result
 
     async def _rooms_data(self):
-        """The room survey (rooms.Rooms) for this game, loaded once, or None."""
+        """The room survey (rooms.Rooms) for this game, loaded once, or None. People's
+        lines heard in earlier sessions (heard.json) go with them, for "the man who
+        talked about the war" and the name their lines are shown under ("Melchior")."""
         if getattr(self, "_rooms", None) is None:
             from .rooms import Rooms
 
             self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
+            if self._rooms is not None:
+                for key, line in self._heard_lines().items():
+                    loc, _, name = key.partition("|")
+                    room = self._rooms.rooms.get(int(loc)) if loc.isdigit() else None
+                    for p in room.people if room is not None else ():
+                        if p.name == name and not p.said:
+                            p.said = line
         return self._rooms
+
+    def _heard_path(self):
+        from .notes import _slug
+
+        return self.notes.folder / f"{_slug(self.game or '')}.heard.json"
+
+    def _heard_lines(self) -> dict[str, str]:
+        try:
+            data = json.loads(self._heard_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+    def _heard(self, target, line: str) -> None:
+        """Keep the first line someone said when talked to (by the room survey's name for
+        them), for knowing them by it later."""
+        if target is None or not line or not getattr(target, "person", False):
+            return
+        room = self._rooms.rooms.get(target.loc) if getattr(self, "_rooms", None) else None
+        if room is None or any(p.moves for p in room.people if p.name == target.name):
+            return  # someone who walks about: it may have been someone else who answered
+        lines = self._heard_lines()
+        key = f"{target.loc}|{target.name}"
+        if key in lines:
+            return
+        lines[key] = line[:300]
+        with contextlib.suppress(OSError):
+            self._heard_path().parent.mkdir(parents=True, exist_ok=True)
+            self._heard_path().write_text(json.dumps(lines, indent=1), encoding="utf-8")
+        for p in room.people:
+            if p.name == target.name and not p.said:
+                p.said = line
+
+    async def _resolve(self, rooms, here, choices: dict, targets: dict, to: str,
+                       talk: bool | None, tool: str) -> tuple[str | None, str]:
+        """Who or what of the choices the player means: (its name, "") or (None, what to
+        tell the model). The player's own words come first when the call is about what
+        they asked for (a talk for "talk to the old man", a walk for "take me to the
+        fountain"): the model's rewording ("the bearded man at the middle stall") took
+        the wrong one live. Two or three that fit alike: the player is asked which,
+        straight away, in a few words."""
+        from . import people
+        from .rooms import pick_words
+
+        request = getattr(self, "_request", "") or ""
+        cands = people.candidates(rooms, here, choices, targets)
+        me = (here.x, here.y)
+        marks = people.landmarks(rooms, here)
+        mid = people.middle(rooms, here)
+        hit = pick_words(to, {k: k for k in choices})
+        mine = await asyncio.to_thread(people.resolve, to, cands, me, marks, people.MARGIN,
+                                       mid)
+        # The model's call is for a way out or another place ("upstairs" after "talk to
+        # the guard, then go upstairs"): that, not the player's someone.
+        elsewhere = (hit is not None and hit not in targets) or (
+            mine.sure and mine.key not in targets)
+        theirs = "" if getattr(self, "_theirs_done", False) or elsewhere else \
+            people.wanted(request)
+        talking = bool(people.TALK_WORDS.search(request))
+        pick = None
+        if theirs and not ((talking and talk is False) or (talking and tool == "walk_to")):
+            pick = await asyncio.to_thread(people.resolve, theirs, cands, me, marks,
+                                           people.MARGIN, mid)
+        # The player's words when they settle it (and once they've been gone to, the
+        # model's); else an exact name from the model (it may have asked them itself);
+        # else the question, or the model's words.
+        if pick is not None and pick.sure:
+            self._theirs = pick.key
+            return pick.key, ""
+        if hit is not None:
+            return hit, ""
+        if pick is None or not pick.options:
+            pick = mine
+        if pick.sure:
+            return pick.key, ""
+        if pick.options:
+            settled = getattr(self, "_settled_pick", None)
+            if settled in {o.key for o in pick.options}:
+                return settled, ""  # asked already, this request, between these
+            if self.ask is None:
+                return None, (f"not sure who: ask the player \"{pick.ask}\" and call "
+                              "go_to_exit again with the name they pick")
+            got = (await self.ask(pick.ask)).split(" (heard hands-free")[0]
+            if not got:
+                return None, (f"asked the player \"{pick.ask}\" and got no answer: "
+                              "finish and say you'll wait for their pick")
+            key = people.answer(got, pick.options, me)
+            if key is None:
+                return None, (f"asked the player \"{pick.ask}\"; they said \"{got}\", "
+                              "which didn't settle it: ask them once more, or call "
+                              "go_to_exit with the exact name")
+            self._settled_pick = key
+            if theirs:
+                self._theirs = key
+            return key, ""
+        return None, pick.why
+
+    async def _known_here(self, who: str, frame: Frame, sure: bool = False) -> bool:
+        """Whether, inside a surveyed place, `who` is someone or something the survey
+        knows here or next door (one of them, or two or three alike to ask between; sure:
+        just one)."""
+        from . import people
+
+        inside = await self._inside(frame.image, sure=True)
+        if inside is None:
+            return False
+        rooms, here = inside
+        choices, targets, _hints = rooms.options(here)
+        targets = {k: t for k, t in targets.items() if k in choices}
+        if not targets:
+            return False
+        cands = people.candidates(rooms, here, {k: choices[k] for k in targets}, targets)
+        pick = await asyncio.to_thread(people.resolve, who, cands, (here.x, here.y),
+                                       people.landmarks(rooms, here), people.MARGIN,
+                                       people.middle(rooms, here))
+        return pick.sure or (bool(pick.options) and not sure)
+
+    async def around_here(self, more: bool = False) -> str:
+        """\"Who's here?\" inside a surveyed place, from the survey and where the player
+        stands, with no model call: "" when the screen isn't a place the survey knows.
+        more: the next few further off (\"who else?\")."""
+        from .people import around
+
+        inside = await self._inside((await self.grab()).image, sure=True)
+        if inside is None:
+            return ""
+        rooms, here = inside
+        last = getattr(self, "_around", None)
+        start = last[1] if more and last is not None and last[0] == here.loc else 0
+        most = 4 if start == 0 else 6
+        text, n = around(rooms, here, start, most)
+        self._around = (here.loc, min(n, start + most))
+        return text
 
     async def _through(self, m, name: str, at: tuple[float, float] | None = None
                        ) -> tuple[str, str] | None:
@@ -1774,11 +1932,7 @@ class Agent:
 
         if m.opens(name) or getattr(m, "world", None) is None:
             return None
-        if getattr(self, "_rooms", None) is None:
-            from .rooms import Rooms
-
-            self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
-        if self._rooms is None:
+        if await self._rooms_data() is None:
             return None
         goal = m.places[name]
         best = None
@@ -1810,7 +1964,7 @@ class Agent:
         async def keep_going():
             return await self.walker_keep_going()
 
-        told = asyncio.create_task(self._speak(f"Going to {name}, through {via}."))
+        told = asyncio.create_task(self._speak(f"Going to {plain_place(name)}, through {via}."))
         try:
             first = await walk_to(atlas, m, via, shoot, self.controls.steer,
                                   self.controls.press, keep_going, walker.log, 90.0, spot,
@@ -1829,9 +1983,10 @@ class Agent:
         finally:
             await told
         if last.startswith("arrived"):
-            await self._speak(f"We're at {name}.")
-            last += (f'. The player has heard "Going to {name}, through {via}." and "We\'re '
-                     f'at {name}." Add one short line only if something on screen needs '
+            said = plain_place(name)
+            await self._speak(f"We're at {said}.")
+            last += (f'. The player has heard "Going to {said}, through {via}." and "We\'re '
+                     f'at {said}." Add one short line only if something on screen needs '
                      "them; otherwise finish.")
         return f"through {via}, then {last}"
 
@@ -1848,10 +2003,16 @@ class Agent:
         choices, targets, hints = rooms.options(here)
         if not targets:
             return ""
-        label, _why = await pick_exit(self.muse, self.game or "", target,
-                                      rooms.name(here.loc),
-                                      {k: choices[k] for k in targets},
-                                      {k: hints.get(k, "") for k in targets})
+        label, why = await self._resolve(rooms, here, {k: choices[k] for k in targets},
+                                         targets, target, talk,
+                                         "talk_to" if talk else "walk_to")
+        if label is None and why.startswith(("not sure who", "asked the player")):
+            return why
+        if label is None:
+            label, _why = await pick_exit(self.muse, self.game or "", target,
+                                          rooms.name(here.loc),
+                                          {k: choices[k] for k in targets},
+                                          {k: hints.get(k, "") for k in targets})
         if label is None:
             return ""
         t = targets[label]
@@ -1869,6 +2030,14 @@ class Agent:
             await told
         if out.startswith("arrived"):
             walker.memory = None
+            if label == getattr(self, "_theirs", None):
+                self._theirs_done = True
+            if talk and "pressed a" in out:
+                line = await self._settled_line()
+                if line:
+                    self._heard(t, line)
+                    out += (f'. Their line, typed out in full: "{line}" (say it once, as '
+                            "is; don't say part of it)")
         return f"{out} (by the place's map: {label})"
 
     async def _leave_for(self, atlas, place: str, quests) -> tuple[str, tuple] | None:
@@ -1917,7 +2086,7 @@ class Agent:
         async def shoot():
             return (await self.grab()).image
 
-        await self._speak(f"Going to {name}, out of here first.")
+        await self._speak(f"Going to {plain_place(name)}, out of here first.")
         self._going_to = name
         out = await walk_out(rooms, m.world, shoot, self.controls.steer,
                              self.walker_keep_going, walker.log, 90.0, here, label)
@@ -1927,17 +2096,18 @@ class Agent:
         walker.memory = None
         return out, found
 
-    async def _inside(self, image):
-        """(rooms, where) when the screen is inside a place the room survey knows."""
-        from .rooms import Rooms
-
-        if getattr(self, "_rooms", None) is None:
-            self._rooms = await asyncio.to_thread(Rooms.for_game, self.game or "")
-        if self._rooms is None:
+    async def _inside(self, image, sure: bool = False):
+        """(rooms, where) when the screen is inside a place the room survey knows. sure:
+        only a strong match with the character found (a weak one named "Residence" on
+        the world map, live): for answers and trips started without the model."""
+        if await self._rooms_data() is None:
             return None
         self._rooms.world_hint = getattr(self, "_last_world", None)
         self._rooms.world_spot = getattr(self, "_world_xy", None)
         here = await asyncio.to_thread(self._rooms.locate, image)
+        if here is not None and sure and (not getattr(here, "sure", True)
+                                          or getattr(here, "score", 1.0) < 0.75):
+            return None
         return (self._rooms, here) if here is not None else None
 
     async def _go_to_exit(self, to: str, limit: float = 90.0, talk: bool | None = None
@@ -1958,8 +2128,13 @@ class Agent:
         choices, targets, hints = rooms.options(here)
         if not choices:
             return f"in {rooms.name(here.loc)}, but no ways out are surveyed: use exits"
-        label, why = await pick_exit(self.muse, self.game or "", to, rooms.name(here.loc),
-                                     choices, hints)
+        label, why = await self._resolve(rooms, here, choices, targets, to, talk,
+                                         "go_to_exit")
+        if label is None and why.startswith(("not sure who", "asked the player")):
+            return why
+        if label is None:
+            label, why = await pick_exit(self.muse, self.game or "", to,
+                                         rooms.name(here.loc), choices, hints)
         if label is None:
             return (f"no single place from here fits {to!r} ({why}). From here: "
                     f"{'; '.join(choices)}. A place outside on the world map (another "
@@ -1967,7 +2142,10 @@ class Agent:
                     "ask the player which, or call go_to_exit with an exact name")
         target: Target | None = targets.get(label)
         if talk is None:
-            talk = target is not None and (why.startswith("talk:") or bool(TALK.search(to)))
+            mine = label == getattr(self, "_theirs", None)  # the player's someone
+            talk = target is not None and (why.startswith("talk:") or bool(TALK.search(to))
+                                           or (mine and bool(TALK.search(
+                                               getattr(self, "_request", "") or ""))))
         walker = self.walker()
 
         async def shoot():
@@ -1984,8 +2162,11 @@ class Agent:
                                     self.controls.press, bool(talk))
         finally:
             await told
+        self._talked_to = target if talk else None
         if result.startswith("arrived"):
             walker.memory = None  # somewhere else now
+            if label == getattr(self, "_theirs", None):
+                self._theirs_done = True
             if target is not None and target.person and any(
                     p.moves and p.name == target.name
                     for p in rooms.rooms[target.loc].people):
@@ -2159,6 +2340,9 @@ class Agent:
         self._failed_walks = 0
         run = Run(request)
         self._request = request  # the player's own words (tools get the model's)
+        self._settled_pick = None  # who the player picked when asked, this request
+        self._theirs = None  # who the player's own words meant, this request
+        self._theirs_done = False  # gone to them: later calls are the model's own
         self.cancelled = False
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
@@ -2195,6 +2379,42 @@ class Agent:
                 return run
             frame = await self.grab()
             tried += f"go_to_exit(outside) was tried already: {result}\n\n"
+        from .people import wanted
+
+        talk_to = TALK_TO.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
+        whole = talk_to.group("who") if talk_to and not trip and not out else \
+            trip.group("place") if trip and not tried and not out else ""
+        who = wanted(request) if whole else ""
+        # Only that ("take me to Melchior"), or more after it ("...and buy a sword").
+        only = bool(who) and who.lower().strip(" .!?,") == whole.lower().strip(" .!?,")
+        if who and await self._known_here(who, frame, sure=not talk_to):
+            # "Talk to Melchior" ("take me to the fountain") inside a surveyed place, who
+            # the survey knows: there now, by the player's own words, no model turn first
+            # (live, the model reworded them and went to someone else, or looked about).
+            a = {"to": who, "talk": True} if talk_to else {"to": who}
+            result = await self._act("go_to_exit", a)
+            run.steps.append(Step("go_to_exit", a, time.monotonic() - t0, result))
+            there = result.startswith("arrived")
+            # "Take me to the fountain", there and nothing more to do: done, no model turn
+            # (a save point's result says how to save; a talk's line is the model's).
+            done = there and not talk_to and only and "save point" not in result \
+                and "pressed a" not in result
+            if done and not self.cancelled:
+                await self._speak("We're there.")
+            if self.cancelled or done:
+                run.outcome = "cancelled" if self.cancelled else \
+                    (self.said[-1] if self.said else result)
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
+            frame = await self.grab()
+            tried += f"go_to_exit({a}) was done already: {result}\n"
+            if there and not only:
+                tried += "Now the rest of what they asked; don't walk to them again.\n"
+            elif there and "pressed a" in result:
+                tried += ("Say their line as it says, then only what's needed (a question in "
+                          "it is the player's to answer); don't walk again.\n")
+            tried += "\n"
         # Chrono Trigger on Steam in a fight: pause it while the model thinks.
         self._battle = await self._battle_on(frame)
         if self._battle is not None:

@@ -88,6 +88,10 @@ class Person:
     at: tuple[float, float]  # their feet, in the place's pixels
     moves: bool = False  # walks about: may not be just there
     look: str = ""  # their cut-out (people/<look>, the survey's), to find them on screen
+    # Other names they go by ("Melchior", "swordsmith", "old man") and their line when
+    # talked to: what the player may call them by (people.resolve).
+    aka: tuple[str, ...] = ()
+    said: str = ""
 
 
 @dataclass
@@ -98,6 +102,7 @@ class Target:
     at: tuple[float, float]
     person: bool = False  # someone or something standing there: walked up to, faced
     name: str = ""
+    kind: str = ""  # the survey's kind for it (a save point is stood on, not talked to)
 
 
 @dataclass
@@ -262,7 +267,8 @@ class Rooms:
                                if not WAY_OUT.search(k)}, moving=bool(d.get("moving")),
                         people=[Person(p["name"], p.get("kind") or "person",
                                        tuple(p["at"]), bool(p.get("moves")),
-                                       p.get("look") or "")
+                                       p.get("look") or "", tuple(p.get("aka") or ()),
+                                       str(p.get("said") or ""))
                                 for p in d.get("people", []) if p.get("name")
                                 and p.get("kind") != "none"])
             room.small = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2),
@@ -274,6 +280,7 @@ class Rooms:
             self.rooms[room.loc] = room
             if room.name and room.loc not in self.names:
                 self.names[room.loc] = room.name
+        self._name_alike(atlas)
         for room in self.rooms.values():
             for e in room.exits:
                 e.label = self._label(room, e, atlas)
@@ -307,13 +314,48 @@ class Rooms:
             if m is not None and m.places and any(e.at):
                 spots = {o.at for o in room.exits if o.to == e.to and any(o.at)}
                 if all(math.dist(o, e.at) < 16 for o in spots):
-                    return f"outside, by {m.nearest(*e.at)[0]}"
+                    return f"outside, by {plain_place(m.nearest(*e.at)[0])}"
                 own = room.name.lower()
                 others = [(math.dist(p, e.at), n) for n, p in m.places.items()
-                          if not own or (n.lower() not in own and own not in n.lower())]
+                          if not own or (n.lower() not in own and own not in n.lower()
+                                         and plain_place(n).lower() != own)]
                 if others:
-                    return f"outside, toward {min(others)[1]}"
+                    return f"outside, toward {plain_place(min(others)[1])}"
         return self.name(e.to)
+
+    def _name_alike(self, atlas) -> None:
+        """Places the game names alike ("Residence" five times, "Market" three) are
+        called by where they are, in plain words: the world map's name for the place
+        whose door leads in ("Truce Residence (west)": "the west house in Truce"), when
+        that tells them apart."""
+        if atlas is None:
+            return
+        by_name: dict[str, list[int]] = {}
+        for loc, n in self.names.items():
+            if loc not in self.worlds:
+                by_name.setdefault(n, []).append(loc)
+        alike = {loc for locs in by_name.values() if len(locs) > 1 for loc in locs}
+        if not alike:
+            return
+        found: dict[int, str] = {}
+        for m in getattr(atlas, "maps", []):
+            doors = getattr(m, "doors", None)
+            if not doors or not hasattr(m, "entrance"):
+                continue
+            for place in m.places:
+                for c in m.entrance(place) or ():
+                    loc = doors.get(c)
+                    if loc in alike and loc not in found:
+                        found[loc] = place
+        for n, locs in by_name.items():
+            named = {loc: plain_place(found[loc]) for loc in locs if loc in found}
+            if len(set(named.values())) < 2 and len(named) < len(locs):
+                continue  # the map doesn't tell them apart either
+            for loc, full in named.items():
+                if full.lower() != n.lower():
+                    self.names[loc] = full
+                    if loc in self.rooms:
+                        self.rooms[loc].name = full
 
     @staticmethod
     def folder_for(game: str, folder: Path = ATLASES) -> Path | None:
@@ -963,11 +1005,11 @@ class Rooms:
             for p in room.people:
                 key = f"{p.name} ({where})"
                 if key not in out:  # walked up to and faced (stood on: a save point)
-                    out[key] = Target(loc, p.at, p.kind != "save point", p.name)
+                    out[key] = Target(loc, p.at, p.kind != "save point", p.name, p.kind)
             for k, v in room.spots.items():
                 key = f"{k} ({where})"
                 if key not in out:
-                    out[key] = Target(loc, v, False, k)
+                    out[key] = Target(loc, v, False, k, "spot")
         return out
 
     def options(self, here: Here) -> tuple[dict[str, tuple[int, int]], dict[str, Target],
@@ -1288,6 +1330,10 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     a (`press`) facing them, to talk (or to open, search, use)."""
     t0 = time.monotonic()
     person = isinstance(spot, Target) and spot.person
+    # A save point is stood on. Pressing a there does nothing in Chrono Trigger (live on
+    # Steam: a on the Mountain of Woe's sparkle brought nothing up, a step away it
+    # climbed the chain beside it, 232 s and no save): saving is the menu's Save.
+    saving = isinstance(spot, Target) and spot.kind == "save point"
     at = (spot.at if isinstance(spot, Target) else spot) if spot is not None else None
     # Someone who walks about (behind a counter): found on screen at the end, a was
     # pressed when they come across from the player.
@@ -1439,6 +1485,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     await asyncio.sleep(STEAM_LEAD if here.steam else 0.15)
                     trail.clear()
                     continue
+                if tile in ends and saving:
+                    steer(None)
+                    return SAVE_POINT.format(secs=f"{time.monotonic() - t0:.0f}")
                 if tile in ends:
                     fx, fy = ends[tile]
                     aim, seen = at, None
@@ -1681,6 +1730,11 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     return f"timeout: still in {where}, on the way to {target}"
 
 
+SAVE_POINT = ("arrived: standing on the save point ({secs} s). Don't press a here: a save "
+              "point doesn't answer a in this game, and a by something beside it uses that "
+              "instead (a chain is climbed). To save, the menu: y opens it, and its Save is "
+              "lit while standing on a save point; then a slot, picked by the player. Only "
+              "if they asked to save; else tell them we're on it and how to save")
 WORDS_OUT = {"out", "outside", "exit", "leave", "outdoors", "world"}
 NEAREST_OUT = "outside, the nearest way out"
 
@@ -1766,6 +1820,22 @@ async def pick_exit(muse, game: str, said: str, here: str,
 
 TALK = re.compile(r"\b(talk|speak|chat|ask|tell|buy|sell|shop|rest|sleep|stay|"
                   r"save(?! point)|open|search|check|read|examine|use)\b", re.IGNORECASE)
+
+
+PLACE_KINDS = {"residence": "house"}
+
+
+def plain_place(name: str) -> str:
+    """A world map's name for a place, the way it's said: "Truce Residence (west)" is
+    "the west house in Truce", "Medina Residence" "the house in Medina"; others as they
+    are ("Truce Market", "Last Village Hut (west)")."""
+    m = re.fullmatch(r"(?P<town>[A-Z][\w']*) (?P<kind>\w+)(?: \((?P<side>[a-z -]+)\))?",
+                     name.strip())
+    if m is None or m.group("kind").lower() not in PLACE_KINDS:
+        return name
+    kind = PLACE_KINDS[m.group("kind").lower()]
+    side = f"{m.group('side')} " if m.group("side") else ""
+    return f"the {side}{kind} in {m.group('town')}"
 
 
 def describe(rooms: Rooms, here: Here) -> str:

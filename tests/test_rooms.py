@@ -90,6 +90,43 @@ def test_world_exits_named_by_their_end(tmp_path):
         "outside, the nearest way out"
 
 
+def test_places_named_alike_get_plain_names(tmp_path):
+    from types import SimpleNamespace
+    from typing import ClassVar
+
+    walk = [[r, c] for r in range(2, 12) for c in range(2, 14)]
+    for loc in (15, 16, 17, 39):
+        make(tmp_path, loc, (256, 224), walk,
+             [{"from": [11, 5], "dir": [0, 1], "to": 496, "at": [100, 100]}], loc)
+    (tmp_path / "names.json").write_text(json.dumps({"names": {
+        "15": "Residence", "16": "Residence", "17": "Market", "39": "Market",
+        "12": "Truce Inn", "116": "Truce Inn"}, "worlds": [496]}))
+
+    class Map:
+        world = 496
+        places: ClassVar = {
+            "Truce Residence (west)": (366, 251), "Truce Residence (east)": (424, 252),
+            "Truce Market": (348, 283), "Medina Market": (980, 411), "Truce Inn": (426, 304)}
+        doors: ClassVar = {(1, 1): 16, (2, 2): 15, (3, 3): 17, (4, 4): 39}
+        cells: ClassVar = {
+            "Truce Residence (west)": {(1, 1)}, "Truce Residence (east)": {(2, 2)},
+            "Truce Market": {(3, 3)}, "Medina Market": {(4, 4)}}
+
+        def entrance(self, name):
+            return self.cells.get(name)
+
+        def nearest(self, x, y):
+            return "Truce Residence (east)", 0.0, ""
+
+    rooms = Rooms(tmp_path, SimpleNamespace(maps=[Map()]))
+    assert rooms.name(15) == "the east house in Truce"
+    assert rooms.name(16) == "the west house in Truce"
+    assert rooms.name(17) == "Truce Market" and rooms.name(39) == "Medina Market"
+    assert rooms.name(12) == "Truce Inn" and rooms.name(116) == "Truce Inn"  # one town
+    assert rooms.rooms[15].name == "the east house in Truce"
+    assert rooms.rooms[17].exits[0].label == "outside, by the east house in Truce"
+
+
 def with_people(folder, loc, people):
     d = json.loads((folder / f"loc-{loc:03x}.json").read_text())
     d["people"] = people
@@ -285,7 +322,13 @@ async def test_agent_talks_to_someone_by_the_room_map(tmp_path, monkeypatch):
     _, x, y, facing = sim.pressed[-1]
     ends = rooms.stand_by(rooms.rooms[2], (152.0, 77.9), True)
     assert ends.get((int(y) // 16, int(x) // 16)) == facing
-    wanted, choices, hints = picks[0]
+    assert not picks  # a name: no model needed (people.resolve)
+    # Words that fit no one the survey knows: the model picks.
+    sim.pressed.clear()
+    sim.talking = False
+    out = await agent._act("talk_to", {"target": "the one behind the desk"})
+    assert out.startswith("arrived"), out
+    _wanted, choices, hints = picks[0]
     # Only people and things for talk_to; each with which way it is.
     assert set(choices) == {"the innkeeper (in here)", "the cat (in here)",
                             "the shopkeeper (the inn, downstairs)"}
@@ -325,3 +368,25 @@ def test_line_up_with_someone_off_the_tiles_middle():
     assert line_up((9, 56), (896.0, 118.0), (0, -1)) == 899
     assert line_up((9, 56), (904.0, 118.0), (0, -1)) == 904
     assert line_up((7, 54), (896.0, 118.0), (1, 0)) == 118.0
+
+
+async def test_a_save_point_is_stood_on_not_pressed_at(tmp_path):
+    from playertwo.rooms import Person, Target, walk_out
+
+    rooms, img = two_floors(tmp_path)
+    room = rooms.rooms[2]
+    room.people.append(Person("the save point", "save point", (232.0, 125.0)))
+    sim = Sim(img, room.walk, 72.0, 173.0)
+    target = Target(2, (232.0, 125.0), False, "the save point", "save point")
+    out = await walk_out(rooms, 2, sim.shoot, sim.steer, lambda: _true(), lambda _t: None,
+                         20.0, spot=target, press=sim.press, talk=True)
+    assert out.startswith("arrived: standing on the save point"), out
+    assert "y opens it" in out and "Don't press a" in out
+    assert not sim.pressed  # a on a save point does nothing; beside a chain it climbs it
+    assert (int(sim.y) // 16, int(sim.x) // 16) == (7, 14)
+    # The survey's kind goes with it as a target.
+    with_people(tmp_path, 2, [{"obj": 8, "at": [232.0, 125.0], "name": "the save point",
+                               "kind": "save point"}])
+    targets = Rooms(tmp_path).targets(2)
+    assert targets["the save point (in here)"].kind == "save point"
+    assert not targets["the save point (in here)"].person
