@@ -42,7 +42,7 @@ AHEAD_PAN = 0.16
 AHEAD_LEAVE = 0.26
 LOW_HZ, HIGH_HZ = 660.0, 1760.0
 # The box's size, as a fraction of the screen, from far off to right there.
-FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.03, 0.08
+FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.02, 0.05
 THERE_LOOKS = 2  # looks in a row at that size, since one box can be a fluke
 SIDE_LOOKS = 2  # looks on a new side before saying so
 LOST_S = 4.0  # not seen for this long: say so

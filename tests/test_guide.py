@@ -66,8 +66,8 @@ def test_a_line_not_really_said_is_offered_again():
 def test_pitch_and_beeps_rise_with_the_box():
     guide = g.Guide(0.0)
     far = guide.look([m(0.5, 0.002)], 1.0)
-    mid = guide.look([m(0.5, 0.02)], 2.0)
-    near = guide.look([m(0.5, 0.07)], 3.0)
+    mid = guide.look([m(0.5, 0.012)], 2.0)
+    near = guide.look([m(0.5, 0.045)], 3.0)
     assert far.hz == pytest.approx(660.0) and far.hz < mid.hz < near.hz
     assert (far.beeps, mid.beeps, near.beeps) == (1, 2, 3)
     assert far.wait_s > mid.wait_s > near.wait_s
@@ -76,10 +76,10 @@ def test_pitch_and_beeps_rise_with_the_box():
 def test_getting_close_once():
     guide = g.Guide(0.0)
     guide.said(guide.look([m(0.5, 0.01)], 1.0).say, 1.0)
-    step = guide.look([m(0.5, 0.04)], 2.0)
+    step = guide.look([m(0.5, 0.03)], 2.0)
     assert step.say == "Getting close."
     guide.said(step.say, 2.0)
-    assert guide.look([m(0.5, 0.05)], 3.0).say == ""
+    assert guide.look([m(0.5, 0.04)], 3.0).say == ""
 
 
 def test_arrival_needs_two_looks_in_a_row():
