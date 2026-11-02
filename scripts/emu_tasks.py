@@ -83,8 +83,12 @@ class Box:
             d = Path.home() / ".config/player-two" / kind
             if d.is_dir():
                 seed += ["--seed", f"{d}:.config/player-two/{kind}"]
+        # PLAYER_TWO_BOX_BIND: more folders to see in the box, ":" between them (a
+        # worktree's venv that lives in another checkout).
+        more = [a for d in os.environ.get("PLAYER_TWO_BOX_BIND", "").split(":") if d
+                for a in ("--ro-bind", d)]
         out = sh("omabox", "up", self.name, "--ro-bind", str(self.rom.parent),
-                 "--ro-bind", str(EMU), "--ro-bind", str(ROOT), *seed, timeout=180)
+                 "--ro-bind", str(EMU), "--ro-bind", str(ROOT), *more, *seed, timeout=180)
         if f"box '{self.name}' up" not in out:
             raise RuntimeError(f"{self.name} didn't come up: {out[-300:]}")
         self.home = Path(sh("omabox", "path", "--home", "-b", self.name).strip().splitlines()[-1])

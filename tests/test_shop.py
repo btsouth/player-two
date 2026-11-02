@@ -129,10 +129,13 @@ class FakeShop:
             return SimpleNamespace(kind="text", parts={"text": "Come again!"})
         return SimpleNamespace(kind="none", parts={})
 
+    def window(self, _frame):
+        return self.mode in ("talk", "bye")
+
 
 def make(game: FakeShop) -> Shop:
     return Shop(game.press, game.grab, read=game.read, dialogue=game.dialogue, gap_s=0.0,
-                wait_s=0.2)
+                wait_s=0.2, window=game.window)
 
 
 def test_buy_three_from_the_sellers_line_and_back_out():
@@ -141,6 +144,54 @@ def test_buy_three_from_the_sellers_line_and_back_out():
     assert game.funds == 370 and game.stock == {"Potion": 3}
     assert "Bought 3 Potion for 30 G (funds 400 G to 370 G)" in out
     assert game.mode == "field" and "Come again!" in out  # the goodbye read, pressed on
+
+
+class TypingGoodbye(FakeShop):
+    """The fair seller's goodbye as live 3 met it: it types out over a few looks, a
+    pressed while it types doesn't close it, and some looks don't read at all."""
+
+    LINE = ("Lucca's device is all set up now, you know. Just go straight, to the back of "
+            "the square.")
+
+    def __init__(self, unreadable=False, stuck=False, **kw):
+        super().__init__(**kw)
+        self.typed, self.unreadable, self.stuck = 0, unreadable, stuck
+
+    async def press(self, b, ms):
+        if self.mode == "bye" and b == "a":
+            self.log.append(b)
+            if self.typed >= 4 and not self.stuck:
+                self.mode = "field"
+            return
+        await super().press(b, ms)
+
+    def dialogue(self, frame):
+        if self.mode != "bye":
+            return super().dialogue(frame)
+        self.typed += 1
+        if self.unreadable and self.typed % 2:
+            return SimpleNamespace(kind="none", parts={})  # read as nothing
+        n = min(len(self.LINE), 12 * self.typed)
+        return SimpleNamespace(kind="text", parts={"text": self.LINE[:n]})
+
+
+def test_the_goodbye_is_read_whole_and_closed_before_saying_no_box_is_up():
+    game = TypingGoodbye(funds=400)
+    out = asyncio.run(make(game).buy("potions", 3))
+    assert game.mode == "field", game.log
+    assert f'the seller said: "{TypingGoodbye.LINE}" (pressed on: no box is up)' in out
+
+
+def test_a_goodbye_that_reads_as_nothing_is_still_a_box():
+    game = TypingGoodbye(funds=400, unreadable=True)
+    out = asyncio.run(make(game).buy("potions", 3))
+    assert game.mode == "field" and "no box is up" in out
+
+
+def test_a_box_that_stays_up_is_said_to_be_up():
+    game = TypingGoodbye(funds=400, stuck=True)
+    out = asyncio.run(make(game).buy("potions", 3))
+    assert "A text box is still up" in out and "no box is up" not in out
 
 
 def test_an_item_further_down_and_a_confirm_step():
@@ -640,3 +691,21 @@ def test_the_shop_tool_says_what_the_walk_to_the_seller_did(monkeypatch):
     agent, done = _shop_agent(monkeypatch, talked)
     out = asyncio.run(agent._shop({"action": "rest"}))
     assert out.startswith("Walked to the innkeeper and talked. Stayed the night"), out
+
+
+def test_the_price_and_the_purchase_are_told_before_the_goodbye():
+    """So they're said as the gold shows them, not after the seller's goodbye (live 3:
+    the goodbye typed out for 2.5 s before anything was said)."""
+    game = FakeShop()
+    told = []
+
+    async def priced(n, name, total):
+        told.append(("price", n, name, total, game.mode))
+
+    async def bought(n, name, spent, funds):
+        told.append(("bought", n, name, spent, funds, game.mode))
+
+    out = asyncio.run(make(game).buy("Potion", 3, priced=priced, bought=bought))
+    assert out.startswith("Bought 3 Potion for 30 G (funds 400 G to 370 G)"), out
+    assert told == [("price", 3, "Potion", 30, "count"),
+                    ("bought", 3, "Potion", 30, 370, "list")]  # still in the shop

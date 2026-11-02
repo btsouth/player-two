@@ -86,7 +86,8 @@ async def main() -> int:
             left = args.limit - (time.monotonic() - t0)
             out = await walk_out(rooms, int(args.to, 16), shoot, keys.steer, keep_going, log,
                                  left, label=args.exit, spot=target, press=keys.press,
-                                 talk=args.talk)
+                                 talk=args.talk, dash=keys.dash if os.environ.get(
+                                     "PLAYER_TWO_DASH") == "1" else None)
             if not out.startswith("interrupted") or left < 5:
                 break
             # What the model would do: read it and press on, or fight (a forest's

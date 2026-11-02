@@ -152,6 +152,7 @@ SETTABLE: dict[str, tuple] = {
 }
 SPEECH_RATES = (0.8, 2.0)
 FOES_GAP_S = 6.0  # a fight the player plays: enemies counted again at most this often
+START_COUNT_S = 20.0  # a fight's opening count answers "what are we fighting?" this long
 # Verbosities that get a line of what a place is like the first time it's entered.
 FEEL_VERBOSITY = ("normal", "detailed")
 # Two screens whose colours share this much are taken for one place not surveyed (its
@@ -358,6 +359,11 @@ class Session:
                            self.agent_say,
                            game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
                            language=settings.language, on_action=self.on_action)
+        # What was said lately (narration, the reader, answers): the screen in words, for
+        # the agent's check that a line it's about to say is about the game.
+        self.agent.context_lines = lambda: [e["text"] for e in self.events.recent
+                                            if e.get("kind") in ("say", "ask")
+                                            and e.get("text")]
         self.status = ""
         self.transcribing = False
         # The game in view: None until the first look, then its name ("" when it has
@@ -646,6 +652,15 @@ class Session:
         if not self.rooms:
             return none
         here = await asyncio.to_thread(self.rooms.locate, frame.image)
+        weak = here is not None and (not getattr(here, "sure", True)
+                                     or getattr(here, "score", 1.0) < 0.75)
+        if here is None or here.loc in self.rooms.worlds or weak:
+            # A world map the atlas knows: where on it, in a few words ("World map, 1000
+            # A.D., at Leene Square"), as a place's name (live 3 said only "World map."
+            # or "1000 A.D.", or what the woods looked like, never where).
+            world = await self._world_arrival(frame, asked)
+            if world is not None:
+                return world
         if here is None:
             if (feel or asked) and not getattr(self.rooms, "dark", False):
                 # Not surveyed: what it's like is the model's to say, once a place.
@@ -688,6 +703,34 @@ class Session:
             # it's like is still news the first time.
             return "", line, False
         return short, line, False
+
+    async def _world_arrival(self, frame: Frame, asked: bool
+                             ) -> tuple[str, str, bool] | None:
+        """_arrival on a world map: where on it, when the atlas places the screen surely
+        (said when it's new, like a place's name); None when it isn't a world map the atlas
+        knows."""
+        where = ""
+        look = palette(frame.image)
+        miss = getattr(self, "world_miss", None)
+        if miss is not None and same_look(look, miss) >= SAME_LOOK:
+            return None  # a screen like the last the atlas didn't know (0.3 s a look)
+        if hasattr(self.agent, "world_where"):
+            with contextlib.suppress(Exception):
+                where = await self.agent.world_where(frame.image)
+        if not where:
+            self.world_miss = look
+            return None
+        self.world_miss = None
+        self.world_head = where  # (the narration after it says only what's new)
+        last, when = getattr(self, "place_said", ("", 0.0))
+        if not asked and where == last and time.monotonic() - when < 120:
+            return "", "", False
+        self.place_said = (where, time.monotonic())
+        recent = getattr(getattr(self, "narrator", None), "recent", ())
+        spot = where.split(", ")[-1].lower()  # "at leene square": Player Two just said it
+        if not asked and len(where.split(", ")) > 2 and any(spot in r.lower() for r in recent):
+            return "", "", False
+        return where, "", False
 
     def _feel_ok(self, frame: Frame) -> bool:
         """Whether a line of what a place is like may go with this screen's narration: not
@@ -736,7 +779,8 @@ class Session:
                 if head:
                     self.narrating_text += f"{head} "
                     yield f"{head} "
-                if line or ask:
+                world = bool(place) and place == getattr(self, "world_head", None)
+                if line or ask or world:
                     # The model was asked before that: ask again, knowing what was just
                     # said (so only what's new follows the place's line), or asking what
                     # this new place is like.
@@ -745,7 +789,7 @@ class Session:
                     with contextlib.suppress(BaseException):
                         first.result()  # taken: a failed first call is asked again below
                     await gen.aclose()
-                    if line:
+                    if line or world:
                         self.narrator.recent.append(head)
                     gen = narrate(PLACE_FEEL if ask else PLACE_SAID)
                     first = asyncio.ensure_future(anext(gen, None))
@@ -1184,6 +1228,7 @@ class Session:
         elif self.reader.fight_started:
             # The reader says turns and HP; what the party is up against is a look's.
             self.reader.fight_started = False
+            self.start_foes = None  # the last fight's count isn't this one's
             # (A narration cancelled just above as stale isn't done yet, but it's over.)
             if self.narrating is None or self.narrating.done() or stale:
                 self.narrating = self.read_model = asyncio.create_task(
@@ -1233,7 +1278,20 @@ class Session:
         if self.agent.foes is None:
             self.agent.foes = foes
         self.foes_at = time.monotonic()
+        self.start_foes = foes
         await self._foe_news(foes.line())
+
+    def _start_count(self):
+        """The fight's opening count while it still holds: a few seconds old, with no
+        party command put in since (only a command takes an enemy down), so "what are
+        we fighting?" right after "Fight." is said at once, not after a second look
+        (live 3: 1.9 to 3.2 s)."""
+        foes = getattr(self, "start_foes", None)
+        ex = getattr(self.agent, "_executor", None)
+        acted = getattr(ex, "acted_at", 0.0) if ex is not None else 0.0
+        if foes is None or time.monotonic() - foes.at > START_COUNT_S or acted >= foes.at:
+            return None
+        return foes
 
     async def _foe_news(self, line: str) -> None:
         """An enemy count, said unless Player Two is acting (its lines go first)."""
@@ -1583,8 +1641,17 @@ class Session:
             line = None
             if (ctscreen.ASK_FOE.search(ctscreen._plain(text)) and lk.battle is not None
                     and lk.battle.party and hasattr(self.agent, "what_we_fight")):
-                # The enemies, counted by a look, and the party's HP in a few words.
-                line = await self.agent.what_we_fight(frame.image, lk.battle)
+                # The enemies, counted by a look (or the fight's opening count while it
+                # holds), and the party's HP in a few words, as it is once the count is
+                # back (the fight goes on meanwhile).
+                async def fight_now():
+                    f = await self.grab_now()
+                    return (await asyncio.to_thread(ctscreen.look, f.image,
+                                                    self.reader.party)).battle
+
+                line = await self.agent.what_we_fight(frame.image, lk.battle,
+                                                      known=self._start_count(),
+                                                      now=fight_now)
             line = line or await asyncio.to_thread(ctscreen.answer, text, lk,
                                            self.reader.active or self.reader.party,
                                            self.reader.heard, frame.image)
@@ -1599,6 +1666,9 @@ class Session:
                          seconds=round(time.monotonic() - t0, 2))
         self.narrator.recent.append(line)
         self.agent.history.append(f"{text} -> {line}")
+        # Danger it gives ("Frog's at 1 of 494") isn't the reader's to say again.
+        with contextlib.suppress(Exception):
+            self.reader.just_said([line])
         await self.voice.say(line)
         return True
 
@@ -2233,6 +2303,16 @@ class Session:
 
         self.main = asyncio.current_task()
         self.stop_on_signals()
+        # When each line was really heard (it can wait its turn for seconds after it was
+        # queued): logged for captions that start and end with the speech.
+        loop = asyncio.get_running_loop()
+
+        def played(text: str, began: float, ended: float, cut: bool) -> None:
+            loop.call_soon_threadsafe(lambda: self.events.emit(
+                "spoken", text=text, began=round(began, 3), ended=round(ended, 3),
+                **({"cut": True} if cut else {})))
+
+        self.mixer.on_played = played
         # Open the control socket first, so a talk key pressed during start-up still lands.
         self.serving = asyncio.Event()
         tasks = [asyncio.create_task(self.serve()), asyncio.create_task(self.track_status())]

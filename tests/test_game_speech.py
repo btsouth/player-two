@@ -155,6 +155,43 @@ async def test_a_gate_that_says_no_drops_the_rest_and_reports_only_what_was_said
     said = await v.say_stream(deltas(), gate=gate, tag="narration")
     assert said.startswith("A figure") and "Another" not in said
     assert list(v.mixer._tags) and set(v.mixer._tags) == {"narration"}
+    # Each buffer also carries its words, for the "spoken" event captions are timed by.
+    assert " ".join(v.mixer._texts) == said
+
+
+def test_narration_held_for_the_game_and_restarted_is_captioned_as_heard():
+    """A sentence paused for the game's voice and started over is told to on_played twice:
+    what was heard before the pause, as cut, and then the whole of it, timed from when it
+    started again (not from its first start, seconds before)."""
+    m = Mixer(sink="test")
+    heard = []
+    m.on_played = lambda text, began, ended, cut: heard.append((text, began, ended, cut))
+    line = "A soldier walks in."
+    m.push_speech(np.full(4800, 0.1, np.float32), line, tag="narration")
+    out = np.zeros((480, 2), np.float32)
+    for _ in range(3):
+        m._callback(out, 480, None, None)
+    assert m.current_tag() == "narration" and heard == []
+    m.hold_speech(True)  # the game starts to speak
+    assert [(t, c) for t, _b, _e, c in heard] == [(line, True)]
+    assert heard[0][2] >= heard[0][1]
+    m._callback(out, 480, None, None)
+    assert len(heard) == 1 and not out.any()  # held: silent, nothing more told
+    time.sleep(0.01)
+    again = time.time()
+    m.hold_speech(False)
+    for _ in range(12):
+        m._callback(out, 480, None, None)
+    assert len(heard) == 2
+    text, began, ended, cut = heard[1]
+    assert (text, cut) == (line, False) and began >= again and ended >= began
+    assert m.current_tag() is None
+    # Dropped while held (a stale description): nothing more is told, it wasn't heard.
+    m.push_speech(np.full(4800, 0.1, np.float32), "A door opens.", tag="narration")
+    m._callback(out, 480, None, None)
+    m.hold_speech(True)
+    m.clear_speech()
+    assert [(t, c) for t, _b, _e, c in heard[2:]] == [("A door opens.", True)]
 
 
 def test_the_watcher_says_when_a_settled_screen_started_changing():

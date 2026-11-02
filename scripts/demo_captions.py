@@ -45,46 +45,138 @@ def _chunks(text: str, limit: int = 90) -> list[str]:
     return out
 
 
+def _heard_text(text: str) -> str:
+    """A spoken line as captioned: the voice spells HP and MP out ("H.P."); a caption
+    says HP."""
+    text = re.sub(r"\b([HSM])\.P\.(?=$|\s+[A-Z])", r"\1P.", text.strip())
+    return re.sub(r"\b([HSM])\.P\.", r"\1P", text)
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9']+", text.lower()))
+
+
+def _played_lines(events: list[dict], narrator: bool) -> list[tuple[float, float, str]]:
+    """Player Two's lines from the voice's own record of when each was heard ("spoken"
+    events, logged as each sentence finishes playing): (began, ended, text). A line cut
+    off ends where it was cut. Pieces of one sentence (a long first sentence is spoken
+    in two) are put back together."""
+    says = [e for e in events if e.get("kind") == "say" and e.get("text")]
+    out: list[tuple[float, float, str]] = []
+    for e in sorted((e for e in events if e.get("kind") == "spoken" and e.get("text")),
+                    key=lambda e: e["began"]):
+        text = _heard_text(str(e["text"]))
+        if not narrator:
+            w = _words(text)
+            near = [x for x in says if abs(x["t"] - e["began"]) < 60 and w <= _words(
+                _heard_text(x["text"]))]
+            if near and min(near, key=lambda x: abs(x["t"] - e["began"])).get(
+                    "source") == "narrator":
+                continue
+        if out and e["began"] - out[-1][1] < 0.25 and not re.search(r"[.!?]$", out[-1][2]) \
+                and len(out[-1][2]) + len(text) <= 120:
+            out[-1] = (out[-1][0], e["ended"], f"{out[-1][2]} {text}")
+        else:
+            out.append((e["began"], e["ended"], text))
+    return out
+
+
+def _queued_lines(events: list[dict], narrator: bool) -> list[tuple[float, float, str]]:
+    """Player Two's lines from a log without the voice's record (before "spoken" events):
+    when each was heard, worked out. A line is logged when it's queued (a narration when
+    it has all been written), and plays when the lines before it are done; the voice's
+    status says when it was speaking. Lines queued before or during one stretch of speech
+    share it, in order, by length."""
+    spans: list[list[float]] = []
+    for e in events:
+        if e.get("kind") != "status":
+            continue
+        if e.get("state") == "speaking":
+            if spans and spans[-1][1] is None:
+                continue
+            if spans and e["t"] - spans[-1][1] < 0.25:
+                spans[-1][1] = None  # one stretch, a moment's gap in it
+            else:
+                spans.append([e["t"], None])
+        elif spans and spans[-1][1] is None:
+            spans[-1][1] = e["t"]
+    spans = [s for s in spans if s[1] is not None]
+    lines = []
+    for e in events:
+        text = str(e.get("text") or "").strip()
+        if e.get("kind") != "say" or not text:
+            continue
+        if not narrator and e.get("source") == "narrator":
+            continue
+        dur = max(0.6, len(text) / CHARS_PER_S)
+        # A narration is logged once written, which is about when it has been said.
+        ready = e["t"] - dur if e.get("source") in ("narrator", "describe", "atmosphere") \
+            else e["t"]
+        lines.append((ready, dur, text))
+    lines.sort()
+    out: list[tuple[float, float, str]] = []
+    k = 0  # the stretch of speech the last line went in (lines play in order)
+    groups: dict[int, list[tuple[float, float, str]]] = {}
+    alone: list[tuple[float, float, str]] = []
+    for ready, dur, text in lines:
+        while k < len(spans) and spans[k][1] <= ready + 0.1:
+            k += 1
+        if k < len(spans) and spans[k][0] < ready + dur + 3.0:
+            groups.setdefault(k, []).append((ready, dur, text))
+        else:
+            alone.append((ready, ready + dur, text))
+    for k, group in groups.items():
+        a, b = spans[k]
+        a = max(a, min(r for r, _d, _t in group) - 0.2)
+        total = sum(d for _r, d, _t in group)
+        scale = (b - a) / total if total else 1.0
+        cur = a
+        for ready, dur, text in group:
+            cur = max(cur, ready)
+            end = min(b, cur + dur * scale) if group[-1][2] != text else b
+            out.append((cur, max(end, cur + 0.6), text))
+            cur = end
+    return sorted(out + alone)
+
+
 def captions(events: list[dict], start: float, narrator: bool = True
              ) -> list[tuple[float, float, str, str]]:
     """(from, to, who, text) in seconds from the video's start; who is "You" or
-    "Player Two", and the text of a line's first part starts with it."""
+    "Player Two", and the text of a line's first part starts with it. Player Two's
+    captions start and end with the speech (never a line still up after it was said,
+    or up before it was)."""
     out: list[tuple[float, float, str, str]] = []
-    statuses = [(e["t"], e.get("state")) for e in events if e.get("kind") == "status"]
-    for e in events:
-        kind, text = e.get("kind"), str(e.get("text") or "").strip()
-        if not text or kind not in ("heard", "say"):
-            continue
-        if kind == "say" and not narrator and e.get("source") == "narrator":
-            continue
-        t0 = e["t"]
-        guess = max(2.0, len(text) / CHARS_PER_S + 0.6)
-        if kind == "say":
-            # Speech ends when the status leaves "speaking" after this line started.
-            ends = [t for t, s in statuses if t > t0 + 0.3 and s != "speaking"]
-            t1 = min(ends[0] + 0.4, t0 + guess + 4) if ends else t0 + guess
-            t1 = max(t1, t0 + 1.5)
-            who = "Player Two"
-        else:
-            t1 = t0 + max(2.5, guess)
-            who = "You"
-        # One sentence at a time, each shown for its share of the spoken time.
+    played = any(e.get("kind") == "spoken" for e in events)
+    lines = _played_lines(events, narrator) if played else _queued_lines(events, narrator)
+    for t0, t1, text in lines:
         parts = _chunks(text)
         total = sum(len(x) for x in parts) or 1
         a = t0
         for i, part in enumerate(parts):
             b = a + (t1 - t0) * len(part) / total
-            out.append((a - start, b - start, who, f"{who}: {part}" if i == 0 else part))
+            out.append((a - start, b - start, "Player Two",
+                        f"Player Two: {part}" if i == 0 else part))
             a = b
+    for e in events:
+        text = str(e.get("text") or "").strip()
+        if e.get("kind") != "heard" or not text:
+            continue
+        t0 = e["t"]
+        out.append((t0 - start, t0 - start + max(2.5, len(text) / CHARS_PER_S + 0.6), "You",
+                    f"You: {text}"))
     out = [c for c in out if c[1] > 0]
     out.sort()
     # Never let one caption run over the speaker's next one. The player's words and
     # Player Two's answer can be up together: a typed request and "Let me look." start
     # within a few milliseconds of each other, and the request would show for a blink.
+    # A short line ("Fight.") stays up a little longer than it's said, but never
+    # past the next.
     for i, (a, b, who, txt) in enumerate(out):
         nxt = next((c for c in out[i + 1:] if c[2] == who), None)
+        b = max(b, a + 0.8)
         if nxt is not None and b > nxt[0]:
-            out[i] = (a, max(a + 0.8, nxt[0] - 0.05), who, txt)
+            b = max(a + 0.3, nxt[0] - 0.05) if who != "You" else max(a + 0.8, nxt[0] - 0.05)
+        out[i] = (a, b, who, txt)
     return out
 
 

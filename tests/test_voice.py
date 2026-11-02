@@ -13,7 +13,8 @@ def fake_voice():
     v._lock = asyncio.Lock()
     v.last_spoken = ""
     pushed = []
-    v.mixer = SimpleNamespace(push_speech=pushed.append, clear_speech=lambda: None)
+    v.mixer = SimpleNamespace(push_speech=lambda x, text="", tag="": pushed.append(x),
+                              clear_speech=lambda: None)
 
     def synth(sentence):
         time.sleep(0.15)  # the speech model takes a moment
