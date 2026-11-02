@@ -177,7 +177,7 @@ def test_a_game_clip_keeps_to_its_budget_at_normal_speed():
               *[_spoken(f"Line {i}.", 3.0 + 4 * i, 6.0 + 4 * i) for i in range(12)]]
     warned = []
     pieces = mv.game_pieces("game3", _take(events, "game3"), False, None, warned)
-    assert pieces[0].speed == 1.0 and pieces[0].out_s <= 10.0 and not warned
+    assert pieces[0].speed == 1.0 and pieces[0].out_s <= 15.0 and not warned
 
 
 def _plan(a_events, final_rates=None, no_code=frozenset()):
@@ -195,9 +195,9 @@ def test_final_refuses_placeholders_voice_over_labels_and_draft_rates():
 def test_the_quote_and_the_honest_lines_are_on_cards():
     parts, _dropped, _warnings = _plan(_events())
     words = " ".join(str(b[0]) for p in parts for b in p.blocks)
-    assert "nor defeat Lavos in Chrono Trigger...”" in words
-    assert "hasn't beaten Lavos yet" in words and "no blind player has tried it" in words
-    assert "free-form requests" in words and "there for speed" in words
+    assert "What if you could play by asking?" in words
+    assert "Lavos is still ahead" in words and "No blind-player testing yet" in words
+    assert "Muse understands scenes" in words and "common actions" in words
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
 
@@ -219,7 +219,7 @@ def test_final_refuses_a_speed_up_without_its_label():
 def test_captions_at_the_top_clear_the_games_message_bar():
     take = _take([{"t": 1.0, "kind": "heard", "text": "hi", "typed": True}], "take-B", top=True)
     head = mv.ass_text(take)
-    assert ",8,20,20,50,1" in head and ",8,20,20,30,1" in head
+    assert "PlayResX: 1920" in head and "368,64,30,1" in head
     assert "DejaVu" not in head
 
 
@@ -237,3 +237,39 @@ def test_a_caption_moment_is_where_it_lands_in_the_video():
     assert mv.out_time(parts, "t", 103.0) == 11.0
     assert mv.out_time(parts, "t", 107.0) == 13.0
     assert mv.out_time(parts, "t", 50.0) is None
+
+
+def test_evidence_never_guesses_a_model_from_request_words():
+    events = [{"t": 1, "kind": "heard", "text": "segment with SAM", "typed": True},
+              {"t": 2, "kind": "agent", "turns": [], "seconds": 0.1, "steps": [{"tool": "shop"}]}]
+    parts = [mv.Piece("p", "ct", take="take-A", a=0, b=4)]
+    report = mv.evidence_overlays(parts, {"take-A": _take(events)})
+    assert report[0]["layer"] == "Local action"
+    assert "SAM" not in report[0]["layer"]
+    assert report[0]["badge_from"] == 2
+    assert parts[0].overlays[1].f1 == 2  # no completed measurement before it completed
+
+
+def test_spark_badge_requires_logged_model_identity_and_measured_turns():
+    es = [{"t": 0, "kind": "ready", "brain": "muse-spark-1.3"},
+          {"t": 1, "kind": "heard", "text": "Where?", "typed": True},
+          {"t": 3, "kind": "agent", "seconds": 2, "turns": [{"model_s": 0.8}]}]
+    parts = [mv.Piece("p", "ct", take="take-A", a=0, b=5)]
+    result = mv.evidence_overlays(parts, {"take-A": _take(es)})
+    assert result[0]["layer"] == "Muse Spark" and "0.80 s" in result[0]["timing"]
+    no_identity = mv.evidence_overlays([mv.Piece("p", "ct", take="take-A", a=0, b=5)],
+                                {"take-A": _take(es[1:])})
+    assert no_identity[0]["layer"] == "Player Two"
+
+
+def test_a_three_minute_overrun_is_refused():
+    assert "over 180" in " ".join(mv.final_refusals(
+        [mv.Piece("long", "hook", kind="card", secs=180.01)], []))
+
+
+def test_empty_turns_and_no_steps_do_not_prove_a_local_answer():
+    es = [{"t": 1, "kind": "heard", "text": "What are we fighting?"},
+          {"t": 3, "kind": "agent", "seconds": 2, "turns": [], "steps": []}]
+    result = mv.evidence_overlays([mv.Piece("p", "ct", take="take-A", a=0,b=5)],
+                                  {"take-A": _take(es)})
+    assert result[0]["layer"] == "Player Two"
