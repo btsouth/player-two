@@ -30,23 +30,40 @@ The cutter cannot judge gameplay, privacy, spoken correctness or whether an acti
 
 ## Cold opening and ending
 
-B must contain “What are we fighting?” then “Win this fight for me”, close together, with no
-other requests between them. The first 15 seconds remain continuous at normal speed. Picture
-is black for 13 seconds, then fades up over one second, without changing audio or source time.
-The rest of that same request runs to its result; later gaps alone may be sped up, visibly labelled.
-The fight requests are not repeated later. Final mode refuses an incomplete pair.
+The accepted B sequence is fight narration, “How are we doing?”, “Crono, use Cyclone.”, then
+“Win this fight for me.” The picture is black from before the logged first “Fight.” through the
+choice. Every spoken line stays in order. It fades up on the actual spin, which must be measured
+from source frames, not guessed from the completed action event. The reveal and spin stay normal
+speed; only later speech-free gaps are accelerated, with persistent 3x labels. Typed requests
+stay visibly typed. Missing opening speech or unmeasured reveal is refused by final mode.
 
-The 45-second sample uses one continuous old Win exchange because the older two questions are
-65 seconds apart. It does not splice a fake paired conversation or dub a typed request. Its old
-source and the missing final take are clearly labelled. The sample is a style test, not the
-complete requested paired exchange.
+Add measured settings to the take-B manifest entry, for example:
 
-The full film follows with the product card, four-second RetroArch excerpt, and “Lavos is still
+```json
+{
+  "take-B": {
+    "edit": {"reveal_at": 33.35, "reveal_duration": 0.25, "normal_until": 35.35}
+  },
+  "edit": {"drop": ["A1", "A2", "A5"]}
+}
+```
+
+Those values apply to the reviewed run, not to arbitrary replacement footage. Review every new
+reveal against its frames. Use the original full session log when a per-check log omits speech
+from before the first request. Preserve original timestamps and never synthesize a missing line.
+
+The same run's final real “Won the fight…” spoken record is reserved once for the black-screen
+ending, labelled “The same fight. The result.” It is neither repeated in the opening nor dubbed.
+If no such record exists, `ending.mp4` can supply a real final line, or a visible placeholder remains.
+
+The film follows with the product card, four-second RetroArch excerpt, and “Lavos is still
 ahead. Here’s how far we’ve got.” `vo-ahead.wav` optionally voices that line. No glasses story.
-Then map, actual saved map proof, walking/shop, optional SAM, other games, how, last line and
-end card. `ending.mp4` is a short real Player Two utterance with its original audio/log, displayed
-on black. Missing footage is visibly reserved with placeholders. No rates wall.
-`vo-how.wav` voices the how card. `vo-why` is retired. Silent cards retain the words for silent viewing.
+Then map proof, actual walking/shop, optional SAM when usable footage exists, other games, how,
+real last line and end card. `A3b` (“What does it look like?”) retains whole descriptive sentences
+and marks its shortened tail. No rates wall. `vo-how.wav` voices the how card; `vo-why` is retired.
+
+The earlier `--sample` remains a 45-second style sample based on a continuous Win excerpt; it is
+not the new full choice/delegation story. The full render is the default command.
 
 ## Model evidence and SAM
 
@@ -80,6 +97,6 @@ and -2.5 dBTP; measure decoded AAC with ebur128 again.
 Cut/evidence JSON, caption warnings and optional sheets accompany the output. `--cut` replays a
 hand-edited cut; rebuild without it to discover new source/VO files. Cache keys include renderer,
 font, source size/mtime, captions and settings. `--final` refuses placeholders, missing how VO,
-incomplete cold opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
+incomplete choice/delegation opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
 sped-up speech and duration above 3:00, including after encoding. `--accept-captions` cannot bypass
 stale facts or sped-up speech. Human frame and full-speed listening checks remain essential.

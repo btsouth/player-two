@@ -97,3 +97,10 @@ def test_a_line_held_for_the_games_voice_is_captioned_as_it_was_heard():
     caps = [(a, b, txt) for a, b, who, txt in demo_captions.captions(events, 0.0)
             if who == "Player Two"]
     assert caps == [(10.0, 11.0, f"Player Two: {line}"), (13.0, 15.0, f"Player Two: {line}")]
+
+
+def test_hp_abbreviation_does_not_break_a_continuous_combo_warning():
+    events=[{"t":2,"kind":"spoken","text":"Combo Attack: Reduces H.P.","began":0,"ended":2},
+            {"t":2.8,"kind":"spoken","text":"to 1.","began":2,"ended":2.8}]
+    caps=demo_captions.captions(events,0)
+    assert caps == [(0,2.8,"Player Two","Player Two: Combo Attack: Reduces HP to 1.")]

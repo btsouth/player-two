@@ -281,20 +281,46 @@ def test_missing_fight_gets_a_visible_placeholder_not_a_silent_omission():
     assert "placeholder: cold-missing" in mv.final_refusals(parts, [])
 
 
-def test_cold_open_keeps_time_continuous_and_unsped_through_reveal():
-    es=[{"t":1,"kind":"heard","text":"What are we fighting?","typed":True},
-        _spoken("Three imps.",2,4),
-        {"t":6,"kind":"heard","text":"Win this fight for me.","typed":True},
-        _spoken("Okay, I'll take this fight.",6.1,8),
-        _spoken("Won.",24,25), {"t":25,"kind":"agent","seconds":19,"turns":[],"steps":[]}]
-    take=_take(es,"take-B",30,True)
+def _choice_take():
+    es=[_spoken("Fight.",1,1.6),
+        {"t":3,"kind":"heard","text":"How are we doing?","typed":True},
+        _spoken("Frog is at 1 HP.",3.2,5),
+        {"t":8,"kind":"heard","text":"Crono, use Cyclone.","typed":True},
+        _spoken("Okay, Crono will use Cyclone.",8.1,10),
+        _spoken("Crono used Cyclone.",12,13),
+        {"t":16,"kind":"heard","text":"Win this fight for me.","typed":True},
+        _spoken("Okay, I'll take this fight.",16.1,18),
+        _spoken("Frog uses Heal.",23,24),
+        _spoken("Won the fight.",29,30),
+        {"t":30,"kind":"agent","seconds":14,"turns":[],"steps":[]}]
+    take=_take(es,"take-B",35,True)
+    take.edit={"reveal_at":11,"reveal_duration":.25,"normal_until":13.5}
+    return take
+
+
+def test_cold_open_keeps_all_speech_and_time_continuous_through_measured_spin():
+    take=_choice_take()
     parts,warnings=mv.cold_open(take)
-    assert not warnings and parts[0].speed==1 and parts[0].out_s==15
-    assert parts[0].black_for==13
-    assert all(abs(a.b-b.a)<0.001 for a,b in itertools.pairwise(parts))
+    assert not warnings and parts[0].speed==1
+    assert parts[0].a==.7 and parts[0].b==13.5
+    assert parts[0].black_for==10.3 and parts[0].reveal_s==.25
+    assert all(abs(a.b-b.a)<.001 for a,b in itertools.pairwise(parts))
     mv.evidence_overlays(parts,{"take-B":take})
     words=" ".join(o.text for p in parts for o in p.overlays)
-    assert "What are we fighting?" in words and "Win this fight for me." in words
+    assert all(x in words for x in ["How are we doing?","Crono, use Cyclone.","Win this fight for me."])
+    for a,b,who,_ in take.caps:
+        if who=="Player Two":
+            assert not any(p.speed>1 and min(p.b,b)-max(p.a,a)>.01 for p in parts)
+
+
+def test_real_win_is_reserved_once_for_the_black_ending_without_repeating_speech():
+    take=_choice_take()
+    parts,_=mv.cold_open(take)
+    opening,ending=mv.reserve_win_line(parts,take)
+    assert len(ending)==1 and ending[0].black_for==999
+    assert abs(opening[-1].b-ending[0].a)<.001
+    assert opening[-1].b<29 and ending[0].a<29<ending[0].b
+    assert ending[0].b>=30
 
 
 def test_sam_overlay_requires_actual_sam_box_not_a_centre_or_fallback():
@@ -310,18 +336,27 @@ def test_sam_overlay_requires_actual_sam_box_not_a_centre_or_fallback():
     assert p.overlays[0].f0==4
 
 
-def test_cold_open_refuses_a_pair_that_cannot_finish_during_black():
-    es=[{"t":1,"kind":"heard","text":"What are we fighting?","typed":True},
-        _spoken("Three imps.",2,4),
-        {"t":17,"kind":"heard","text":"Win this fight for me.","typed":True},
-        _spoken("Okay, I'll take this fight.",17.1,19),
-        _spoken("Won.",29,30), {"t":30,"kind":"agent","seconds":13,"turns":[],"steps":[]}]
-    parts,warnings=mv.cold_open(_take(es,"take-B",35,True))
-    assert any("finish during black" in w for w in warnings)
+def test_cold_open_requires_actual_spin_measurement_and_request_order():
+    take=_choice_take()
+    take.edit={}
+    parts,warnings=mv.cold_open(take)
+    assert any("actual Cyclone frames" in w for w in warnings)
     assert any("cold open incomplete" in w for w in mv.final_refusals(parts,warnings))
+    take=_choice_take()
+    next(e for e in take.events if e.get("text")=="Crono, use Cyclone.")["t"]=19
+    _,warnings=mv.cold_open(take)
+    assert any("in that order" in w for w in warnings)
 
 
 def test_invalid_or_inverted_sam_boxes_are_not_drawn():
     assert not mv.valid_box([.4,.2,.1,.6])
     assert not mv.valid_box([.1,.2,1.2,.6])
     assert not mv.valid_box([.5,.5])
+
+
+def test_missing_cold_sequence_keeps_its_placeholder_even_if_a_win_is_logged():
+    take=_choice_take()
+    take.events=[e for e in take.events if e.get("text")!="How are we doing?"]
+    opening,_=mv.cold_open(take)
+    kept,ending=mv.reserve_win_line(opening,take)
+    assert kept==opening and kept[0].kind=="slate" and ending==[]
