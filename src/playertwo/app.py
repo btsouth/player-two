@@ -2303,7 +2303,7 @@ class Session:
             if new:
                 parts.append("I'm listening hands-free. Start with my name, like: Player "
                              "Two, open the menu. Ask for help to hear what else you can "
-                             "say, and say stop any time to cut me off.")
+                             "say. Use my name before stop, too.")
             elif not terse:
                 parts.append("Say Player Two, then what you need.")
         elif not talk_key_bound(self.s):
