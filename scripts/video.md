@@ -154,3 +154,12 @@ The chapter identifies custom combat code explicitly. Its story path never inher
 no-code overlay. `unducked_windows` preserves both audio stems without sidechain compression where
 an NPC response needs to remain audible. Caption placement leaves the battle menus and party HP
 clear. Source offsets and all windows belong in the take manifest, not the public repository.
+
+A retake may set `take-B.edit.opening_line` to its actual first chosen spoken damage line instead
+of “Fight.”. It must match an original logged caption before the health request; a missing anchor
+still fails final validation. Measure the Cyclone reveal against the retake's own frames.
+
+`goodbye.edit.field: true` preserves field video for the real farewell. When goodbye and take-B
+refer to the same video and aligned epoch, the closing interval stays continuous from the earned
+win through the level-up and farewell. The goodbye request and both spoken replies are still
+validated before merging that interval. The end card follows the last actual reply.

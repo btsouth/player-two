@@ -523,3 +523,38 @@ def test_caption_sheet_does_not_label_intentionally_muted_uncaptioned_speech():
     shots=mv.caption_shots(parts,{"game2":take})
     assert shots and all("omit false" not in label for _,label in shots)
     assert any("keep true" in label for _,label in shots)
+
+
+def test_new_opening_anchor_must_be_an_actual_prior_spoken_line():
+    take=_choice_take()
+    take.events[0]["text"]="Frog took 493, down to 1."
+    take.caps=mv.demo_captions.captions(take.events,0)
+    take.edit["opening_line"]="Frog took 493, down to 1."
+    parts,warnings=mv.cold_open(take)
+    assert not warnings and parts[0].a==.7
+    take.edit["opening_line"]="Imagined line."
+    _,warnings=mv.cold_open(take)
+    assert any("original opening speech record missing" in w for w in warnings)
+
+
+def test_field_goodbye_uses_real_video_and_preserves_request_lead_in():
+    take=_take([{"kind":"heard","t":2,"text":"Goodbye.","typed":True},
+                _spoken("Bye for now.",2.1,3),_spoken("Have fun.",3.2,4)],"goodbye",10)
+    take.edit["field"]=True
+    p=mv.goodbye_piece(take)
+    assert p.black_for==0 and p.layout=="fight" and p.a==1.6 and p.b==4.3
+
+
+def test_same_take_win_level_up_and_goodbye_form_one_real_field_ending(tmp_path):
+    import dataclasses
+    take=_choice_take()
+    take.events += [_spoken("Crono's level increased!",30.5,31.5),
+                    {"kind":"heard","t":32,"text":"Goodbye.","typed":True},
+                    _spoken("Bye for now.",32.2,33),_spoken("Have fun.",33.2,34)]
+    take.caps=mv.demo_captions.captions(take.events,0)
+    bye=dataclasses.replace(take,name="goodbye",edit={"field":True})
+    parts,_,_=mv.make_plan({"take-B":take,"goodbye":bye},{},set(),[],{"_folder":str(tmp_path)},{},{})
+    closing=next(p for p in parts if p.id=="closing-exchange")
+    assert closing.a<29 and closing.b>=34 and closing.black_for==0
+    assert not any(p.id=="goodbye-missing" for p in parts)
+    assert parts[-2]==closing

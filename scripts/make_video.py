@@ -671,15 +671,16 @@ def cold_open(take: Take | None) -> tuple[list[Piece], list[str]]:
         return [Piece("cold-missing","hook",line="cold",kind="slate",secs=45,
                       blocks=[("PLACEHOLDER: health, Cyclone, then delegation",58,True)])], [
                           "cold open incomplete: health, Cyclone and Win must occur in that order"]
+    anchor=str(take.edit.get("opening_line","Fight.")).strip().lower()
     fights=[c for c in take.caps if c[2]=="Player Two" and c[0]<doing.heard
-            and c[3].removeprefix("Player Two: ").strip().lower()=="fight."]
+            and c[3].removeprefix("Player Two: ").strip().lower()==anchor]
     warnings=[]
     if fights:
         a=max(0,fights[-1][0]-0.3)
     else:
         prior=[c[0] for c in take.caps if c[2]=="Player Two" and c[0]<doing.heard]
         a=max(0,min(prior,default=doing.a)-0.3)
-        warnings.append("cold open incomplete: original Fight speech record missing")
+        warnings.append(f"cold open incomplete: original opening speech record missing: {anchor}")
     reveal=take.edit.get("reveal_at")
     if not isinstance(reveal,(int,float)):
         reveal=cyclone.heard+2
@@ -772,7 +773,9 @@ def goodbye_piece(take: Take) -> Piece:
         raise ValueError("Goodbye take needs real Bye for now and Have fun spoken records")
     end=next(e for e in said if "have fun" in e["text"].lower())
     return Piece("goodbye","outro",line="goodbye",take=take.name,a=max(0,heard-_lead(take,heard,event)),
-                 b=min(take.duration,end["ended"]-take.start+.3),black_for=999,layout="black")
+                 b=min(take.duration,end["ended"]-take.start+.3),
+                 black_for=0 if take.edit.get("field") else 999,
+                 layout="fight" if take.edit.get("field") else "black")
 
 
 def shop_scene_layouts(pieces: list[Piece], take: Take | None) -> list[Piece]:
@@ -856,7 +859,14 @@ def make_plan(
                     blocks=[("PLACEHOLDER: real win line",48,True)])]
     goodbye=takes.get("goodbye")
     if goodbye:
-        end_parts.append(goodbye_piece(goodbye))
+        farewell=goodbye_piece(goodbye)
+        fight=takes.get("take-B")
+        if (reserved_ending and goodbye.edit.get("field") and fight and
+                fight.video.resolve()==goodbye.video.resolve() and fight.start==goodbye.start):
+            end_parts=[dataclasses.replace(reserved_ending[0],id="closing-exchange",b=farewell.b,
+                                          black_for=0,layout="fight")]
+        else:
+            end_parts.append(farewell)
     else:
         end_parts.append(Piece("goodbye-missing","outro",line="goodbye",kind="slate",secs=3.5,
                 blocks=[("ENDING DESIGN / clean take pending",34,False),
