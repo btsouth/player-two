@@ -498,6 +498,7 @@ async def test_preroll_tail_does_not_steal_a_new_named_request(monkeypatch):
 
 async def test_talk_key_audio_waits_in_order_while_the_socket_connects(monkeypatch):
     import json
+
     from playertwo import listen
     sent = []
     connected = asyncio.Event()
