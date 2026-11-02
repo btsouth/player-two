@@ -377,3 +377,23 @@ async def test_its_actual_named_greeting_echo_still_does_not_act(monkeypatch):
     s.voice.speaking = True
     await heard(s, "Player Two, open the menu.", ago=1.5, length=1)
     assert s.handled == []
+
+
+async def test_a_bare_answer_keeps_its_unaddressed_warning_for_the_agent(monkeypatch):
+    s = session(monkeypatch)
+    s.paused = False
+    s.agent.cancelled = False
+    s.handle = Session.handle.__get__(s, Session)
+    async def say(*args, **kwargs):
+        return None
+    async def wait_idle(*args, **kwargs):
+        return None
+    s.voice.say = say
+    s.voice.wait_idle = wait_idle
+    ask = asyncio.create_task(s.agent_ask("How many?", timeout=1))
+    await asyncio.sleep(0)
+    await heard(s, "Three.")
+    answer = await ask
+    assert answer.startswith("Three.")
+    assert 'heard hands-free without "Player Two"' in answer
+    assert "for anything hard to undo, ask again" in answer
