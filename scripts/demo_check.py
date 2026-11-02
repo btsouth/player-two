@@ -96,6 +96,8 @@ LINES = (
          must=r"potion", allow=(Allow("the walk to the seller", 6.0, "walk"),)),
     Line("A5", "A", "Take me back outside.", r"^take me back outside", 16.5, 16.5,
          must=r"outside|world map", allow=(Allow("the walk out", 14.5, "walk"),)),
+    Line("B0", "B", "How are we doing?", r"^how are we doing", 1.5, 3.5, must=r"\bhp\b|full|down",
+         optional=True),
     Line("B1", "B", "What are we fighting?", r"^what are we fighting", 1.5, 3.5,
          must=r"\bimps?\b|gargoyle", must_not=r"reptite"),
     Line("B2", "B", "Crono, use Cyclone.", r"^crono,? use cyclone", 10.0, 12.5, must=r"cyclone",
@@ -803,6 +805,16 @@ class Live:
                         str(self.a.launcher), str(slot)], check=True, timeout=300)
         self.quiet(2.0, 20.0)
 
+    def wait_combo(self, most: float = 12.0) -> None:
+        """Gargoyles open with a combo that takes someone to 1 HP: let it land and be said."""
+        t0 = time.time()
+        while time.time() - t0 < most:
+            if any(e["kind"] == "say" and re.search(r"down to \d", str(e.get("text")))
+                   for e in self.events(t0 - 8)):
+                time.sleep(1.5)
+                return
+            time.sleep(0.5)
+
     def walk_to_fight(self, most: float = 90.0) -> bool:
         """Slot 1: down from where the save starts, then across the plateau, where the
         Gargoyles jump in. Walking straight down only stops at a ledge."""
@@ -844,7 +856,7 @@ class Recorder:
                    f"> {self.folder / 'record.log'} 2>&1")
             subprocess.run(self._host("sh", "-c", cmd), capture_output=True, check=False)
             time.sleep(3.0)
-            up = subprocess.run(self._host("pgrep", "-f", "gpu-screen-recorder -w"),
+            up = subprocess.run(self._host("pgrep", "-f", f"gpu-screen-recorder -w {self.live.a.monitor} -f 60"),
                                 capture_output=True, check=False)
             if up.returncode == 0:
                 return self
@@ -856,7 +868,8 @@ class Recorder:
 
     def __exit__(self, *_exc) -> None:
         if self.mode == "record":
-            pat = f"gpu-screen-recorder -w {self.live.a.monitor}"
+            # Not the desktop's own highlights recorder, which also records this monitor.
+            pat = f"gpu-screen-recorder -w {self.live.a.monitor} -f 60"
             subprocess.run(self._host("pkill", "-INT", "-f", pat), capture_output=True, check=False)
             time.sleep(3.0)
         if self.child is not None:
@@ -897,8 +910,10 @@ def run_take(live: Live, take: str, run: int, lines: list[Line], reload_it: bool
     heards: list[tuple[Line, dict]] = []
     problems: list[str] = []
     with Recorder(live, folder, a.frames) as rec:
-        if take == "B" and not live.walk_to_fight():
-            problems.append("no fight came up walking down: the fight lines ran anyway")
+        if take == "B":
+            if not live.walk_to_fight():
+                problems.append("no fight came up walking down: the fight lines ran anyway")
+            live.wait_combo()
         for ln in lines:
             live.quiet(1.0, 15.0)
             if ln.ready and not live.wait_ready(ln.ready):
