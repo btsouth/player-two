@@ -1013,3 +1013,37 @@ def test_new_menu_edit_is_checked_instead_of_the_old_story_clock():
         es.append({'kind':'agent','t':t,'request':request,'turns':[{}],'steps':[{'tool':'press','t':5,'args':{'buttons':['a']}}]})
     t=_take(es,'rdr-menu',40);t.edit={'backend':'keyboard','story':[[1,2]]}
     mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=10,b=22)])
+
+def test_transcribe_badge_uses_only_a_measured_stream_stage():
+    events = [
+        {"t": 2.0, "kind": "heard", "text": "Open the journal", "transcribe_s": 2.34},
+        {"t": 2.01, "kind": "model_stage", "model": "Muse Voice Transcribe",
+         "seconds": 2.34, "timing": "stream"},
+        _spoken("Okay, opening the journal.", 2.2, 3.2),
+    ]
+    take = _take(events, "voice", 5)
+    piece = mv.Piece("voice", "clip", take="voice", a=0, b=5, captions=True)
+    report = mv._evidence_for_window([piece], {"voice": take})
+    assert any(r["layer"] == "Muse Voice Transcribe" for r in report)
+    assert any("Stream 2.34 s" in o.text for o in piece.overlays)
+    assert any("You: Open the journal" in c[3] for c in take.caps)
+    old = _take([events[0], events[2]], "old", 5)
+    old_piece = mv.Piece("old", "clip", take="old", a=0, b=5, captions=True)
+    assert not any(r["layer"] == "Muse Voice Transcribe"
+                   for r in mv._evidence_for_window([old_piece], {"old": old}))
+
+
+def test_hands_free_clip_keeps_the_wake_name_before_listening_status():
+    request = {"t": 5.0, "kind": "heard", "text": "Open the journal",
+               "utterance_started_at": 0.5}
+    take = _take([{"t": 3.0, "kind": "status", "state": "listening"}, request], "voice", 8)
+    # Wake detection can set listening only AFTER the user said Player Two.
+    assert mv._lead(take, 5.0, request) == 4.8
+
+
+def test_retained_audio_can_keep_a_soft_name_without_changing_caption_clock():
+    request = {"t": 5.0, "kind": "heard", "text": "Read this menu", "utterance_started_at": 1.0,
+               "utterance_audio_started_at": 0.2}
+    take = _take([request], "voice", 8)
+    assert mv._lead(take, 5.0, request) == 5.1
+    assert next(c[0] for c in take.caps if c[2] == "You") == 5.0

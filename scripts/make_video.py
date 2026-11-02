@@ -386,9 +386,13 @@ def _attempts(take: Take, rx: str) -> list[float]:
 
 def _lead(take: Take, heard_t: float, event: dict) -> float:
     """How long before the "heard" the request began: a spoken one was said, and transcribed,
-    before it's logged. It starts where the status went to listening."""
+    before it's logged. Prefer measured hands-free audio start: the listening
+    status is set only after the wake name has already been spoken."""
     if event.get("typed") or take.start is None:
         return 0.4
+    started = event.get("utterance_audio_started_at", event.get("utterance_started_at"))
+    if isinstance(started, (int, float)) and heard_t - 20 <= started - take.start <= heard_t:
+        return min(heard_t - (started - take.start) + 0.3, 20.0)
     listen = [e["t"] - take.start for e in take.events
               if e.get("kind") == "status" and e.get("state") == "listening"
               and heard_t - 15 < e["t"] - take.start <= heard_t]
@@ -1737,7 +1741,8 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
             # Future instrumentation may supply explicit stage records; no inferred SAM/STT.
             elif kind == "model_stage" and e.get("model") in ("Muse Voice Transcribe", "SAM 3.1") \
                     and isinstance(e.get("seconds"), (int,float)):
-                facts.append((e, e["model"], f"Stage time {e['seconds']:.2f} s"))
+                facts.append((e, e["model"], f"Stream {e['seconds']:.2f} s"
+                              if e.get("timing") == "stream" else f"Stage time {e['seconds']:.2f} s"))
         label = "You: typed" if request.get("typed") else "You: heard"
         if not request.get('typed'):
             label += ' · Muse Voice Transcribe'
@@ -1756,7 +1761,8 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
             text = base + "".join(f"\n{k}\n{v}" for k,v in state.items())
             if at > cur:
                 p.overlays.append(Overlay(text, 30, "trace", cur, at))
-            display=f'Answer {response[1]:.1f} s' if response else ''
+            display = timing if layer == 'Muse Voice Transcribe' else (
+                f'Answer {response[1]:.1f} s' if response else '')
             state[layer] = display
             cur = at
             report.append({"piece": p.id, "request": request['text'], "layer": layer,

@@ -1,7 +1,7 @@
 """Ears: speech recognition with Muse Voice Transcribe over a WebSocket.
 
-Push to talk: the socket opens the moment the talk key goes down and the mic is buffered
-while it connects, so the first word is never lost.
+Push to talk: after the key opens the microphone, its frames are buffered while the
+speech socket connects. Audio before the microphone opens cannot be recovered.
 
 Hands-free: the mic stays open and a small speech detector (Silero VAD) runs on the PC.
 Only stretches of speech go to Muse Voice Transcribe, starting a moment before the
@@ -118,24 +118,46 @@ class Utterance:
         self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.result: asyncio.Future[str] | None = None
         self._task: asyncio.Task | None = None
+        self.started_at = self.finished_at = self.completed_at = 0.0
+        self.audio_bytes = 0
 
     def start(self) -> None:
+        self.started_at = time.monotonic()
         self.result = asyncio.get_running_loop().create_future()
         self._task = asyncio.create_task(self._run())
 
     def feed(self, frame: bytes) -> None:
+        self.audio_bytes += len(frame)
         self.audio.put_nowait(frame)
 
     def finish(self) -> None:
+        self.finished_at = time.monotonic()
         self.audio.put_nowait(None)
 
     async def text(self, timeout: float = 8.0) -> str:
         assert self.result is not None
         return await asyncio.wait_for(self.result, timeout)
 
+    def timing(self) -> dict[str, float]:
+        """Measured streaming duration, including uploaded speech, not model compute.
+
+        Finalize is finish/endStream queueing to the completed transcript; audio is
+        the amount of PCM fed. No estimate from text length or speech rate.
+        """
+        if not self.started_at or not self.completed_at:
+            return {}
+        return {
+            "transcribe_s": round(self.completed_at - self.started_at, 4),
+            "transcribe_finalize_s": round(max(0.0, self.completed_at - self.finished_at), 4)
+            if self.finished_at else 0.0,
+            "transcribe_audio_s": round(self.audio_bytes / (2 * RATE), 4),
+        }
+
     async def _run(self) -> None:
         try:
-            self.result.set_result(await self._session())
+            text = await self._session()
+            self.completed_at = time.monotonic()
+            self.result.set_result(text)
         except Exception as exc:  # noqa: BLE001  surfaced to the caller
             if not self.result.done():
                 self.result.set_exception(exc)
@@ -225,9 +247,28 @@ VAD_CONTEXT = 64  # samples of the previous chunk it sees too
 
 # "Player Two", however speech recognition spells it ("PlayerPlayer Two" when it stutters).
 # "Player to" only counts on its own: "pass it to the player to the left" isn't a call.
-WAKE = re.compile(r"(?:\b(?:hey|ok|okay)[\s,]+)?(?:player|layer|play a)s?[\s,-]*"
+WAKE = re.compile(r"(?:\b(?:hey|ok|okay)[\s,]+)?(?:player|play a)s?[\s,-]*"
                   r"(?:(?:two|2|ii)\b|(?:to|too)(?=[\s]*[,.!?]|\s*$))[\s,.!?:-]*",
                   re.IGNORECASE)
+
+COMMAND_START = (r"(?:what|where|who|how|when|why|can|could|please|read|open|opened|close|"
+                 r"pause|paused|resume|stop|cancel|take|win|attack|heal|run|buy|use|set|keep|"
+                 r"describe|repeat|help|goodbye|go|look|walk|guide|lead|find|show)\b")
+DAMAGED_WAKE = re.compile(
+    r"^\s*(?P<form>(?:two|too|2)|there\s+(?:too|two|2)|layer\s+two|prayer\s+two|play\s+two|player(?=\s*,))"
+    r"[\s,.!?:-]+(?=" + COMMAND_START + r")", re.IGNORECASE)
+
+
+def wake_match(text: str) -> tuple[str, str, bool] | None:
+    """Body, matched name and whether it was damaged. Short names count only up front."""
+    found = list(WAKE.finditer(text))
+    if found:
+        m = found[-1]
+        return text[m.end():].strip(" ,.!?"), m.group(0).strip(" ,.!?:-"), False
+    m = DAMAGED_WAKE.match(text)
+    if m:
+        return text[m.end():].strip(" ,.!?"), m.group("form"), True
+    return None
 
 
 def addressed(text: str) -> str | None:
@@ -237,10 +278,8 @@ def addressed(text: str) -> str | None:
     narrator's own voice picked up before the player spoke) is just "stop". Only the
     name, nothing after it, is "".
     """
-    found = list(WAKE.finditer(text))
-    if not found:
-        return None
-    return text[found[-1].end():].strip(" ,.!?")
+    match = wake_match(text)
+    return match[0] if match else None
 
 
 def ensure_vad() -> Path:
@@ -309,7 +348,7 @@ class Segmenter:
 
     ON, OFF = 0.5, 0.35
     START_FRAMES = 2
-    PREROLL = 5
+    PREROLL = 12  # 0.96 s: soft first syllables can precede Silero's threshold by 0.5 s
     FRAME_S = FRAME / RATE
     END_S = 0.8
     MAX_S = 15.0
@@ -351,14 +390,14 @@ class HandsFree:
     """Always listening: sends each stretch of speech to Muse Voice Transcribe.
 
     `on_partial(text, started)` gets the words so far of the stretch that began at
-    `started`, and `on_text(text, error, started, ended)` its final words (or the error
+    `started`, and `on_text(text, error, started, ended, timing)` its final words (or the error
     that stopped it) and when the speech in it began and ended; the session decides what
     was said to it. `on_drop()` says a stretch was cut off unheard. While `paused()` (the
     talk key is held), it doesn't listen.
     """
 
     def __init__(self, on_partial: Callable[[str, float], None],
-                 on_text: Callable[[str, BaseException | None, float, float],
+                 on_text: Callable[[str, BaseException | None, float, float, dict],
                                    Awaitable[None]],
                  on_drop: Callable[[], None],
                  keywords: Callable[[], list[str]], paused: Callable[[], bool],
@@ -377,6 +416,7 @@ class HandsFree:
         self.tasks: set[asyncio.Task] = set()
         self.heard_at = time.monotonic()  # the last frame from the microphone
         self.started = 0.0  # when the stretch being heard began
+        self.audio_started = 0.0  # retained PCM can begin before the VAD onset
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -419,7 +459,9 @@ class HandsFree:
             return
         what, frames = self.segmenter.push(frame, self.detector(frame))
         if what == "start":
-            started = self.started = time.monotonic() - len(frames) * Segmenter.FRAME_S
+            now = time.monotonic()
+            self.audio_started = now - len(frames) * Segmenter.FRAME_S
+            started = self.started = now - Segmenter.START_FRAMES * Segmenter.FRAME_S
             self.utt = Utterance(self.keywords(),
                                  on_partial=lambda text: self.on_partial(text, started))
             self.utt.start()
@@ -433,6 +475,7 @@ class HandsFree:
         """Finish the stretch being heard: transcribe it, or with `cancel` drop it."""
         utt, self.utt = self.utt, None
         started = self.started
+        audio_started = self.audio_started
         # The speech itself ended before the quiet that ended the stretch.
         ended = time.monotonic() - self.segmenter.quiet * Segmenter.FRAME_S
         if cancel:
@@ -452,9 +495,14 @@ class HandsFree:
             try:
                 text = await utt.text(10)
             except Exception as exc:  # noqa: BLE001  the session says what went wrong
-                await self.on_text("", exc, started, ended)
+                await self.on_text("", exc, started, ended, {})
                 return
-            await self.on_text(text, None, started, ended)
+            timing = utt.timing()
+            clock_offset = time.time() - time.monotonic()
+            timing.update(utterance_started_at=round(started + clock_offset, 4),
+                          utterance_audio_started_at=round(audio_started + clock_offset, 4),
+                          utterance_ended_at=round(ended + clock_offset, 4))
+            await self.on_text(text, None, started, ended, timing)
 
         task = asyncio.create_task(result())
         self.tasks.add(task)

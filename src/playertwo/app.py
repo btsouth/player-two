@@ -21,7 +21,7 @@ from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
 from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
-from .listen import HandsFree, Mic, Utterance, addressed
+from .listen import HandsFree, Mic, Utterance, addressed, wake_match
 from .muse import Muse
 from .narrator import Narrator
 from .prompts import (
@@ -125,6 +125,13 @@ def local_action(text: str) -> str | None:
             if pattern.fullmatch(form):
                 return action
     return None
+
+
+# VAD can end a thought during a long pause. Do not let a missing object become
+# the model's guess at a target; the player repeats the complete request.
+INCOMPLETE_ACTION = re.compile(
+    r"^(?:(?:please|can you|could you) )?(?:\w+,? )?"
+    r"(?:attack|hit|strike|open|close|read|use|cast|buy|sell|heal|take) the$", re.IGNORECASE)
 
 
 HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
@@ -1369,7 +1376,6 @@ class Session:
             return
         self.hands_active = False  # the talk key takes over from hands-free listening
         self.voice.stop()
-        self.voice.cue("listening")
         waiting = self.answer is not None and not self.answer.done()
         if self.agent_task and not self.agent_task.done() and not waiting:
             self.agent.hold()  # until it's clear what they want; see talk_stop
@@ -1384,6 +1390,7 @@ class Session:
             self.open_window(refocus=False)
             return
         self.mic = mic
+        self.voice.cue("listening")  # only signal ready once capture is actually open
         self.talk_started = time.monotonic()
         self.utt = Utterance(self.keywords,
                              on_partial=lambda p: self.events.emit("hearing", text=p))
@@ -1428,7 +1435,7 @@ class Session:
         finally:
             self.transcribing = False
         self.voice.cue("heard")
-        self.events.emit("heard", text=text or "")
+        self._heard(text or "", utt.timing())
         try:
             if text:
                 await self.handle(text)
@@ -1438,6 +1445,20 @@ class Session:
             # Whatever they said that wasn't stop or a new request (a repeat, a question,
             # nothing), the action they asked for earlier carries on.
             self.agent.resume()
+
+    def _asr_stage(self, timing: dict | None) -> None:
+        if timing and isinstance(timing.get("transcribe_s"), (int, float)):
+            self.events.emit("model_stage", model="Muse Voice Transcribe",
+                             seconds=timing["transcribe_s"], timing="stream", **timing)
+
+    def _heard(self, text: str, timing: dict | None = None, raw: str | None = None,
+               hands_free: bool = False) -> None:
+        match = wake_match(raw) if raw is not None else None
+        self.events.emit("heard", text=text, **(timing or {}),
+                         **({"hands_free": True} if hands_free else {}),
+                         **({"raw_transcript": raw} if raw is not None else {}),
+                         **({"wake_form": match[1], "wake_damaged": match[2]} if match else {}))
+        self._asr_stage(timing)
 
     # Hands-free
 
@@ -1458,7 +1479,8 @@ class Session:
 
         With `named`, only its lines that say its own name count ("Hi, I'm Player Two"),
         and what was heard after the name is compared with all of such a line. One word
-        after the name ("Player Two, stop") always counts as the player's.
+        after the name ("Player Two, stop") counts as the player's unless it is
+        exactly a named phrase Player Two itself just said.
         """
         def words(t: str | None) -> set[str]:
             return set(re.findall(r"[a-z0-9']+", (t or "").lower()))
@@ -1466,16 +1488,30 @@ class Session:
         said = self.said_lately()
         heard = words(addressed(text) if named else text)
         if named:
-            said = [line for line in said if addressed(line) is not None]
+            match = wake_match(text)
+            damaged = match is not None and match[2]
+            # A shortened name is weaker evidence. Compare it with all our speech,
+            # including a narrator line whose beginning was lost in capture.
+            said = said if damaged else [line for line in said if addressed(line) is not None]
             if not heard:
                 return bool(said)  # just the name, while it said its own name lately
-            if len(heard) == 1:
-                return False
+            if len(heard) == 1 and not damaged:
+                # A one-word interruption normally belongs to the player. Keep the
+                # explicit own-quote exclusion used by partial stop on the final too.
+                phrase = " ".join(re.findall(r"[a-z0-9']+", text.lower()))
+                return any(phrase in " ".join(re.findall(r"[a-z0-9']+", line.lower()))
+                           for line in said)
         elif not heard:
             return True
+        # Function words alone must not turn a different target into an echo:
+        # "open the journal" is not the greeting's example "open the menu".
+        filler = {"a", "an", "the", "i", "i'm", "you", "your", "me", "my", "we", "our",
+                  "it", "this", "that", "to", "of", "for", "and", "or", "is", "are",
+                  "be", "can", "with", "in", "on", "at"} if named else set()
+        content = heard - filler
         for line in said:
-            w = words(line)
-            if w and len(heard & w) / len(heard) >= 0.6:
+            w = words(line) - filler
+            if w and content and len(content & w) / len(content) >= 0.6:
                 return True
         return False
 
@@ -1486,7 +1522,8 @@ class Session:
                 if e["kind"] in ("say", "ask") and now - e["t"] < 30 and e.get("text")]
         return [*said, self.narrating_text]
 
-    def new_stops(self, text: str, started: float, final: bool = False) -> bool:
+    def new_stops(self, text: str, started: float, final: bool = False,
+                  timing: dict | None = None) -> bool:
         """Whether `text` (the speech that began at `started`, so far, or all of it when
         `final`) has a "Player Two, stop" not acted on yet. It counts even mixed into
         Player Two's own voice (speakers, no headset), unless it's the very words Player
@@ -1502,7 +1539,14 @@ class Session:
             return False
         self.stop_seen = (started, len(found))
         self.voice.cue("heard")
-        self.events.emit("heard", text="stop")
+        if timing is None:
+            # The audio start is known even when an urgent partial acts before final ASR.
+            offset = time.time() - time.monotonic()
+            timing = {"utterance_started_at": round(started + offset, 4)}
+            audio_start = getattr(self.hands, "audio_started", 0.0)
+            if audio_start:
+                timing["utterance_audio_started_at"] = round(audio_start + offset, 4)
+        self._heard("stop", timing, raw=text, hands_free=True)
         return True
 
     def hands_partial(self, text: str, started: float) -> None:
@@ -1551,7 +1595,7 @@ class Session:
                 self.agent.resume()
 
     async def hands_heard(self, text: str, error: BaseException | None,
-                          started: float, ended: float) -> None:
+                          started: float, ended: float, timing: dict | None = None) -> None:
         """Speech heard hands-free, from `started` to `ended`: act on it if it was said to
         Player Two."""
         # Only the speech that said "Player Two" lets go of what that held: another
@@ -1568,26 +1612,36 @@ class Session:
                 else:
                     self.events.emit("error", where="listen", message=str(error)[:300])
                 return
-            if self.new_stops(text, started, final=True):
+            new_stop = self.new_stops(text, started, final=True, timing=timing)
+            if new_stop:
                 await self.local("stop")
             stops = list(STOP_CALL.finditer(text))
             if self.stop_seen[0] == started and self.stop_seen[1] and stops:
                 # Stopped in this breath: only what came after counts ("Player Two, stop.
                 # Player Two, open the map"), and only if it's said to Player Two too.
+                if not new_stop:
+                    # Stop can act on a partial; publish completed ASR timing later.
+                    self._asr_stage(timing)
                 text = text[stops[-1].end():]
                 if not addressed(text):
                     return
             echo_possible = self.maybe_echo(started, ended)
+            audio_start = (timing or {}).get("utterance_audio_started_at")
+            if isinstance(audio_start, (int, float)):
+                audio_start -= time.time() - time.monotonic()
+                if audio_start < started:
+                    echo_possible |= self.maybe_echo(audio_start, started)
             said = addressed(text)
             if said is not None and echo_possible and self.echo(text, named=True):
                 said = None
-            elif said is None and text and not (echo_possible and self.echo(text)):
-                busy = (self.agent_task is not None and not self.agent_task.done()) or (
-                    not self.voice.idle())
-                if self.open_ear(started) or (busy and local_action(text) == "stop"):
-                    said = text  # an answer, a follow-up, or "stop" while it's busy
-                    # Heard without its name: over speakers that could be the game.
-                    self.unnamed_answer = self.answer is not None and not self.answer.done()
+            elif (said is None and text and not (echo_possible and self.echo(text))
+                  and self.open_ear(started)
+                  and (local_action(text) != "stop" or started < self.follow_until)):
+                # Cancellation needs an explicit wake, not merely a busy action or
+                # an answer window. A name-only call invites the next request too.
+                said = text  # an answer or an explicitly invited follow-up
+                # Heard without its name: over speakers that could be the game.
+                self.unnamed_answer = self.answer is not None and not self.answer.done()
             if said is None:
                 if text:
                     self.events.emit("overheard", text=text)
@@ -1598,8 +1652,16 @@ class Session:
                 self.voice.cue("listening")
                 return
             self.follow_until = 0.0
+            if addressed(text) is not None and not woke:
+                # While it says its own name, partials deliberately wait for the full
+                # sentence. Once that is a genuine request, don't queue behind it.
+                self.voice.stop()
             self.voice.cue("heard")
-            self.events.emit("heard", text=said)
+            self._heard(said, timing, raw=text, hands_free=True)
+            if INCOMPLETE_ACTION.fullmatch(said):
+                await self.announce("I missed the end. Say the whole request with my name.",
+                                    interrupt=True, status=True)
+                return
             await self.handle(said)
         finally:
             if woke and self.utt is None:
@@ -1733,6 +1795,10 @@ class Session:
         await self.voice.say(line)
         return True
 
+    def _look_ack(self) -> str:
+        self._looks = getattr(self, "_looks", -1) + 1
+        return ("Let me look.", "One second.", "Just a sec.")[self._looks % 3]
+
     async def _agent(self, text: str) -> None:
         began = time.time()
         if self.narrating and not self.narrating.done():
@@ -1742,8 +1808,7 @@ class Session:
         # Heard, in the player's words, before the model's first word seconds later.
         line = ack(text) if "English" in (self.narrator.language or "English") else None
         if line == "Let me look.":  # questions in a row don't get the same words
-            self._looks = getattr(self, "_looks", -1) + 1
-            line = ("Let me look.", "One second.", "Just a sec.")[self._looks % 3]
+            line = self._look_ack()
         if line:
             self.announce(line, status=True)
         ticks = self.spawn(self._working_ticks())
@@ -2077,6 +2142,15 @@ class Session:
                 return
             await self._local("describe")
         elif action in ("describe", "atmosphere", "just_happened", "who_talks"):
+            if getattr(self, "hands", None) is not None and "English" in self.narrator.language:
+                # VAD endpointing already took a moment. Acknowledge hearing before
+                # model-backed scene work; let the short line finish before narration.
+                if self.narrating and not self.narrating.done():
+                    # stop() clears queued audio, but a model stream can still own
+                    # Voice's lock. Release it before queuing the acknowledgement.
+                    self.narrating.cancel()
+                await self.announce(self._look_ack(), status=True)
+                await self.voice.wait_idle(3)
             try:
                 frame = await self.grab_now()
             except Exception as exc:  # noqa: BLE001
@@ -2282,7 +2356,7 @@ class Session:
             if new:
                 parts.append("I'm listening hands-free. Start with my name, like: Player "
                              "Two, open the menu. Ask for help to hear what else you can "
-                             "say, and say stop any time to cut me off.")
+                             "say. Use my name before stop, too.")
             elif not terse:
                 parts.append("Say Player Two, then what you need.")
         elif not talk_key_bound(self.s):
