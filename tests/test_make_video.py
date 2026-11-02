@@ -308,3 +308,20 @@ def test_sam_overlay_requires_actual_sam_box_not_a_centre_or_fallback():
     mv.sam_boxes([p],{"take-A":take})
     assert len(p.overlays)==1 and p.overlays[0].where=="box"
     assert p.overlays[0].f0==4
+
+
+def test_cold_open_refuses_a_pair_that_cannot_finish_during_black():
+    es=[{"t":1,"kind":"heard","text":"What are we fighting?","typed":True},
+        _spoken("Three imps.",2,4),
+        {"t":17,"kind":"heard","text":"Win this fight for me.","typed":True},
+        _spoken("Okay, I'll take this fight.",17.1,19),
+        _spoken("Won.",29,30), {"t":30,"kind":"agent","seconds":13,"turns":[],"steps":[]}]
+    parts,warnings=mv.cold_open(_take(es,"take-B",35,True))
+    assert any("finish during black" in w for w in warnings)
+    assert any("cold open incomplete" in w for w in mv.final_refusals(parts,warnings))
+
+
+def test_invalid_or_inverted_sam_boxes_are_not_drawn():
+    assert not mv.valid_box([.4,.2,.1,.6])
+    assert not mv.valid_box([.1,.2,1.2,.6])
+    assert not mv.valid_box([.5,.5])

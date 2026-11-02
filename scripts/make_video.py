@@ -618,8 +618,16 @@ def cold_open(take: Take | None) -> tuple[list[Piece], list[str]]:
             "cold open incomplete: pair must be close together without intervening requests"
         )
     a, b = first.a, win.b
+    acknowledgement = [c for c in take.caps if c[2] == "Player Two"
+                       and win.heard - 0.2 <= c[0] <= win.heard + 3
+                       and "fight" in c[3].lower()]
+    if not acknowledgement or acknowledgement[0][1] - a > 15:
+        warnings.append("cold open incomplete: the second acknowledgement must finish during black")
+    if b - a < 14:
+        warnings.append("cold open incomplete: the fight ends before the reveal")
     # No acceleration, cut or hidden-time jump during black or reveal.
-    first_end = min(a + 15, b)
+    black_s = max(13.0, min(15.0, acknowledgement[0][1] - a + 0.2)) if acknowledgement else 13.0
+    first_end = min(a + black_s + 2, b)
     intro = Piece(
         "cold-0",
         "hook",
@@ -627,7 +635,7 @@ def cold_open(take: Take | None) -> tuple[list[Piece], list[str]]:
         take=take.name,
         a=a,
         b=first_end,
-        black_for=13,
+        black_for=black_s,
         layout="black",
     )
     intro.overlays.append(
@@ -687,7 +695,9 @@ def make_plan(
         sam_parts = [
             Piece("sam-demo", "ct", line="sam", take="sam", a=aa, b=bb, layout="map")
         ]
-        if not any(e.get("via") == "sam-3.1" and e.get("boxes") for e in sam.events):
+        if not any(e.get("via") == "sam-3.1" and sam.start is not None
+                   and aa <= e.get("t", 0) - sam.start < bb
+                   and any(valid_box(box) for box in e.get("boxes", [])) for e in sam.events):
             warnings.append("missing SAM geometry: no via=sam-3.1 boxes in this take")
     else:
         sam_parts = [
@@ -1136,6 +1146,12 @@ def evidence_overlays(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
     return report
 
 
+def valid_box(box) -> bool:
+    return (isinstance(box, list) and len(box) == 4
+            and all(isinstance(x, (int, float)) and 0 <= x <= 1 for x in box)
+            and box[0] < box[2] and box[1] < box[3])
+
+
 def sam_boxes(parts: list[Piece], takes: dict[str, Take]) -> None:
     for p in parts:
         take = takes.get(p.take)
@@ -1145,11 +1161,7 @@ def sam_boxes(parts: list[Piece], takes: dict[str, Take]) -> None:
             if e.get("kind") != "where" or e.get("via") != "sam-3.1":
                 continue
             for box in e.get("boxes", []):
-                if (
-                    not isinstance(box, list)
-                    or len(box) != 4
-                    or not all(isinstance(x, (int, float)) and 0 <= x <= 1 for x in box)
-                ):
+                if not valid_box(box):
                     continue
                 t = (e["t"] - take.start - p.a) / p.speed
                 # Never pin a box across a changing scene or before the result arrived.
