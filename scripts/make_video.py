@@ -455,7 +455,7 @@ def ct_pieces(takes: dict[str, Take], picks: dict[str, int], drop: set[str], max
         if take is None:
             warnings.append(f"{line}: no take-{name}")
             continue
-        cut = cut_line(line, take, picks.get(line), 12.0 if line == "A3b" else max_talk if line == "A2" else None)
+        cut = cut_line(line, take, picks.get(line), float(take.edit.get('description_seconds',12)) if line == "A3b" else max_talk if line == "A2" else None)
         if cut is None:
             warnings.append(f"{line}: not found in take-{name}'s log")
             continue
@@ -563,7 +563,7 @@ def mh_story_pieces(take: Take) -> list[Piece]:
     if not models:
         raise ValueError("MH story needs its real completed Muse weak-point read")
     for i,(a,b) in enumerate(normal):
-        if i:
+        if i and not config.get('cuts_only'):
             parts.append(Piece(f"mh-gap-{i}","game2",line="MHS3",take=take.name,a=normal[i-1][1],b=a,
                                speed=speed,captions=False,layout="mh"))
         p=Piece(f"mh-beat-{i}","game2",line="MHS3",take=take.name,a=a,b=b,layout="mh",
@@ -572,10 +572,19 @@ def mh_story_pieces(take: Take) -> list[Piece]:
         for t,e in take.heard():
             if a<=t<b:
                 p.overlays.append(Overlay(("You: typed" if e.get("typed") else "You: heard")+"\n"+e["text"],42,"trace-mh",max(0,t-a),b-a))
-        model=next((e for e in models if a<=e["t"]-take.start<b or (i==0 and e['t']-take.start<a)),None)
+        if config.get('carry_requests') and not any(o.where=='trace-mh' for o in p.overlays):
+            prior=[(t,e) for t,e in take.heard() if t<a]
+            if prior:
+                _,e=prior[-1]
+                if not e.get('typed'):raise ValueError('Keep the real microphone request in a spoken take')
+                p.overlays.append(Overlay('You: typed\n'+e['text'],42,'trace-mh',0,b-a))
+        model=next((e for e in reversed(take.events) if e.get('kind')=='mh' and e.get('name')=='mh_muse'
+                    and e.get('read') in ('status','wheel') and isinstance(e.get('seconds'),(int,float))
+                    and a-1<=e['t']-take.start<b),None)
         if model:
             at=max(0,model['t']-take.start-a)
-            p.overlays.append(Overlay(f"Muse read the monster's weak points, {model['seconds']:.2f} s",34,"tl",at,min(at+4,b-a)))
+            words="Muse read the monster's weak points" if model['read']=='wheel' else 'Muse Spark / status read'
+            p.overlays.append(Overlay(f"{words}, {model['seconds']:.2f} s",34,"tl",at,min(at+4,b-a)))
         if b-a>6:
             start=min(4,max(0,b-a-4))
             p.overlays.append(Overlay("Muse reads the weak points once. Code written for this game takes the turns.",34,"mh-code",start,start+4))
@@ -583,7 +592,10 @@ def mh_story_pieces(take: Take) -> list[Piece]:
             if who=="Player Two" and "Speed beats that" in text and min(b,d)>max(a,c):
                 p.overlays.append(Overlay("Speed beats Power in this game's attack triangle.",34,"mh-gloss",max(0,c-a),min(b-a,d-a+.8)))
         parts.append(p)
-    steady_timing(parts,"mh")
+    if not any(o.where=='mh-code' for p in parts for o in p.overlays):
+        at=float(config.get('code_chip_at',max(0,sum(p.out_s for p in parts)-8)))
+        place_overlays(parts,[Overlay('Muse reads the weak points once. Code written for this game takes the turns.',34,'mh-code',at,at+4)])
+    steady_timing(parts,"mh-cuts" if config.get('cuts_only') else "mh")
     return parts
 
 
@@ -862,6 +874,12 @@ def timing_text(parts: list[Piece], group: str) -> str:
         return f"Waits between lines cut: {source:.0f} s of play in {shown:.0f} s"
     if group=="mh":
         return f"{source:.0f} s fight in {shown:.0f} s. Narration muted in the fast parts."
+    if group=='mh-cuts':
+        return f"{source:.0f} s fight in {shown:.0f} s. Cuts between requests and turns."
+    if group=='nav':
+        return f"Cuts and speed-ups: {source:.0f} s of play in {shown:.0f} s"
+    if group=='fair':
+        return f"Description shortened. {source-shown:.1f} s wait cut."
     removed=source-shown
     return f"Wait cut: {removed:.1f} s"
 
@@ -953,11 +971,37 @@ def shop_scene_layouts(pieces: list[Piece], take: Take | None) -> list[Piece]:
     return pieces
 
 
-def map_walk(take: Take | None, folder: Path) -> Piece:
+def map_walk(take: Take | None, folder: Path) -> list[Piece]:
     if not take:
-        return Piece("nav-pending","ct",line="world-map walk",kind="slate",secs=12,
+        return [Piece("nav-pending","ct",line="world-map walk",kind="slate",secs=12,
                      blocks=[("WORLD-MAP WALK / TAKE PENDING",48,True),
-                             ("12-second slot for the reviewed real walk at normal speed",36,False)])
+                             ("12-second slot for the reviewed real walk at normal speed",36,False)])]
+    if take.edit.get('story'):
+        agents=[e for e in take.events if e.get('kind')=='agent']
+        castle=next((e for e in agents if e.get('request')=='Take me to Guardia Castle.'),None)
+        resume=next((e for e in agents if e.get('request')=='Keep going to the castle.'),None)
+        if not castle or not resume or not any(x.get('tool')=='fight' and x.get('args',{}).get('mode')=='win' for x in castle.get('steps',[])):
+            raise ValueError('Navigation story needs the real interrupted route and fight decision')
+        route={x.get('tool') for x in resume.get('steps',[])}
+        if not {'exits','walk_to','keep_walking','go_to_place','remember'}<=route or not resume.get('turns'):
+            raise ValueError('Navigation story needs its real multi-turn forest-exit plan')
+        parts=[]
+        spans=speech_spans(take.events,take.start)
+        for index,w in enumerate(take.edit['story']):
+            a,b=float(w['a']),float(w['b']);speed=float(w.get('speed',1));role=w['role']
+            windows=split_speed(a,b,spans,speed,min_gap=.2,pad=.08) if speed>1 else [(a,b,1)]
+            for j,(x,y,rate) in enumerate(windows):
+                p=Piece(f'nav-{index}-{j}','ct',line='castle and fair',take=take.name,a=x,b=y,speed=rate,
+                        captions=rate==1,layout='fight' if role in ('interrupt','fight','fight-win') else 'map',audio_mode='live')
+                if role in ('interrupt','fight','fight-win'):
+                    p.overlays.append(Overlay('Muse Spark decides the route and fight. Local code moves and takes turns.',34,'nav-route',0,p.out_s))
+                if role=='walk':p.overlays.append(Overlay(MAP_LINE,40,'nav-map',0,p.out_s))
+                if role=='exit':p.overlays.append(Overlay('Muse Spark planned the forest exit. Local code moves and takes turns.',34,'nav-route',0,p.out_s))
+                if role=='summary':p.overlays.append(Overlay('Description shortened',34,'trim',0,p.out_s))
+                if role=='fair-arrival':p.overlays.append(Overlay('Next: another run of the same save',34,'trim',0,p.out_s))
+                parts.append(p)
+        steady_timing(parts,'nav')
+        return parts
     a,b=map(float,take.edit['clip'])
     if any(p.kind=='slate' for p in atlas_beat(folder)):
         raise ValueError('Map walking needs its real saved Muse label/check proof')
@@ -968,7 +1012,7 @@ def map_walk(take: Take | None, folder: Path) -> Piece:
     p=Piece("nav-walk","ct",line="world-map walk",take=take.name,a=a,b=b,layout="map")
     p.proof=str(folder/'atlas-proof.json')
     p.overlays=[Overlay(MAP_LINE,40,"how",0,b-a)]
-    return p
+    return [p]
 
 
 def make_plan(
@@ -997,7 +1041,19 @@ def make_plan(
         if first:
             heard=next((t for t,e in take.heard() if LINES['A1'][1] and re.search(LINES['A1'][1],e['text'],re.IGNORECASE)),first[0])
             lines['A1']=[Piece('A1-local','ct',line='A1',take=take.name,a=max(0,heard-.4),b=first[1],layout='map')]
-    maps=[*lines.get('A1',[]),map_walk(takes.get('nav'),folder),*lines.get('A3b',[]),*lines.get('A4',[])]
+    if take and take.edit.get('fair_wait_cut') and lines.get('A3b'):
+        lo,hi=map(float,take.edit['fair_wait_cut']);new=[]
+        if any(max(lo,a)<min(hi,b) for a,b in speech_spans(take.events,take.start)):
+            raise ValueError('Fair wait cut overlaps real speech')
+        for p in lines['A3b']:
+            for x,y in [(p.a,min(p.b,lo)),(max(p.a,hi),p.b)]:
+                if y>x:new.append(dataclasses.replace(p,id=p.id+f'-{len(new)}',a=x,b=y,overlays=[]))
+        steady_timing(new,'fair');lines['A3b']=new
+        new[0].overlays.append(Overlay('Two runs of the same save',34,'trim',0,new[0].out_s))
+    if take and take.edit.get('shop_end') and lines.get('A4'):
+        for p in lines['A4']:p.b=min(p.b,float(take.edit['shop_end']))
+        lines['A4']=[p for p in lines['A4'] if p.b>p.a]
+    maps=[*lines.get('A1',[]),*map_walk(takes.get('nav'),folder),*lines.get('A3b',[]),*lines.get('A4',[])]
     for p in maps:
         p.sharp_at=None
         if p.line=='A4':p.layout='shop'
@@ -1316,7 +1372,10 @@ def label_png(path: Path, o: Overlay) -> Path:
         if o.where=="pause":
             x=W-tw-64
         if o.where.startswith('time-'):
-            x,y=(W-tw)//2,(775 if o.where=='time-cold' else 180 if o.where=='time-mh' else 710)
+            x,y=(W-tw)//2,(775 if o.where=='time-cold' else 180 if o.where in ('time-mh','time-mh-cuts') else 400 if o.where=='time-nav' else 710)
+            if o.where=='time-fair':x,y=W-tw-64,52
+        if o.where=='nav-map':x,y=64,52
+        if o.where=='nav-route':x,y=64,500
         if o.where=='bench':
             x,y=64,65
         if o.where in ('mh-code','mh-gloss'):
@@ -1563,8 +1622,10 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     tempo = _tempo(p.speed)
     dur = p.out_s
     # Accelerated gaps are silent: no sped-up voices or frantic game music.
-    gain = 0 if p.speed > 1 else p.vol
-    if p.speed>1:
+    gain = 0 if p.speed > 1 and p.audio_mode!='live' else p.vol
+    if p.speed>1 and p.audio_mode=='live' and any(max(p.a,a)<min(p.b,b) for a,b in speech_spans(take.events,take.start)):
+        raise ValueError('Live accelerated audio must contain no spoken line')
+    if p.speed>1 and p.audio_mode!='live':
         # Very short accelerated gaps can exhaust atempo before AAC receives a frame.
         # They are silent by design, so generate exact-length silence without time-stretching.
         a=f"anullsrc=r=48000:cl=stereo,atrim=duration={dur},asetpts=PTS-STARTPTS"

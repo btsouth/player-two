@@ -707,3 +707,22 @@ def test_final_rechecks_benchmark_evidence_on_a_loaded_cut(tmp_path):
     p=mv.Piece('actors','game3',take='t',a=0,b=5,captions=False,proof=str(tmp_path/'rdr-bench/verified.json'),
                overlays=[mv.Overlay('Recorded-clip benchmark\nTalking over actors, same clip: 12.7 s before this fix, 1.1 s after.',42,'bench',0,5)])
     assert 'unsupported benchmark caption: actors' in mv.final_refusals([p],[])
+
+
+def test_clean_mh_cut_keeps_all_shown_audio_at_normal_speed():
+    take=_take([{'kind':'heard','t':1,'text':"Where's it weak?",'typed':True},
+                {'kind':'mh','name':'mh_muse','read':'wheel','seconds':4.19,'t':2},
+                _spoken('A correct reply.',2.2,3.2)],'game2',30)
+    take.edit={'story':{'normal':[[2,5],[20,23]],'cuts_only':True,'carry_requests':True}}
+    ps=mv.mh_story_pieces(take)
+    assert len(ps)==2 and all(p.speed==1 and p.captions and p.audio_mode=='mix' for p in ps)
+    assert not any('muted' in o.text.lower() for p in ps for o in p.overlays)
+    assert mv.valid_timing_group(ps,'mh-cuts')
+
+
+def test_live_acceleration_cannot_speed_a_spoken_line(tmp_path):
+    import pytest
+    take=_take([_spoken('Keep me at real speed.',.5,1.5)],'t',3)
+    p=mv.Piece('fast','ct',take='t',a=0,b=2,speed=5,captions=False,audio_mode='live')
+    with pytest.raises(ValueError,match='Live accelerated audio'):
+        mv.encode_clip(p,{'t':take},{},tmp_path,tmp_path/'bad.mp4','libx264')
