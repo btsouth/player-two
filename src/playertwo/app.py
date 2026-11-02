@@ -560,6 +560,8 @@ class Session:
             self.events.emit("walk", target="", direction=way)
         elif name == "walk_note":
             self.events.emit("walk_note", text=args.get("text", ""))
+        elif name == "off_topic":
+            self.events.emit("off_topic", **args)
         elif name.startswith("mh_"):
             self.events.emit("mh", name=name, **args)
 

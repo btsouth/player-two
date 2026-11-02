@@ -77,6 +77,8 @@ INTENT = re.compile(r"(?i)\s*(going|heading|walking|taking|trying|let me|i'll|i 
                     r"i'm going|okay|ok|on it|got it, i'll)\b")
 # Said when the model's lines were off the point twice in one request (ontopic.py).
 LOST_THREAD = "Sorry, I lost my train of thought there. Could you ask me that again?"
+READ_REQUEST = re.compile(r"(?i)\bread\b|\bwhat (?:does|do|did) (?:it|that|this|they) say\b"
+                          r"|\bwhat(?:'s| is) (?:it|that|this) say\b")
 WANDER_LIMIT_S = 40.0
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
 
@@ -751,6 +753,11 @@ class Agent:
             return False
         grounds = getattr(self, "_grounds", None)
         if grounds is None or not grounds.off_topic(text):
+            return True
+        # Asked to read: the page's words are its own, known to nothing the check can see,
+        # and in-game text can sound like anything (a quack doctor's advert: live, held twice,
+        # so "Read it." got an apology).
+        if READ_REQUEST.search(getattr(self, "_request", "")):
             return True
         verdict = await ontopic.second_look(self.muse, self.game,
                                             getattr(self, "_request", ""), text)

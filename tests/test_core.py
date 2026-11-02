@@ -196,6 +196,49 @@ class TestAgent:
             "or repeat something they've already heard, say it again in full.")
         assert said == ["The brief says go."] and result.outcome == "The brief says go."
 
+    def test_a_page_read_out_is_never_held_as_off_the_point(self, monkeypatch):
+        """Live: "Read it." on a quack doctor's advert: the second look called the words
+        unrelated, twice, so the player got an apology, not the page."""
+        from playertwo import ontopic
+
+        looked = []
+
+        async def second_look(muse, game, request, line, timeout=4.0):
+            looked.append(line)
+            return False
+
+        monkeypatch.setattr(ontopic, "second_look", second_look)
+        page = "A medical breakthrough from the East! The result of years of scientific research!"
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            return SimpleNamespace(content=page, tool_calls=[])
+
+        for request in ("Read it.", "read this menu", "What does it say?"):
+            agent, _, said, _, muse = self.make([])
+            muse.tools = words
+            result = run(agent.run(request))
+            assert said == [page] and result.outcome == page
+        assert looked == []
+
+    def test_a_line_off_the_point_is_still_held_when_not_asked_to_read(self, monkeypatch):
+        from playertwo.agent import LOST_THREAD
+        from playertwo import ontopic
+
+        async def second_look(muse, game, request, line, timeout=4.0):
+            return False
+
+        monkeypatch.setattr(ontopic, "second_look", second_look)
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            return SimpleNamespace(
+                content="Preheat the oven and grease a nine inch baking pan with butter.",
+                tool_calls=[])
+
+        agent, _, said, _, muse = self.make([])
+        muse.tools = words
+        result = run(agent.run("what do you see"))
+        assert said == [LOST_THREAD] and result.outcome == LOST_THREAD
+
     def test_a_reply_that_writes_out_the_tools_arguments_is_said_as_its_text(self):
         """Live 2026-11-02: '{"text": "The brief says..."}' came out as "Text, the brief
         says" when the model wrote finish's arguments instead of calling it."""
