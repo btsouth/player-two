@@ -163,7 +163,8 @@ ACTION_WORDS = {"and", "then", "use", "open", "go", "attack", "heal", "buy", "se
 
 def where_request(text: str) -> str | None:
     """The noun phrase in "where's the door?", or None if it isn't that kind of question."""
-    text = text.strip().rstrip(".!")
+    # Speech to text ends a phrase how it likes ("where's my horse,") and may curl the "'s".
+    text = text.strip().replace("\u2019", "'").rstrip(".!,;: ")
     m = WHERE.match(text)
     if not m:
         return None
