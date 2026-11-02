@@ -65,8 +65,8 @@ def test_a_line_not_really_said_is_offered_again():
 
 def test_pitch_and_beeps_rise_with_the_box():
     far = g.Guide(0.0).look([m(0.5, 0.002)], 1.0)
-    mid = g.Guide(0.0).look([m(0.5, 0.012)], 1.0)
-    near = g.Guide(0.0).look([m(0.5, 0.045)], 1.0)
+    mid = g.Guide(0.0).look([m(0.5, 0.02)], 1.0)
+    near = g.Guide(0.0).look([m(0.5, 0.07)], 1.0)
     assert far.hz == pytest.approx(660.0) and far.hz < mid.hz < near.hz
     assert (far.beeps, mid.beeps, near.beeps) == (1, 2, 3)
     assert far.wait_s > mid.wait_s > near.wait_s
@@ -74,25 +74,25 @@ def test_pitch_and_beeps_rise_with_the_box():
 
 def test_getting_close_once():
     guide = g.Guide(0.0)
-    guide.said(guide.look([m(0.5, 0.015)], 1.0).say, 1.0)
-    step = guide.look([m(0.5, 0.03)], 2.0)
+    guide.said(guide.look([m(0.5, 0.02)], 1.0).say, 1.0)
+    step = guide.look([m(0.5, 0.04)], 2.0)
     assert step.say == "Getting close."
     guide.said(step.say, 2.0)
-    assert guide.look([m(0.5, 0.04)], 3.0).say == ""
+    assert guide.look([m(0.5, 0.05)], 3.0).say == ""
 
 
 def test_arrival_needs_two_looks_in_a_row():
     guide = g.Guide(0.0)
-    assert guide.look([m(0.5, 0.06)], 1.0).end == ""
-    assert guide.look([m(0.5, 0.04)], 2.0).end == ""  # one big box was a fluke
-    assert guide.look([m(0.5, 0.06)], 3.0).end == ""
-    step = guide.look([m(0.5, 0.06)], 4.0)
+    assert guide.look([m(0.5, 0.11)], 1.0).end == ""
+    assert guide.look([m(0.5, 0.06)], 2.0).end == ""  # one big box was a fluke
+    assert guide.look([m(0.5, 0.11)], 3.0).end == ""
+    step = guide.look([m(0.5, 0.11)], 4.0)
     assert step.end == "there" and step.say == "You're there."
 
 
 def test_a_thing_end_on_arrives_by_height():
     guide = g.Guide(0.0)
-    narrow = Match(0.5, 0.5, 0.03, (0.46, 0.3, 0.54, 0.66))
+    narrow = Match(0.5, 0.5, 0.04, (0.46, 0.3, 0.55, 0.75))
     assert guide.look([narrow], 1.0).end == ""
     assert guide.look([narrow], 2.0).end == "there"
 
@@ -186,15 +186,15 @@ def _done(_value):
 @pytest.mark.asyncio
 async def test_a_walk_to_arrival_logs_every_look(monkeypatch):
     s, said, cues, emitted = session(monkeypatch, [
-        [m(0.2, 0.03)], [m(0.25, 0.06)], [m(0.25, 0.06)]])
+        [m(0.2, 0.05)], [m(0.25, 0.11)], [m(0.25, 0.11)]])
     await s.guide("horse")
     await asyncio.sleep(0)
     assert said == ["Okay. Listen for the ping.", "Left.", "Getting close.", "You're there."]
     looks = [d for k, d in emitted if k == "guide"]
     assert [d["cycle"] for d in looks] == [1, 2, 3]
     assert looks[0]["pan"] == -0.6 and looks[0]["box"] == pytest.approx(
-        list(m(0.2, 0.03).box)) and looks[0]["seconds"] == 0.5 and looks[0]["said"] == "Left."
-    assert looks[0]["boxes"] == [pytest.approx(list(m(0.2, 0.03).box))]
+        list(m(0.2, 0.05).box)) and looks[0]["seconds"] == 0.5 and looks[0]["said"] == "Left."
+    assert looks[0]["boxes"] == [pytest.approx(list(m(0.2, 0.05).box))]
     assert cues[0] == -0.6
     assert emitted[-1][0] == "guide_end" and emitted[-1][1]["reason"] == "there"
 
@@ -252,7 +252,7 @@ def test_the_driver_turns_toward_it_and_walks_when_about_ahead():
     ahead = g.Step(m(0.5), 0.0, 700.0, 1, 1.0, "", g.AHEAD)
     move = g.Driver().after(ahead)
     assert move.turn == 0 and move.walk and move.step_s == 0.0
-    near = g.Step(m(0.5, 0.03), 0.0, 1500.0, 2, 0.5, "", g.AHEAD)
+    near = g.Step(m(0.5, 0.07), 0.0, 1500.0, 3, 0.5, "", g.AHEAD)
     move = g.Driver().after(near)
     assert not move.walk and move.step_s == 0.35
 

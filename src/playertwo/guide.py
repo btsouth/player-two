@@ -65,8 +65,8 @@ AHEAD_PAN = 0.16
 AHEAD_LEAVE = 0.26
 LOW_HZ, HIGH_HZ = 660.0, 1760.0
 # The box's size, as a fraction of the screen, from far off to right there.
-FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.02, 0.05
-THERE_HEIGHT = 0.3  # or this tall: a thing end-on has a narrow box however near
+FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.03, 0.10
+THERE_HEIGHT = 0.42  # or this tall: a thing end-on has a narrow box however near
 THERE_LOOKS = 2  # looks in a row at that size, since one box can be a fluke
 SIDE_LOOKS = 2  # looks on a new side before saying so
 # A locked box this much bigger in one look isn't believed until the next look agrees: live,
@@ -293,7 +293,7 @@ class Driver:
             self.sizes.clear()
             return Move(SWEEP, False, 0.0)
         turn = round(TURN_GAIN * step.pan) if abs(step.pan) >= TURN_PAN else 0
-        near = step.beeps >= 2
+        near = step.beeps >= 3
         ok = abs(step.pan) < WALK_PAN
         self.sizes.append(step.target.area if step.target else 0.0)
         recent = self.sizes[-STUCK_LOOKS:]
