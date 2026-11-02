@@ -473,3 +473,15 @@ def test_a_line_is_not_said_twice_however_long_the_fight():
 def test_health_names_who_is_a_bit_hurt():
     said = m.Lines().health({"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.7, "Chirpy": 0.97})
     assert "Ogden" in said and "full health" in said
+
+
+def test_one_early_top_up_a_fight_when_nothing_is_urgent():
+    hurt = {"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.72, "Chirpy": 0.97}
+    assert m.choose(view(hp=hurt)).do != "item"
+    v = view(hp=hurt)
+    v.top_up = True
+    plan = m.choose(v)
+    assert (plan.do, plan.on) == ("item", "Ogden")
+    v = view(hp={"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.0, "Chirpy": 0.97})  # riding
+    v.top_up = True
+    assert m.choose(v).do != "item"

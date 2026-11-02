@@ -127,13 +127,17 @@ def menu_type(img: Image.Image) -> str:
 def skills_tab(img: Image.Image) -> int | None:
     """Which weapon tab the Skills menu is on, from the bright teal of the chosen tab; None when
     that menu isn't open."""
-    best, which = 0.0, None
+    best, which, dark = 0.0, None, []
     for i, (a, b) in enumerate(((70, 190), (197, 320), (327, 450))):
         c = _arr(img, a, 102, b, 130)
         teal = float(((c[..., 1] > 150) & (c[..., 2] > 150) & (c[..., 0] < 130)).mean())
+        dark.append(float((c.max(axis=2) < 120).mean()))
         if teal > best:
             best, which = teal, i
-    return which if best > 0.2 else None
+    if best <= 0.2 or which is None:
+        return None
+    # The other two tabs are dark. Teal sky or water behind the same spot has no dark tabs.
+    return which if min(d for i, d in enumerate(dark) if i != which) > 0.35 else None
 
 
 LIST_X = (150, 390)
@@ -458,8 +462,7 @@ water, thunder, ice, dragon. Under each is a mark: red down arrows mean it's wea
 weapons Zerk carries have these elements: {elements}.
 Then tell them what they're up against, the way a friend on the couch would who can see the screen \
 and they can't: one short plain sentence with its name and level and the most useful thing about \
-its elements for those weapons. Say what the arrows say: "resists", "strongly resists", "weak to"; \
-don't overstate it. No dashes.
+its elements for those weapons. No dashes.
 JSON: {{"name": "...", "level": 0, "state": "...", "weak": ["..."], "very_weak": ["..."], \
 "resists": ["..."], "say": "..."}}"""
 
@@ -533,6 +536,7 @@ class View:
     target: str = ""  # the part being worked on
     resists: list[str] = field(default_factory=list)  # elements it shrugs off (Muse, Status)
     usual_type: str = ""  # what it usually hits with, by the guides, for the state Muse read
+    top_up: bool = False  # one early heal this fight is still to come
 
 
 @dataclass
@@ -593,6 +597,8 @@ def choose(view: View) -> Plan:
     the type that wins; a plain attack when it can make a Double Attack, otherwise the hardest
     skill on the part that the gauge can pay for."""
     low = [(view.hp[who] / HURT[who], who) for who in HURT if 0 < view.hp.get(who, 1.0) < HURT[who]]
+    if not low and view.top_up:  # once a fight, before it's urgent; 0 is a bar hidden by riding
+        low = [(view.hp[who], who) for who in HURT if 0 < view.hp.get(who, 1.0) < 0.8]
     if low:
         return Plan("item", item="Potion", on=min(low)[1], type=view.menu_type,
                     weapon=view.in_hand)
@@ -751,9 +757,10 @@ class Lines:
                              f"{damage}, so {weapon} comes out.",
                              f"Swapping to {weapon} for the {part}.")
         if plan.double:
-            return self.pick(f"Plain attack on the {part}, with Canyne, for a double.",
-                             f"Teaming up with Canyne on the {part}.",
-                             f"Canyne and you on the {part} again.")
+            # Only an intention: Canyne may use a skill instead, and the game then shows no double.
+            return self.pick(f"Plain attack on the {part}, same type as Canyne.",
+                             f"Same type as Canyne again, on the {part}.",
+                             f"Matching Canyne on the {part}.")
         return self.pick(f"{weapon.capitalize()} on the {part}." if weapon else f"On the {part}.",
                          f"Staying on the {part}.", f"The {part} again.", f"More on the {part}.")
 
@@ -813,6 +820,7 @@ class Fight:
         self.won = False
         self.monster_share = 1.0
         self.break_heard = False
+        self.healed = False
         self.muse_agrees = True
         self.note: Callable[[str, dict], None] = (
             lambda name, args: agent.on_action and agent.on_action(name, args))
@@ -883,6 +891,8 @@ class Fight:
             try:
                 reply = await asyncio.wait_for(self.a.muse.json(
                     msgs, effort="minimal", max_tokens=tokens), most)
+                if not reply and kind in ("status", "wheel"):
+                    raise ValueError("empty reply")
                 seconds = round(time.monotonic() - t, 2)
                 self.muse_seconds[kind] = seconds
                 self.note("mh_muse", {"read": kind, "seconds": seconds, "reply": reply})
@@ -1159,6 +1169,7 @@ class Fight:
         self.turns = 0
         self.monster_share = 1.0
         self.break_heard = False
+        self.healed = False
         self.won = False
         self.muse_agrees = True
 
@@ -1482,6 +1493,7 @@ class Fight:
         view = await asyncio.to_thread(self.view, img, wheel, kind_now)
         low = monster_health(wheel)
         self.monster_share = low
+        view.top_up = not self.healed and low > 0.2
         plan = choose(view)
         if heal and plan.do != "item":
             worst = min(ALLIES, key=lambda who: view.hp.get(who, 1.0) or 1.0)
@@ -1501,6 +1513,7 @@ class Fight:
         if plan.do == "item":
             ok = await self.use_item(plan)
             state = "ready" if ok else ""
+            self.healed = self.healed or ok
             if not ok:
                 self.note("mh_note", {"text": "item didn't go through"})
         else:
@@ -1546,7 +1559,8 @@ class Fight:
                 if not self.weapons:
                     await self.load_gear()
                 await self.read_status(hold=True)
-            return self.what_line or f"It's a {self.status.get('name') or 'monster'}."
+            name = self.status.get("name")
+            return self.what_line or (f"It's a {name}." if name else "I couldn't read that one.")
         if mode == "weak":
             if not self.parts or not all(named(p) for p in self.parts):
                 if not self.weapons:
