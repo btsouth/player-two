@@ -746,6 +746,8 @@ class Agent:
         football fouls, spoken as the answer to "what's the battle mode set to?")."""
         if ontopic.about_itself(text):
             self._held = getattr(self, "_held", 0) + 1
+            if self.on_action:
+                self.on_action("off_topic", {"text": text, "about_itself": True, "said": False})
             return False
         grounds = getattr(self, "_grounds", None)
         if grounds is None or not grounds.off_topic(text):
@@ -765,7 +767,9 @@ class Agent:
     def _not_on_topic(self) -> str:
         """The tool result (or note) when a line wasn't said for being off the point."""
         return (f'not said: that isn\'t about what the player asked ("{self._request}") or '
-                "this game. Answer that: call a tool, or finish with what to tell them.")
+                "this game. Answer that: call a tool, or finish with what to tell them. If "
+                "they asked to read or repeat something they've already heard, say it again "
+                "in full.")
 
     def system(self) -> str:
         parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]

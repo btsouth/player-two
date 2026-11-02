@@ -174,6 +174,28 @@ class TestAgent:
         result = run(agent.run("what are we fighting?"))
         assert said == ["Two gold imps."] and result.outcome == "Two gold imps."
 
+    def test_asked_to_read_what_was_just_heard_it_is_told_to_say_it_again(self):
+        """Live: the page had just been read out, so "Read it." got "No tool calls needed"
+        twice and then an apology, not the page."""
+        agent, _, said, _, muse = self.make([])
+        told = []
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            if len(told) == 0:
+                told.append("")
+                return SimpleNamespace(content="No tool calls needed for this turn.",
+                                       tool_calls=[])
+            told.append(messages[-1]["content"])
+            return SimpleNamespace(content="The brief says go.", tool_calls=[])
+
+        muse.tools = words
+        result = run(agent.run("read it"))
+        assert told[1] == (
+            'not said: that isn\'t about what the player asked ("read it") or this game. '
+            "Answer that: call a tool, or finish with what to tell them. If they asked to read "
+            "or repeat something they've already heard, say it again in full.")
+        assert said == ["The brief says go."] and result.outcome == "The brief says go."
+
     def test_a_reply_that_writes_out_the_tools_arguments_is_said_as_its_text(self):
         """Live 2026-11-02: '{"text": "The brief says..."}' came out as "Text, the brief
         says" when the model wrote finish's arguments instead of calling it."""
