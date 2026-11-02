@@ -229,7 +229,10 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
 
 def game_keywords(name: str) -> list[str]:
     """Words from the game's name that help speech recognition ("Persona", "Golden")."""
-    return [w for w in re.findall(r"[A-Za-z][\w']+", name) if len(w) > 2][:8]
+    words = [w for w in re.findall(r"[A-Za-z][\w']+", name) if len(w) > 2][:8]
+    if "chrono trigger" in name.lower():
+        words += ["Crono", "Cyclone", "Leene", "Potions"]
+    return words
 
 
 HUD_WORDS = {"low": "{name} low.", "critical": "{name} critical!",

@@ -213,6 +213,11 @@ def battle_request(text: str) -> Intent | None:
     Cyclone", "Marle, cure on Frog", "use a potion on Crono". None for anything else
     (more than one command, an enemy by name, a combo): the model's."""
     t = plain(text)
+    # Observed Muse Voice spellings with American male speech. Only the actor slot
+    # gets the homophone; "you" counts as "use" only before a known action
+    # (the normal parser below still checks the ability/item and target).
+    t = re.sub(r"^chrono(?=,? )", "crono", t)
+    t = re.sub(rf"^({'|'.join(NAMES)}),? you (?=.)", r"\1, use ", t)
     if re.search(r"\b(and|then|after|until|twice|again|everyone attack)\b", t):
         return None
     if m := ATTACK.match(t):
