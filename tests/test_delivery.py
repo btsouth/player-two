@@ -31,3 +31,10 @@ def test_internal_action_filler_can_be_silent_but_real_action_and_danger_stay():
     assert companion_line("No target line this turn, so I'll just go for damage.") == ""
     assert companion_line("Spinning Meteor on the legs.") == "Spinning Meteor on the legs."
     assert companion_line("It's coming at you with speed.") == "It's coming at you with speed."
+
+
+def test_battle_status_style_does_not_change_dialogue_with_the_same_words():
+    from playertwo.delivery import read_line_style
+    text = "Crono's level increased!"
+    assert read_line_style(text, "battle") == "Crono went up a level!"
+    assert read_line_style(text, "dialogue") == text

@@ -20,7 +20,7 @@ from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
-from .delivery import companion_line
+from .delivery import companion_line, read_line_style
 from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed, wake_match
 from .muse import Muse
@@ -1336,6 +1336,7 @@ class Session:
         if not self.voice.idle() and (model or (playing is not None
                                                 and playing != self.read_last_line)):
             interrupt = False
+        line = read_line_style(line, lk.kind)
         self.read_last_parts, self.read_last_line = parts, clean_for_speech(line)
         self.narrator.recent.append(line)
         self.events.emit("say", text=line, source="reader", screen=lk.kind, ms=lk.ms,

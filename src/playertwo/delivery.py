@@ -29,3 +29,8 @@ def companion_line(text: str) -> str:
     text = re.sub(r"^One (.+) down, (one|two|[0-9]+) left\.$",
                   r"One \1's down; \2 left.", text)
     return text
+
+
+def read_line_style(text: str, screen: str) -> str:
+    """Battle status presentation is conversational; dialogue remains verbatim."""
+    return companion_line(text) if screen == "battle" else text

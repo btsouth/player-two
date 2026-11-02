@@ -363,8 +363,8 @@ def ran_line(result: str) -> str:
 
 
 def talk_line(who: str, line: str) -> str:
-    """Someone's line as said: their name first when the player named them by it
-    ("Melchior: Melchior the swordsmith, at your service!"), else the line alone (it
+    """Someone's line as said: explicit attribution when the player named them by it
+    ("Melchior says ..."), else an anonymous quotation (it
     comes right after "Going to the old man at the lower stalls.")."""
     name = who.strip().split(" ")[0] if who else ""
     if name[:1].isupper() and name.lower() not in ("the", "a", "an", "that", "this"):
