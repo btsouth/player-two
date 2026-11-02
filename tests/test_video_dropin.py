@@ -64,3 +64,47 @@ def test_changed_take_requires_its_own_measured_recorder_offset(tmp_path):
     config["takes"]["take-B"].pop("edit")
     with pytest.raises(ValueError, match="measured recording_delay"):
         m.stage(source, config, tmp_path / "stage")
+
+
+def test_fallback_does_not_require_an_unrecorded_walk_or_its_limit_audio(tmp_path):
+    source, config=fixture(tmp_path)
+    config['guide_mode']='fallback'
+    config['takes']['guide']={'video':'not-recorded.mp4','start':'missing.start','events':'missing.events'}
+    config['voiceovers']={'limit':'missing-walk-limit.wav'}
+    config['shots']={'hook':{'a':2,'b':5,'overlays':[]}}
+    result=m.stage(source,config,tmp_path/'stage')
+    assert json.loads((result/'pacing.json').read_text())['guide_mode']=='fallback'
+    assert not (result/'vo-limit.wav').exists()
+
+
+def test_tonight_checklist_null_windows_fail_with_a_useful_error(tmp_path):
+    source,config=fixture(tmp_path)
+    config['shots']={'hook':{'a':None,'b':None,'overlays':[]}}
+    with pytest.raises(ValueError,match='measured numeric'):
+        m.stage(source,config,tmp_path/'stage')
+
+
+def test_replacing_a_pending_take_clears_only_that_shot(tmp_path):
+    source,config=fixture(tmp_path)
+    t=Path(config['template'])/'pacing.json';p=json.loads(t.read_text());p['shots'][0]['stand_in']=True
+    p['shots'].append({'id':'other','section':'game2','kind':'card','secs':5,'stand_in':True})
+    t.write_text(json.dumps(p));config['shots']={'hook':{'a':2,'b':5,'overlays':[]}}
+    result=m.stage(source,config,tmp_path/'stage');shots=json.loads((result/'pacing.json').read_text())['shots']
+    assert not shots[0]['stand_in'] and shots[1]['stand_in']
+
+
+def test_byte_identical_dry_run_does_not_clear_a_pending_spoken_take(tmp_path):
+    source,config=fixture(tmp_path);template=Path(config['template'])
+    (template/'old.mp4').write_text('data')
+    p=json.loads((template/'pacing.json').read_text());p['shots'][0]['stand_in']=True
+    (template/'pacing.json').write_text(json.dumps(p));config['unchanged_windows']=['take-B']
+    result=m.stage(source,config,tmp_path/'stage')
+    assert json.loads((result/'pacing.json').read_text())['shots'][0]['stand_in']
+
+
+def test_tonight_wrapper_preserves_temporary_provenance_in_remote_paths():
+    import runpy
+    script=Path(__file__).parents[1]/'scripts/video_tonight.py'
+    names=runpy.run_path(str(script))['remote_names']
+    assert names(Path('TEMP-NOT-FOR-SUBMISSION-test.mp4'))==('TEMP-NOT-FOR-SUBMISSION-proxy','TEMP-NOT-FOR-SUBMISSION-stage')
+    assert names(Path('genuine.mp4'))==('proxy','stage')

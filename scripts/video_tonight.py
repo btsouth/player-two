@@ -14,6 +14,11 @@ def run(*args, **kw):
     return subprocess.run(args, check=True, **kw)
 
 
+def remote_names(output: Path) -> tuple[str,str]:
+    prefix='TEMP-NOT-FOR-SUBMISSION-' if 'TEMP-NOT-FOR-SUBMISSION' in str(output) else ''
+    return prefix+'proxy',prefix+'stage'
+
+
 def main():
     started = time.monotonic()
     a = argparse.ArgumentParser(description=__doc__)
@@ -29,8 +34,11 @@ def main():
     if (args.folder / "STAND-IN.json").exists():
         raise ValueError("Stand-in media cannot enter the real tonight import path")
     mapping = json.loads(args.map.read_text())
-    names = set(mapping.get("voiceovers", {}).values())
-    for e in mapping.get("takes", {}).values():
+    stem,stage_name=remote_names(args.out)
+    unused_limit='limit' if mapping.get('guide_mode')=='fallback' else 'limit-fallback'
+    names = {v for k,v in mapping.get("voiceovers", {}).items() if k!=unused_limit}
+    for name,e in mapping.get("takes", {}).items():
+        if name=='guide' and mapping.get('guide_mode')=='fallback':continue
         v = Path(e["video"])
         names.update(
             [
@@ -79,17 +87,17 @@ def main():
             root + "/scripts/video_dropin.py",
             remote + "/incoming",
             remote + "/map.json",
-            remote + "/stage",
+            remote + "/"+stage_name,
             "--out",
-            remote + "/proxy.mp4",
+            remote + "/"+stem+".mp4",
         ]
         run("ssh", "devbox-bts", shlex.join(command))
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        run("rsync", "-a", f"devbox-bts:{remote}/proxy.mp4", str(args.out))
+        run("rsync", "-a", f"devbox-bts:{remote}/{stem}.mp4", str(args.out))
         run(
             "rsync",
             "-a",
-            f"devbox-bts:{remote}/proxy.sheet.png",
+            f"devbox-bts:{remote}/{stem}.sheet.png",
             str(args.out.with_suffix(".sheet.png")),
         )
         run(

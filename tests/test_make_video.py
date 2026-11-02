@@ -1047,3 +1047,136 @@ def test_retained_audio_can_keep_a_soft_name_without_changing_caption_clock():
     take = _take([request], "voice", 8)
     assert mv._lead(take, 5.0, request) == 5.1
     assert next(c[0] for c in take.caps if c[2] == "You") == 5.0
+
+
+def _guide_take(events):
+    t=_take(events,'guide',30)
+    t.edit={'guide_fixture':True}
+    return t
+
+
+def test_guide_uses_logged_samples_and_a_miss_clears_the_old_box():
+    es=[{'kind':'guide','t':t,'frame_t':t-.6,'box':box,'pan':pan,'seconds':.42,'cycle':i}
+        for i,(t,box,pan) in enumerate([(1,[.6,.3,.8,.7],.4),(4,None,None),(7,[.1,.2,.3,.6],-.6)])]
+    p=mv.Piece('g','game3',take='guide',a=0,b=10,guide=True)
+    mv.guide_overlays([p],{'guide':_guide_take(es)})
+    import json
+    rows=[o for o in p.overlays if o.where=='guide-sample']
+    assert any('Creator test. Eyes covered. Not a blind player.' in o.text for o in p.overlays)
+    assert [(o.f0,o.f1) for o in rows]==[(1,3),(4,7),(7,9)]
+    assert json.loads(rows[0].text)['box']==es[0]['box']
+    assert json.loads(rows[1].text)['box'] is None
+    assert json.loads(rows[2].text)['pan']==-.6
+    assert all(o.where=='guide-sample' for o in rows)
+
+
+@pytest.mark.parametrize('patch',[{'pan':1.01},{'pan':float('nan')},{'box':[0,0,2560,1440]}, {'frame_t':3},{'seconds':-1},{'box':None}])
+def test_guide_rejects_unusable_or_inconsistent_samples(patch):
+    event={'kind':'guide','t':2,'frame_t':1,'box':[.6,.3,.8,.7],'pan':.4,'seconds':.4,**patch}
+    with pytest.raises(ValueError):
+        mv.guide_overlays([mv.Piece('g','game3',take='guide',a=0,b=10,guide=True)],{'guide':_guide_take([event])})
+
+
+def test_real_guide_caption_needs_explicit_eyes_covered_evidence():
+    t=_guide_take([]);t.edit={}
+    with pytest.raises(ValueError,match='eyes-covered'):
+        mv.guide_overlays([mv.Piece('g','game3',take='guide',a=0,b=10,guide=True)],{'guide':t})
+
+
+def test_transcribe_duration_is_qualified_and_absence_is_not_zero():
+    assert mv.transcribe_label({})=='Muse Voice Transcribe'
+    assert mv.transcribe_label({'transcribe_s':1.4,'synthetic':True,'origin':'file ASR'}).endswith('file 1.40 s')
+    assert mv.transcribe_label({'transcribe_s':2.3}).endswith('stream 2.30 s')
+    assert mv.transcribe_label({'transcribe_s':2.3,'transcribe_finalize_s':.12}).endswith('finalize 0.12 s')
+    assert mv.transcribe_label({'transcribe_s':float('nan')})=='Muse Voice Transcribe'
+
+
+def test_a_castle_arrival_alone_does_not_caption_the_omitted_guard():
+    t=_take([_spoken("We're at Guardia Castle.",1,2)],'nav',4);t.edit={'paced':True}
+    assert mv.caption_rows(t)[0][2]=='Guardia Castle.'
+
+
+def test_single_guide_switch_replaces_the_walk_and_its_limit_words(tmp_path,monkeypatch):
+    import json
+    cfg={'guide_mode':'fallback','shots':[
+        {'id':'guide-walk','section':'game3','take':'guide','a':0,'b':30,'guide':True},
+        {'id':'limit','section':'outro','kind':'card','secs':10,'vo_prompt':'A new walk claim.'}],
+        'guide_fallback':[{'id':'rdr-horse','section':'game3','take':'horse','a':0,'b':6}]}
+    (tmp_path/'pacing.json').write_text(json.dumps(cfg))
+    monkeypatch.setattr(mv,'menu_records',lambda *a:None)
+    monkeypatch.setattr(mv,'verify_recovery',lambda *a:None)
+    parts=mv.paced_plan(tmp_path,{'horse':_take([]),'rdr-menu':_take([])}, {},{})
+    assert [p.id for p in parts]==['rdr-horse','limit']
+    assert not any(p.guide for p in parts)
+    assert parts[-1].vo_prompt==mv.LIMIT_VO and parts[-1].stand_in
+
+
+def test_journal_only_shot_checks_its_one_real_model_request_and_press():
+    t=_take([{'kind':'heard','t':1,'text':'Open the journal.'},
+             {'kind':'agent','t':8,'request':'Open the journal.','turns':[{}],
+              'steps':[{'tool':'press','t':3,'args':{'buttons':['a']}}]}],'rdr-menu',20)
+    t.edit={'backend':'keyboard','menu_requests':['Open the journal.']}
+    times,_=mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=0,b=10)])
+    assert times==[1]
+    with pytest.raises(ValueError,match='own journal press'):
+        mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=8,b=15)])
+
+
+def test_draft4_planning_budget_reserves_five_seconds_without_weakening_final():
+    p=mv.Piece('long','hook',kind='card',secs=176)
+    _,blocked=mv.pacing_report([p],{}, {},175)
+    assert 'duration:film' in blocked
+
+
+def test_mh_elapsed_disclosure_changes_with_the_actual_selected_source():
+    t=_take([],'game2',200);t.edit={'battle_speed':2}
+    p=mv.Piece('m','game2',take='game2',a=20,b=40,overlays=[mv.Overlay('20 s recorded · 20 s shown\nBattle speed: 2× in game',34,'tl',0,20)])
+    mv.verify_battle_disclosure([p],t)
+    p.b=41
+    with pytest.raises(ValueError,match='21 s recorded'):
+        mv.verify_battle_disclosure([p],t)
+    p.b=40;t.edit['battle_speed']=1
+    with pytest.raises(ValueError,match='Battle speed: 1×'):
+        mv.verify_battle_disclosure([p],t)
+
+
+def test_real_guide_gets_the_exact_creator_caption_and_reveal_from_its_clock():
+    e={'kind':'guide','t':3,'frame_t':2,'box':[.6,.3,.8,.7],'boxes':[[.6,.3,.8,.7]],'pan':.4,'seconds':.4}
+    t=_guide_take([e]);t.edit={'eyes_covered':True}
+    p=mv.Piece('g','game3',take='guide',a=0,b=10,guide=True,black_for=6,reveal_s=.2)
+    mv.guide_overlays([p],{'guide':t})
+    assert any(o.text.startswith('Creator test. Eyes covered. Not a blind player.') for o in p.overlays)
+    assert next(o.f0 for o in p.overlays if o.text=='Picture on.')==6.2
+    assert next(o.where for o in p.overlays if o.text=='Picture on.')=='picture-on'
+    p.black_for=0
+    with pytest.raises(ValueError,match='reveal'):
+        mv.guide_overlays([p],{'guide':t})
+
+
+def test_guide_graph_places_the_exact_source_box_and_logged_pan(tmp_path):
+    import json
+
+    from PIL import Image
+    sample={'box':[.1,.2,.4,.6],'pan':-.6,'seconds':1.23,'age':1.5}
+    f=tmp_path/'guide.png'
+    mv.label_png(f,mv.Overlay(json.dumps(sample),34,'guide-sample',0,2))
+    pixels=Image.open(f).convert('RGBA')
+    assert pixels.getpixel((192,216))[:3]==mv.ACCENT[:3]
+    assert pixels.getpixel((840,780))[:3]==mv.ACCENT[:3]
+    sample.update(box=None,pan=None)
+    mv.label_png(f,mv.Overlay(json.dumps(sample),34,'guide-sample',0,2))
+    pixels=Image.open(f).convert('RGBA')
+    assert pixels.getpixel((192,216))[3]==0
+    assert pixels.getpixel((840,780))[:3]!=mv.ACCENT[:3]
+
+
+@needs_ffmpeg
+def test_guide_rejects_a_mono_ping_stem_instead_of_inventing_stereo(tmp_path):
+    import wave
+    video=tmp_path/'guide.mp4'
+    for suffix,channels in [('.game.wav',2),('.voice.wav',1)]:
+        with wave.open(str(video.with_suffix(suffix)),'wb') as f:
+            f.setnchannels(channels);f.setsampwidth(2);f.setframerate(24000);f.writeframes(b'\0'*(2400*channels*2))
+    take=mv.Take('g',video,0,1,[],[])
+    with pytest.raises(ValueError,match='original stereo'):
+        mv.encode_clip(mv.Piece('g','game3',take='g',a=0,b=.1,guide=True),{'g':take},{},tmp_path,tmp_path/'out.mp4','libx264')

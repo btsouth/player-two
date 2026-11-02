@@ -228,3 +228,30 @@ Partial speech, clipped known request capture, speed-ups and unsupported results
 The optional friend_quote switch inserts a silent, plain5s RNIB card immediately before identity,
 with explicit phone-game context. Source quotes retain their full attribution; their requested
 short durations must be listed as reading-time exceptions, not called a readability pass.
+
+## Draft 4 guide treatment
+
+A paced Piece with `guide:true` uses per-cycle `guide` events from the guide-mode recorder.
+`box` is normalized source xyxy; `pan` is the logged stereo position; `seconds` is SAM lookup
+compute time, and `frame_t` is the captured frame's wall time. The renderer displays the sample
+at event `t`, which the app emits after its pings, and labels the capture-to-log age. It does not
+invent beep onset, tracking, distance or successful arrival. A miss clears the old box and pan.
+Real audio is taken from the original stereo stems unchanged in pan; it is never regenerated.
+The small dot repeats the logged pan for a mono room. Reviewed `edit.eyes_covered:true` is needed
+before using the creator-test caption. `edit.guide_fixture:true` is only for labelled synthetic
+layout fixtures, never submission evidence. Real takes still need delay/reveal/frame review.
+
+A paced template may supply `guide_fallback` and switch with `guide_mode:"fallback"` in the map.
+This replaces the entire guide piece with reviewed SAM footage. It also uses the original limit
+wording and separate `vo-limit-fallback.*`, so an unrecorded blindfold walk cannot be implied.
+`opening_quote:"lavos"` selects the saved Lavos alternate; default Draft 4 uses the RNIB card.
+Replacing a pending take or founder WAV clears only its own pending marker. Other pending shots
+remain temporary. Original synthetic event/WAV provenance continues to block final submission.
+Request chips show `raw_transcript`, and qualify heard timing as stream or finalize seconds;
+missing timing is omitted. “No button pressed” still requires explicit per-request mode evidence.
+
+Guide sample graphics are an explicit exception to narrative reading and onset checks, like
+boxes: their box, pan and lookup values follow the logged clock. Holding a miss beyond the
+next result would misrepresent the detection. This is not a reading-time pass for every numeric
+update. Stable requests, creator text and cards still use the normal pacing checks. Record this
+telemetry exception in QC and have a person judge the live graphic at real speed.
