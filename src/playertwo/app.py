@@ -45,9 +45,11 @@ LOCAL = [
     ((r"repeat|repeat that|say that again|say it again|read that again|what did (you|they|he"
       r"|she) say|again|come again|what|what was that|sorry|pardon|huh"), "repeat"),
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
-      r"|what do you see|what'?s (going on|happening)"), "describe"),
+      r"|what'?s (going on|happening)"), "describe"),
     # What it's like, not the tour: the setting, light, colours and mood.
-    ((r"describe (the |this )?(atmosphere|mood|scene|scenery|setting|surroundings|vibe|view"
+    ((r"what (do|can) you see( (here|now|out there|around( here| me| us)?))?"
+      r"|what are (we|you) looking at|how'?s the view|what'?s the view( like)?"
+      r"|describe (the |this )?(atmosphere|mood|scene|scenery|setting|surroundings|vibe|view"
       r"|place|area|room)( (here|around (me|us)|for me))?"
       r"|what('?s| is) the (atmosphere|mood|vibe|feel|feeling|scene|scenery|setting)"
       r"( like)?( (here|in here|around here|out here))?"

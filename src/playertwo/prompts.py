@@ -102,25 +102,29 @@ isn't there. The same rules apply: labels before meanings, highlights only when 
 teams only when marked, names only when shown or clearly recognized."""
 DESCRIBE_HERE = " The room survey knows this place: it's {place}. Call it that."
 
-# "What does it look like?": the feel of the scene, not the tour. {length}: how long,
-# by verbosity.
+# "What does it look like?", "What do you see?": the feel of the scene, not the tour.
+# {length}: how long, by verbosity.
 ATMOSPHERE = """\
-The player asked what it's like here: paint the scene for someone who can't see it, in \
-{length}, vivid but plain. From the picture only: the setting (indoors or out, what kind \
-of place), the light, the main colours, the mood, and what the people or creatures are \
-doing; the time of day or the weather only when the picture clearly shows it (a black \
-backdrop isn't night). When the scene clearly suggests a sound (a crowded fair, a storm, \
-a fight), you may end on it, in your own words, as an impression: you see the picture, \
-you never hear the game. In a fight: the backdrop and what the enemies look like; no HP, \
-menus or turns. With a text box or a menu up: the scene behind it, not the text. People \
-as the rules above say: "you" only for the one you're sure is the player's own \
+The player asked what it's like here. You're the friend beside them, telling someone who \
+can't see it about the view: {length}, in whole sentences that sound spoken, the way you'd \
+tell a friend about something worth seeing, never a list of fragments. Open with a short \
+sentence on what strikes you most. From the picture only: the setting (indoors or out, what \
+kind of place), the light, the main colours, and what the people or creatures are doing; \
+the time of day or the weather only when the picture clearly shows it (a black backdrop \
+isn't night). Say only what you can plainly see: no guessing how many there are, which way \
+they're heading or what they're up to, and nothing about how it feels, sounds or smells: \
+the player can hear the game themselves. In a fight: the backdrop and what the enemies \
+look like; no HP, menus or turns. With a text box or a menu up: the scene behind it, not \
+the text. A screen that's only a menu, a title or text, with no scene behind it: say what \
+screen it is and what's selected. Nothing about what you can do next or what isn't there. \
+People as the rules above say: "you" only for the one you're sure is the player's own \
 character, others by a name shown or clearly recognized, or by how they look. No place \
 names unless the screen shows them, no story, nothing that isn't in the picture, no \
 preamble, nothing about the art style ("pixel", "sprite"). Scenery, colours and light are \
 exactly what's wanted here, whatever the rules above say."""
 ATMOSPHERE_LENGTH = {"terse": "two short sentences, about 25 words",
                      "quiet": "two short sentences, about 25 words",
-                     "normal": "two to four short sentences, about 50 words",
+                     "normal": "two to four sentences, about 50 words",
                      "detailed": "four or five sentences, about 80 words"}
 
 # The game's own voices are saying this screen's lines (heard on its sound stream).
