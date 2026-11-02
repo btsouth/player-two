@@ -586,7 +586,7 @@ def mh_story_pieces(take: Take) -> list[Piece]:
         if model:
             at=max(0,model['t']-take.start-a)
             words="Muse read the monster's weak points" if model['read']=='wheel' else 'Muse Spark / status read'
-            p.overlays.append(Overlay(f"{words}, {model['seconds']:.2f} s",34,"tl",at,min(at+4,b-a)))
+            p.overlays.append(Overlay(f"{words}, {model['seconds']:.2f} s",34,"mh-model",at,min(at+4,b-a)))
         if b-a>6:
             start=min(4,max(0,b-a-4))
             p.overlays.append(Overlay("Muse reads the weak points once. Code written for this game takes the turns.",34,"mh-code",start,start+4))
@@ -1413,6 +1413,7 @@ def label_png(path: Path, o: Overlay) -> Path:
         if o.where=='nav-route':x,y=64,500
         if o.where=='bench':
             x,y=64,65
+        if o.where=='mh-model':x,y=64,170
         if o.where in ('mh-code','mh-gloss'):
             x,y=64,300
         bh = len(lines) * int(f.size * 1.35) + 28
