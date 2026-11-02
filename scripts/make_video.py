@@ -380,9 +380,13 @@ def _attempts(take: Take, rx: str) -> list[float]:
 
 def _lead(take: Take, heard_t: float, event: dict) -> float:
     """How long before the "heard" the request began: a spoken one was said, and transcribed,
-    before it's logged. It starts where the status went to listening."""
+    before it's logged. Prefer measured hands-free audio start: the listening
+    status is set only after the wake name has already been spoken."""
     if event.get("typed") or take.start is None:
         return 0.4
+    started = event.get("utterance_started_at")
+    if isinstance(started, (int, float)) and heard_t - 20 <= started - take.start <= heard_t:
+        return min(heard_t - (started - take.start) + 0.3, 20.0)
     listen = [e["t"] - take.start for e in take.events
               if e.get("kind") == "status" and e.get("state") == "listening"
               and heard_t - 15 < e["t"] - take.start <= heard_t]

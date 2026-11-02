@@ -476,7 +476,11 @@ class HandsFree:
             except Exception as exc:  # noqa: BLE001  the session says what went wrong
                 await self.on_text("", exc, started, ended, {})
                 return
-            await self.on_text(text, None, started, ended, utt.timing())
+            timing = utt.timing()
+            clock_offset = time.time() - time.monotonic()
+            timing.update(utterance_started_at=round(started + clock_offset, 4),
+                          utterance_ended_at=round(ended + clock_offset, 4))
+            await self.on_text(text, None, started, ended, timing)
 
         task = asyncio.create_task(result())
         self.tasks.add(task)

@@ -113,7 +113,9 @@ without a key; Player Two's AI does not. Automated trials are in `scripts/arena_
 
 Start your game, run `player-two`, hold F8 and speak. Setup binds the talk key on Hyprland and
 Windows; elsewhere bind `player-two ctl talk` (toggle) or use hands-free. A headset reduces echo.
-With the talk key, say “stop” to cancel. Hands-free, say “Player Two, stop” so a game voice cannot cancel for you. Back up saves before allowing actions. Screen-reader output supports Orca,
+With the talk key, say “stop” to cancel. Hands-free, say “Player Two, stop”. A bare “stop” is
+ignored to avoid cancellations from game speech. Back up saves before allowing actions.
+Screen-reader output supports Orca,
 speech-dispatcher and NVDA; JAWS is implemented but untested.
 
 ## How Meta models are used

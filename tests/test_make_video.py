@@ -897,3 +897,11 @@ def test_transcribe_badge_uses_only_a_measured_stream_stage():
     old_piece = mv.Piece("old", "clip", take="old", a=0, b=5, captions=True)
     assert not any(r["layer"] == "Muse Voice Transcribe"
                    for r in mv._evidence_for_window([old_piece], {"old": old}))
+
+
+def test_hands_free_clip_keeps_the_wake_name_before_listening_status():
+    request = {"t": 5.0, "kind": "heard", "text": "Open the journal",
+               "utterance_started_at": 0.5}
+    take = _take([{"t": 3.0, "kind": "status", "state": "listening"}, request], "voice", 8)
+    # Wake detection can set listening only AFTER the user said Player Two.
+    assert mv._lead(take, 5.0, request) == 4.8
