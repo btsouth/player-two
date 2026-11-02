@@ -244,13 +244,14 @@ async def test_the_tour_is_told_where_this_is_when_the_survey_knows():
 
         async def stream(self, messages):
             asked.append(messages[1]["content"][1]["text"])
-            yield "A warm inn dining room. You're in Truce Inn."
+            yield "A warm inn dining room."
 
     s = session([0x0C], {0x0C: "Truce Inn"}, {0x0C: INN})
     s.narrator = Narrator(Muse(), "normal", "Chrono Trigger")
     said = "".join([d async for d in s._describe(frame())])
-    assert said == "A warm inn dining room. You're in Truce Inn."
-    assert "it's Truce Inn" in asked[0] and "Open with one short sentence" in asked[0]
+    assert said == "Truce Inn. A warm inn dining room."  # the name first, before the model starts
+    assert "Truce Inn" in asked[0] and "Don't say it again" in asked[0]
+    assert "Open with one short sentence" in asked[0]
 
 
 def test_rooms_read_each_places_line(tmp_path):
