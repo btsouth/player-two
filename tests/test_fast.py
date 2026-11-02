@@ -273,3 +273,10 @@ def test_ct_transcription_bias_is_game_scoped():
     assert game_keywords("Chrono Trigger") == [
         "Chrono", "Trigger", "Crono", "Cyclone", "Leene", "Potions"]
     assert game_keywords("Monster Hunter Stories 3") == ["Monster", "Hunter", "Stories"]
+
+
+def test_repeated_spoken_goodbye_only_quits_for_the_whole_request():
+    from playertwo.app import local_action
+    assert local_action("goodbye. goodbye.") == "quit"
+    assert local_action("goodbye, don't quit") is None
+    assert local_action("say goodbye goodbye") is None

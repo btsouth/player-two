@@ -94,7 +94,7 @@ LOCAL = [
     (r"stop narrating|pause (the )?narration|pause narrating|stop describing", "pause"),
     (r"start narrating|keep narrating|resume (the )?narration|resume narrating", "resume"),
     (r"(show|open) (the |your )?(player two )?window", "show"),
-    ((r"good ?bye|bye( bye)?|(quit|exit|close|turn off|shut down)"
+    ((r"good ?bye(?: good ?bye)?|bye( bye)?|(quit|exit|close|turn off|shut down)"
       r" (player two|yourself)|turn yourself off|that'?s all for (now|today)"), "quit"),
 ]
 LOCAL_RE = [(re.compile(p), action) for p, action in LOCAL]
