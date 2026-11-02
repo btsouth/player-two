@@ -658,6 +658,8 @@ class Session:
 
     async def agent_say(self, text: str) -> None:
         text = companion_line(text)
+        if not text:
+            return
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
         await self.voice.say(text, interrupt=False)

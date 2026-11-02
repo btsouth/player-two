@@ -246,8 +246,8 @@ def test_a_purchase_is_said_as_the_gold_shows_it(monkeypatch):
 
 
 def test_someones_line_said_with_the_name_the_player_used():
-    assert fast.talk_line("Melchior", "At your service!") == "Melchior: At your service!"
-    assert fast.talk_line("the guy selling swords", "At your service!") == "At your service!"
+    assert fast.talk_line("Melchior", "At your service!") == 'Melchior says, "At your service!"'
+    assert fast.talk_line("the guy selling swords", "At your service!") == 'They say, "At your service!"'
 
 
 def test_a_night_at_the_inn_in_a_line():

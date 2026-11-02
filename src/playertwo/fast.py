@@ -368,8 +368,8 @@ def talk_line(who: str, line: str) -> str:
     comes right after "Going to the old man at the lower stalls.")."""
     name = who.strip().split(" ")[0] if who else ""
     if name[:1].isupper() and name.lower() not in ("the", "a", "an", "that", "this"):
-        return f"{name}: {line}"
-    return line
+        return f'{name} says, "{line}"'
+    return f'They say, "{line}"'
 
 
 # -- where am I ------------------------------------------------------------------------

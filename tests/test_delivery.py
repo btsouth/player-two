@@ -25,3 +25,9 @@ def test_delivery_is_idempotent():
 def test_game_quotation_is_not_rewritten_as_a_status():
     line = 'Cid: "Frog uses Heal."'
     assert companion_line(line) == line
+
+
+def test_internal_action_filler_can_be_silent_but_real_action_and_danger_stay():
+    assert companion_line("No target line this turn, so I'll just go for damage.") == ""
+    assert companion_line("Spinning Meteor on the legs.") == "Spinning Meteor on the legs."
+    assert companion_line("It's coming at you with speed.") == "It's coming at you with speed."

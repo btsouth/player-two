@@ -3,6 +3,10 @@ import re
 
 
 def companion_line(text: str) -> str:
+    if text in {"Let me get a look at it.", "I'll just go for damage.",
+                "Going for damage again.", "More damage.", "On it.",
+                "No target line this turn, so I'll just go for damage."}:
+        return ""
     if text == "That's the fight. We won.":
         return "We've won this fight!"
     # Older dialogue producers put a comma after these speakers. Attribute the
