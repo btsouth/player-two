@@ -624,6 +624,7 @@ class Agent:
         self._battle: State | None = None
         self._battle_seen = 0.0
         self.foes: Foes | None = None  # the enemies as last counted, this fight
+        self._foes_said = 99  # the fewest said to be left, this fight: a drop is news once
         self._counting: asyncio.Task | None = None  # a count of them in flight
         # What the player heard lately (narration, the screen reader, answers): the screen
         # in words, for telling the model's lines about it from unrelated ones (ontopic).
@@ -1190,6 +1191,7 @@ class Agent:
         fight: the reader keeps this fresh.) A turn the reader saw shows where that
         fighter stands, for the target glove later (no model call to tell who it's on)."""
         if new:
+            self._foes_said = 99
             self.foes = None
             if self._counting is not None:
                 self._counting.cancel()
@@ -1357,7 +1359,10 @@ class Agent:
             return
         self.foes = Foes(now.count, before.look, now.at)
         line = self.foes.since(before)
-        if line:
+        # A hidden enemy can come back into the count and drop out again (live, Nov 1:
+        # "One golden winged imp down, two left." twice, 28 s apart).
+        if line and now.count < self._foes_said:
+            self._foes_said = now.count
             await say(line)
 
     def _put_in(self, intent: Intent) -> None:
@@ -2602,6 +2607,9 @@ class Agent:
                     # the narrator's "World map.").
                     where = ""
                     with contextlib.suppress(Exception):
+                        # After the fade (live, Nov 1: read during it, "the east Truce
+                        # Residence" for Leene Square, 2 runs of 6).
+                        await asyncio.sleep(0.8)
                         where = await self.world_where((await self.grab()).image)
                     await self._speak(f"We're outside: {where[:1].lower()}{where[1:]}."
                                       if where else "We're outside.")
