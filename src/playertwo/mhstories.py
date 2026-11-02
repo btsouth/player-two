@@ -412,7 +412,7 @@ def arc_seen(img: Image.Image) -> tuple[str, str]:
     def span(name: str) -> float:
         return float(np.hypot(*(best[name].max(axis=0) - best[name].min(axis=0)))) if name in best else 0.0
 
-    if "red" in best and len(best["red"]) >= 150 and span("yellow") < 1.6 * span("red"):
+    if "red" in best and len(best["red"]) >= 150 and span("yellow") < 2.2 * span("red"):
         colour = "red"
     elif "blue" in best and len(best["blue"]) >= 300:
         colour = "blue"
