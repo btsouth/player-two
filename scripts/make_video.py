@@ -518,7 +518,7 @@ def game_pieces(name: str, take: Take | None, no_code: bool, clip: tuple[float, 
 def rdr_pieces(look: Take, dialogue: Take) -> list[Piece]:
     a,b=map(float,look.edit.get("clip",[18.4,28.1]))
     x,y=map(float,dialogue.edit.get("clip",[24,35]))
-    vista=Piece("rdr-look","game3",line="RDR view",take=look.name,a=a,b=b,layout="map")
+    vista=Piece("rdr-look","game3",line="RDR view",take=look.name,a=a,b=b,layout="rdr")
     vista.overlays += [Overlay("Red Dead Redemption",40,"tl",0,min(3,b-a)),
                        Overlay("Description shortened",34,"trim",max(0,b-a-2),b-a)]
     if look.edit.get("notes_only_verified"):
@@ -724,15 +724,16 @@ def reserve_win_line(opening: list[Piece], take: Take | None) -> tuple[list[Piec
 
 def goodbye_piece(take: Take) -> Piece:
     """Use a bounded, genuine last exchange; never fill it with a new synthetic voice."""
-    heard=next((t for t,e in take.heard() if re.fullmatch(r"goodbye[.!?]?",e["text"].strip(),re.IGNORECASE)),None)
-    if heard is None or take.start is None:
+    request=next(((t,e) for t,e in take.heard() if re.fullmatch(r"goodbye[.!?]?",e["text"].strip(),re.IGNORECASE)),None)
+    if request is None or take.start is None:
         raise ValueError("Goodbye take needs its real logged request")
+    heard,event=request
     said=[e for e in take.events if e.get("kind")=="spoken" and e["began"]-take.start>=heard]
     joined=" ".join(e["text"] for e in said).lower()
     if not re.search(r"bye for now[.!]?\s+have fun[.!]?",joined):
         raise ValueError("Goodbye take needs real Bye for now and Have fun spoken records")
     end=next(e for e in said if "have fun" in e["text"].lower())
-    return Piece("goodbye","outro",line="goodbye",take=take.name,a=max(0,heard-.3),
+    return Piece("goodbye","outro",line="goodbye",take=take.name,a=max(0,heard-_lead(take,heard,event)),
                  b=min(take.duration,end["ended"]-take.start+.3),black_for=999,layout="black")
 
 
@@ -1077,6 +1078,8 @@ def label_png(path: Path, o: Overlay) -> Path:
         x, y = 64, (200 if o.where == "trace-black" else 60 if top else 700)
         if o.where=="trace-shop-menu":
             x,y=1000,550
+        if o.where=="trace-rdr":
+            y=520
         black=o.where=="trace-black"
         f = _font(True, 64 if black else 42)
         text = ("You (typed): " if typed else "You: ") + req
@@ -1416,6 +1419,7 @@ def ass_text(take: Take, layout: str = "") -> str:
     layout = layout or ("fight" if take.top else "map")
     size, align, ml, mr, mv = {
         "map": (48, 2, 100, 100, 60),
+        "rdr": (48, 2, 100, 100, 60),
         "fight": (48, 8, 100, 100, 240),
         "shop": (48, 9, 1000, 64, 420),
         "black": (80, 5, 200, 200, 30),
@@ -1456,7 +1460,7 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
     asses: dict[str, Path] = {}
     for name, take in takes.items():
         if take.caps:
-            for layout in ("map","fight","shop","black"):
+            for layout in ("map","fight","shop","black","rdr"):
                 text=ass_text(take,layout)
                 path=work/f"{name}-{layout}.ass"
                 path.write_text(text,encoding="utf-8")

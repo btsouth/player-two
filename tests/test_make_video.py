@@ -459,7 +459,7 @@ def test_goodbye_slot_requires_real_ordered_request_and_spoken_exchange():
     take=_take([{"kind":"heard","t":2,"text":"Goodbye.","typed":True},
                 _spoken("Bye for now.",2.1,3),_spoken("Have fun.",3.2,4)],"goodbye",10)
     p=mv.goodbye_piece(take)
-    assert p.a==1.7 and p.b==4.3 and p.black_for==999
+    assert p.a==1.6 and p.b==4.3 and p.black_for==999
     take.events=take.events[:-1]
     with pytest.raises(ValueError,match="spoken records"):
         mv.goodbye_piece(take)
@@ -484,3 +484,17 @@ def test_a_short_four_times_gap_encodes_with_a_real_silent_audio_track(tmp_path)
                                                "-of","json",str(tmp_path/"gap.mp4")]))["streams"]
     assert any(s["codec_type"]=="audio" and int(s["nb_frames"])>0 for s in streams)
     assert abs(mv.probe_s(tmp_path/"gap.mp4")-.15)<.06
+
+
+def test_real_spoken_goodbye_keeps_the_request_from_listening_start():
+    take=_take([{"kind":"status","t":1,"state":"listening"},
+                {"kind":"heard","t":3,"text":"Goodbye."},
+                _spoken("Bye for now.",3.2,4),_spoken("Have fun.",4.1,5)],"goodbye",10)
+    assert abs(mv.goodbye_piece(take).a-.7)<.001
+
+
+def test_red_dead_request_and_badge_clear_the_actual_lower_left_hud(tmp_path):
+    from PIL import Image
+    path=tmp_path/"rdr.png"
+    mv.label_png(path,mv.Overlay("You: typed\nWhat do you see?\nMuse Spark / scene\nGeneration 2.24 s",42,"trace-rdr",0,1))
+    assert Image.open(path).getchannel("A").getbbox()[3]<780
