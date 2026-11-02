@@ -131,7 +131,7 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
 
 def title(name):
     """A part's name as a wheel title's letters: a different mask for each."""
-    return np.array([[k == "Tail Head Legs".split().index(name) for k in range(3)]])
+    return np.array([[k == ["Tail", "Head", "Legs"].index(name) for k in range(3)]])
 
 
 class Game:
