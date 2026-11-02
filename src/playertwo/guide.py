@@ -27,26 +27,6 @@ def guide_request(text: str) -> str | None:
     return m.group("what").strip() if m else None
 
 
-DRIVE = re.compile(
-    r"^(?:(?:hey|so|okay|ok|please|can you|could you|would you),? )*"
-    r"(?:take|bring) me (?:over )?to\s+(?:the |a |an |my |that |this )?"
-    r"(?P<what>[\w' -]{2,40}?)(?:,? please)?$", re.IGNORECASE)
-# The one line a game's notes need for Player Two to walk it there itself.
-WALK_NOTE = re.compile(r"(?im)^\s*[-*]?\s*walk\s*:\s*turn with the mouse,\s*walk with (\w)\s*\.?\s*$")
-
-
-def drive_request(text: str) -> str | None:
-    """The thing in "take me to my horse", or None."""
-    m = DRIVE.match(text.strip().replace("\u2019", "'").rstrip(".!?,;: "))
-    return m.group("what").strip() if m else None
-
-
-def walk_key(notes: str) -> str | None:
-    """The walking key, if the game's notes say how to walk this way, or None."""
-    m = WALK_NOTE.search(notes or "")
-    return m.group(1).lower() if m else None
-
-
 LEFT, AHEAD, RIGHT = "Left.", "Straight ahead.", "Right."
 CLOSE = "Getting close."
 THERE = "You're there."
@@ -55,7 +35,6 @@ MANY = "I see more than one. Going to the biggest."
 UNSURE = "Not sure that's the same one."
 STOPPED = "Okay, stopped."
 START = "Okay. Listen for the ping."
-TAKING = "Okay, taking you there. Say stop to stop."
 TIMED_OUT = "That's two minutes, and we didn't get there, so I've stopped."
 NEVER_SEEN = "That's two minutes, and I never found it, so I've stopped."
 
@@ -260,44 +239,3 @@ class Guide:
         elif line == LOST:
             self.lost_said_at = now
             self.side = ""  # say the side again when it's back
-
-
-# Walking it for the player: turn toward the thing, walk when it's about ahead. The same few
-# rules a player would use by ear. The gain is mouse counts for the width of half the screen,
-# low on purpose: it comes right over a few looks whatever the game's mouse speed.
-TURN_GAIN = 700
-TURN_PAN = 0.22
-WALK_PAN = 0.55
-SWEEP = 420
-STUCK_LOOKS = 5  # looks walking with the box no bigger: something's in the way
-
-
-@dataclass
-class Move:
-    turn: int  # mouse counts
-    walk: bool  # hold the key
-    step_s: float  # or just a step
-    around: bool = False  # something's in the way: turn off and walk a little
-
-
-class Driver:
-    """What to do with the keys after each look."""
-
-    def __init__(self):
-        self.sizes: list[float] = []
-
-    def after(self, step: Step) -> Move:
-        if step.end:
-            return Move(0, False, 0.0)
-        if step.pan is None:
-            self.sizes.clear()
-            return Move(SWEEP, False, 0.0)
-        turn = round(TURN_GAIN * step.pan) if abs(step.pan) >= TURN_PAN else 0
-        near = step.beeps >= 3
-        ok = abs(step.pan) < WALK_PAN
-        self.sizes.append(step.target.area if step.target else 0.0)
-        recent = self.sizes[-STUCK_LOOKS:]
-        if ok and len(recent) == STUCK_LOOKS and max(recent) <= recent[0] * 1.15:
-            self.sizes.clear()
-            return Move(turn, False, 0.0, around=True)
-        return Move(turn, ok and not near, 0.35 if ok and near else 0.0)

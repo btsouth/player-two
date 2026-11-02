@@ -1742,7 +1742,7 @@ class Session:
         if action:
             await self.local(action)
             return
-        from .guide import drive_request, guide_request
+        from .guide import guide_request
         from .locate import where_request
 
         phrase = where_request(text)
@@ -1750,11 +1750,6 @@ class Session:
         self.stop_side()
         if thing:
             self.side_task = self.guide_task = self.spawn(self.guide(thing))
-            return
-        walking = self._walk_key()
-        thing = drive_request(text) if walking else None
-        if thing:
-            self.side_task = self.guide_task = self.spawn(self.guide(thing, walking))
             return
         if phrase:
             self.side_task = self.spawn(self.where(phrase))
@@ -1882,23 +1877,11 @@ class Session:
     def guiding(self) -> bool:
         return self.guide_task is not None and not self.guide_task.done()
 
-    def _walk_key(self) -> str | None:
-        """The key to walk with, if this game's notes say how (guide.py)."""
-        from .guide import walk_key
-
-        notes = getattr(getattr(self, "agent", None), "notes", None)
-        game = getattr(getattr(self, "narrator", None), "game", "") or ""
+    async def guide(self, phrase: str) -> None:
+        """Walk the player to a thing by ear (guide.py). Presses nothing: their hands. Ends
+        on arrival, on "stop", or at the timeout, with a true line."""
         try:
-            return walk_key(notes.pack(game)) if notes is not None else None
-        except Exception:  # noqa: BLE001  no notes: the player's own feet
-            return None
-
-    async def guide(self, phrase: str, walking: str | None = None) -> None:
-        """Walk the player to a thing by ear (guide.py). Presses nothing unless the game's
-        notes say how to walk (`walking`, the key) and the player asked to be taken. Ends on
-        arrival, on "stop", or at the timeout, with a true line."""
-        try:
-            await self._guide(phrase, walking)
+            await self._guide(phrase)
         except asyncio.CancelledError:
             self.events.emit("guide_end", phrase=phrase, reason="stopped")
             raise
@@ -1920,32 +1903,17 @@ class Session:
         self.spawn(self.voice.say(line))
         return True
 
-    async def _guide(self, phrase: str, walking: str | None = None) -> None:
+    async def _guide(self, phrase: str) -> None:
         from .audio import tone
-        from .guide import SWEEP, START, TAKING, Driver, Guide
+        from .guide import START, Guide, picture_change
         from .locate import locate
 
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         self.pending = None
-        await self.announce(TAKING if walking else START, interrupt=True, status=True)
+        await self.announce(START, interrupt=True, status=True)
         guide = Guide(time.monotonic())
-        self.events.emit("guide_start", phrase=phrase, driving=bool(walking))
-        device, driver, swept_at = None, Driver(), 0.0
-        if walking:
-            from .controls import WalkDevice
-
-            device = await asyncio.to_thread(WalkDevice, walking)
-            await asyncio.sleep(0.4)  # the desktop finding a new device
-        try:
-            await self._guide_looks(phrase, guide, tone, locate, device, driver, swept_at, SWEEP)
-        finally:
-            if device is not None:
-                device.close()
-
-    async def _guide_looks(self, phrase, guide, tone, locate, device, driver, swept_at, sweep):
-        from .guide import picture_change
-
+        self.events.emit("guide_start", phrase=phrase)
         cycle, picture = 0, None
         while True:
             cycle += 1
@@ -1979,28 +1947,6 @@ class Session:
                 self.events.emit("guide_end", phrase=phrase, reason=step.end, cycles=cycle,
                                  seconds=round(now - guide.started, 1))
                 return
-            if device is not None:
-                move = driver.after(step)
-                # Not looking for it faster than a look can see it.
-                if step.pan is None and time.monotonic() - swept_at < 1.6:
-                    move.turn = 0
-                if step.pan is None and move.turn:
-                    swept_at = time.monotonic()
-                self.events.emit("guide_move", turn=move.turn, walk=move.walk, step=move.step_s,
-                                 around=move.around)
-                if move.turn:
-                    device.walk(move.walk)
-                    await asyncio.to_thread(device.turn, move.turn)
-                device.walk(move.walk)
-                if move.around:
-                    await asyncio.to_thread(device.turn, sweep)
-                    device.walk(True)
-                    await asyncio.sleep(1.2)
-                    device.walk(False)
-                elif move.step_s:
-                    device.walk(True)
-                    await asyncio.sleep(move.step_s)
-                    device.walk(False)
             left = step.wait_s - (time.monotonic() - t0)
             if left > 0:
                 await asyncio.sleep(left)

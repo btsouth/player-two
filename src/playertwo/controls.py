@@ -492,39 +492,6 @@ class WindowsKeys(Controls):
         self.steer(None)
 
 
-class WalkDevice:
-    """A mouse and a few keys for walking in a game the pad can't drive, as a device of its
-    own (Linux). Only for the guide, and only when the game's notes say to walk this way."""
-
-    def __init__(self, walk: str):
-        from evdev import UInput
-        from evdev import ecodes as e
-
-        self.e = e
-        self.key = getattr(e, f"KEY_{walk.upper()}")
-        self.ui = UInput({e.EV_REL: [e.REL_X, e.REL_Y],
-                          e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, self.key]},
-                         name="Player Two walking")
-        self.down = False
-
-    def turn(self, counts: int, chunk: int = 60) -> None:
-        sign = 1 if counts > 0 else -1
-        for _ in range(abs(counts) // chunk):
-            self.ui.write(self.e.EV_REL, self.e.REL_X, sign * chunk)
-            self.ui.syn()
-            time.sleep(0.015)
-
-    def walk(self, on: bool) -> None:
-        if on != self.down:
-            self.ui.write(self.e.EV_KEY, self.key, 1 if on else 0)
-            self.ui.syn()
-            self.down = on
-
-    def close(self) -> None:
-        self.walk(False)
-        self.ui.close()
-
-
 class ControlsError(RuntimeError):
     """Buttons or keys couldn't be pressed. `say` is how to tell the player, if known."""
 

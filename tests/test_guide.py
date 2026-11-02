@@ -230,46 +230,6 @@ async def test_stop_ends_it_with_a_true_line(monkeypatch):
     assert ("guide_end", {"phrase": "horse", "reason": "stopped"}) in emitted
 
 
-@pytest.mark.parametrize("text,what", [
-    ("take me to my horse", "horse"), ("Take me to the old mill.", "old mill"),
-    ("Please bring me to that wagon", "wagon"),
-])
-def test_drive_requests(text, what):
-    assert g.drive_request(text) == what
-
-
-def test_walking_it_needs_the_one_line_in_the_notes():
-    assert g.walk_key("- Voiced: all\n- Walk: turn with the mouse, walk with W") == "w"
-    assert g.walk_key("- Voiced: all") is None
-    assert g.walk_key("") is None
-
-
-def test_the_driver_turns_toward_it_and_walks_when_about_ahead():
-    d = g.Driver()
-    far_left = g.Step(m(0.1), -0.8, 700.0, 1, 1.0, "", g.LEFT)
-    move = d.after(far_left)
-    assert move.turn == -560 and not move.walk
-    ahead = g.Step(m(0.5), 0.0, 700.0, 1, 1.0, "", g.AHEAD)
-    move = g.Driver().after(ahead)
-    assert move.turn == 0 and move.walk and move.step_s == 0.0
-    near = g.Step(m(0.5, 0.07), 0.0, 1500.0, 3, 0.5, "", g.AHEAD)
-    move = g.Driver().after(near)
-    assert not move.walk and move.step_s == 0.35
-
-
-def test_the_driver_sweeps_when_it_isnt_seen_and_stops_at_the_end():
-    assert g.Driver().after(g.Step(None, None, None, 0, 0.6, "", "")).turn == g.SWEEP
-    there = g.Step(m(0.5, 0.09), 0.0, 1760.0, 3, 0.0, g.THERE, g.AHEAD, end="there")
-    assert g.Driver().after(there) == g.Move(0, False, 0.0)
-
-
-def test_the_driver_goes_around_when_the_box_stops_growing():
-    d = g.Driver()
-    steady = g.Step(m(0.5, 0.01), 0.0, 900.0, 1, 1.0, "", g.AHEAD)
-    moves = [d.after(steady) for _ in range(5)]
-    assert not moves[3].around and moves[4].around
-
-
 def test_a_box_bigger_in_one_look_waits_for_the_next_to_agree():
     guide = g.Guide(0.0)
     guide.look([m(0.5, 0.008)], 1.0)
