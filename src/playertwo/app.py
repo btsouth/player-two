@@ -539,6 +539,8 @@ class Session:
             self.events.emit("walk", target="", direction=way)
         elif name == "walk_note":
             self.events.emit("walk_note", text=args.get("text", ""))
+        elif name.startswith("mh_"):
+            self.events.emit("mh", name=name, **args)
 
     def current_status(self) -> str:
         if self.utt is not None or self.hands_active:

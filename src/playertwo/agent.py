@@ -728,6 +728,9 @@ class Agent:
         (see ontopic.py); one that isn't gets the model's quick second look, with the
         player's request beside it, and isn't said on a no (live 3: a sentence about
         football fouls, spoken as the answer to "what's the battle mode set to?")."""
+        if ontopic.about_itself(text):
+            self._held = getattr(self, "_held", 0) + 1
+            return False
         grounds = getattr(self, "_grounds", None)
         if grounds is None or not grounds.off_topic(text):
             return True
@@ -2537,6 +2540,23 @@ class Agent:
         self._wander_s = 0.0
         frame = frame or await self.grab()
         tried = ""
+        from . import mhstories
+
+        mh = mhstories.asks(request) if mhstories.is_game(self.game or "") else ""
+        if mh:
+            # Monster Hunter Stories 3: Muse reads and picks, a short routine presses.
+            fight = getattr(self, "_mh", None) or mhstories.Fight(self)
+            self._mh = fight
+            line = await fight.run(request, mh)
+            if line or self.said:
+                if line and not self.cancelled:
+                    await self._speak(line)
+                run.steps.append(Step("mh_fight", {"mode": mh}, time.monotonic() - t0,
+                                      line or " ".join(self.said)))
+                run.outcome = line or self.said[-1]
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
         from .fast import try_fast, where_request
 
         if where_request(request):
