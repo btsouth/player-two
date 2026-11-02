@@ -279,3 +279,11 @@ def test_missing_fight_gets_a_visible_placeholder_not_a_silent_omission():
     parts, _, _ = _plan(_events())
     assert any(p.id == "missing-fight" and p.kind == "slate" for p in parts)
     assert "placeholder: missing-fight" in mv.final_refusals(parts, [])
+
+
+def test_why_transcript_survives_replacing_the_silent_vo_stand_in():
+    parts, _, _ = mv.make_plan({"take-A": _take(_events())}, {}, set(), mv.DRAFT_RATES,
+                               {"why": "vo-why.wav"}, {"why": 8}, {})
+    why = next(p for p in parts if p.id == "why")
+    assert any("Games hide their choices" in o.text for o in why.overlays)
+    assert all(o.text != mv.VO_LABEL for o in why.overlays)

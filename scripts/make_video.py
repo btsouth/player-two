@@ -526,7 +526,7 @@ def make_plan(takes: dict[str, Take], picks: dict[str, int], no_code: set[str],
                     blocks=[("PLACEHOLDER: blurred world map", 64, True)])
     if "why" not in vo:
         why.overlays.append(Overlay(VO_LABEL, 26, "tl", 0.0, why.out_s))
-        why.overlays.append(Overlay("Games hide their choices in pixels.\nI built a co-op partner that reads them,\nso you can choose what happens next.", 42, "bc", 0.0, why.out_s))
+    why.overlays.append(Overlay("Games hide their choices in pixels.\nI built a co-op partner that reads them,\nso you can choose what happens next.", 42, "bc", 0.0, why.out_s))
     fight_card = Piece("c3", "ct", "fight card", "card", secs=3.0, blocks=[
         ("3. A fight", 72, True),
         ("My own save, later in the game. Battle Mode set to Wait.", 40, False)])
