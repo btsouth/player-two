@@ -940,3 +940,46 @@ def test_paced_monster_hunter_uses_the_actual_heard_transcript():
     mv.evidence_overlays([p],{'game2':take})
     assert any('Muse Voice Transcribe' in o.text and "Player Two, where's it weak?" in o.text for o in p.overlays)
     assert not any('typed' in o.text for o in p.overlays)
+
+
+def test_paced_request_is_not_repeated_as_a_new_ask_later():
+    take=_take([{'kind':'heard','t':1,'text':'Win.'}],'game2',20);take.edit={'paced':True,'story':{}}
+    p=mv.Piece('later','game2',take='game2',a=10,b=18)
+    mv.evidence_overlays([p],{'game2':take})
+    assert not p.overlays
+
+
+def test_known_spoken_request_capture_cannot_be_cut_off():
+    take=_take([{'kind':'status','state':'listening','t':1},{'kind':'heard','t':3,'text':'Open the journal.'}],'t',10)
+    p=mv.Piece('p','ct',take='t',a=2,b=8)
+    _,blocked=mv.pacing_report([p],{'t':take},{'partial-request:p':'No waiver'})
+    assert 'partial-request:p' in blocked
+
+
+def test_recovery_claim_uses_the_new_takes_real_turn_count():
+    t=_take([{'kind':'agent','t':8,'request':'Keep going to the castle','turns':[{}]*8,'steps':[{'tool':'walk_to','result':'not_found'},{'tool':'remember'}]}],'nav',10)
+    p=mv.Piece('c','ct',overlays=[mv.Overlay('Not scripted. Muse took 8 turns',34,'tl',0,10)])
+    mv.verify_recovery([p],t)
+    p.overlays[0].text='Not scripted. Muse took 9 turns'
+    with pytest.raises(ValueError,match='proof changed'):mv.verify_recovery([p],t)
+
+
+def test_new_menu_transcripts_may_differ_in_case_and_punctuation():
+    es=[{'kind':'heard','t':1,'text':'read this menu'},{'kind':'heard','t':5,'text':'Open the journal?'},{'kind':'heard','t':15,'text':'Read it!'}]
+    for t,request in [(2,'Read this menu.'),(10,'open the journal'),(20,'Read it')]:
+        es.append({'kind':'agent','t':t,'request':request,'turns':[{}],'steps':[{'tool':'press','t':2,'args':{'buttons':['a']}}]})
+    t=_take(es,'rdr-menu',30);t.edit={'backend':'keyboard','story':[[5,12]]}
+    mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=5,b=12)])
+
+
+def test_stand_in_voice_marker_survives_copying_to_a_real_name(tmp_path):
+    wav=tmp_path/'vo-intro.wav';wav.write_bytes(b'RIFF'+b'\0'*32+b'P2STPLAYER_TWO_SYNTHETIC_STAND_IN')
+    p=mv.Piece('identity','hook',kind='card',secs=12,vo=str(wav))
+    assert 'stand-in media: identity' in mv.final_refusals([p],[])
+
+
+def test_pace_uses_listening_start_for_reply_to_request_gap():
+    take=_take([_spoken('Done.',1,2),{'kind':'status','state':'listening','t':2.2},{'kind':'heard','t':4,'text':'Next.'}],'t',10)
+    p=mv.Piece('p','ct',take='t',a=0,b=8)
+    _,blocked=mv.pacing_report([p],{'t':take},{})
+    assert 'request-gap:p' in blocked

@@ -26,6 +26,8 @@ def main():
     board = Path.home() / ".cache/player-two/lead/BOARD.md"
     if board.exists():
         print(board.read_text()[-8000:], flush=True)
+    if (args.folder / "STAND-IN.json").exists():
+        raise ValueError("Stand-in media cannot enter the real tonight import path")
     mapping = json.loads(args.map.read_text())
     names = set(mapping.get("voiceovers", {}).values())
     for e in mapping.get("takes", {}).values():

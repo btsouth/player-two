@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -47,11 +48,26 @@ def say(k, text, path, speed=1):
         audio, rate = k.create(text, voice="am_michael", speed=speed, lang="en-us")
         sf.write(path, audio, rate)
         stamp.write_text(key)
+    marker = b"PLAYER_TWO_SYNTHETIC_STAND_IN"
+    if marker not in path.read_bytes()[-512:]:
+        chunk = b"P2ST" + struct.pack("<I", len(marker)) + marker + b"\0" * (len(marker) % 2)
+        with path.open("r+b") as f:
+            if f.read(4) != b"RIFF":
+                raise ValueError("Stand-in provenance needs a RIFF WAV")
+            f.seek(0, 2)
+            f.write(chunk)
+            length = f.tell()
+            f.seek(4)
+            f.write(struct.pack("<I", length - 8))
     x, rate = sf.read(path)
     return len(x) / rate
 
 
 async def prepare(args):
+    from video_mix_check import configure_key
+
+    configure_key()
+    from playertwo.app import game_keywords
     from playertwo.listen import transcribe_file
     from playertwo.voice import load_kokoro
 
@@ -110,10 +126,11 @@ async def prepare(args):
                 for i, (x, e) in enumerate(heard):
                     file = args.folder / f"{TAG}-{p.id}-request-{i}.wav"
                     n = say(k, e["text"], file)
-                    key = hashlib.sha256(file.read_bytes()).hexdigest()
+                    keywords=["Player Two",*game_keywords(t.game_name())]
+                    key = hashlib.sha256(file.read_bytes()+json.dumps(keywords).encode()).hexdigest()
                     if key not in cache:
                         before = time.monotonic()
-                        transcript = await transcribe_file(str(file))
+                        transcript = await transcribe_file(str(file),keywords=keywords)
                         cache[key] = (transcript, time.monotonic() - before)
                         cache_path.write_text(json.dumps(cache, indent=2) + "\n")
                     transcript, elapsed = cache[key]
@@ -181,6 +198,9 @@ async def prepare(args):
                     events.append(event)
                 for x, _e, file, n, text, elapsed in requests:
                     at = lead + x - p.a - n - 0.2
+                    previous=[ev['ended']-epoch for ev in events if ev.get('kind')=='spoken' and ev['ended']-epoch<=lead+x-p.a]
+                    if previous:at=max(at,max(previous)+.7)
+                    if at+n>lead+x-p.a:raise ValueError('Synthetic request cannot fit without overlapping a reply; cut a whole beat or expand the source slot')
                     audio = read(file)
                     dest = max(0, round(at * 24000))
                     nframes = min(len(audio), count - dest)

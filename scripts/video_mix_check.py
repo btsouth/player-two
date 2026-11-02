@@ -59,7 +59,16 @@ def wav(path, audio):
     sf.write(path, audio, 24000, subtype="PCM_16")
 
 
+def configure_key():
+    import os
+
+    key = Path.home() / ".config/meta-hackathon/meta-api-key"
+    if key.exists():
+        os.environ.setdefault("META_API_KEY", key.read_text().strip())
+
+
 async def audit(args):
+    configure_key()
     from playertwo.listen import transcribe_file
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -102,7 +111,9 @@ async def audit(args):
                 "-i",
                 str(t.video.with_suffix(".voice.wav")),
                 "-filter_complex",
-                "[0:a]apad=pad_dur=2[g];[1:a]apad=pad_dur=2[v];[g][v]sidechaincompress=threshold=0.025:ratio=8:attack=15:release=220[d]",
+                "[0:a]apad=pad_dur=2"
+                + m.game_duck_filter(p)
+                + "[g];[1:a]apad=pad_dur=2[v];[g][v]sidechaincompress=threshold=0.025:ratio=8:attack=15:release=220[d]",
                 "-map",
                 "[d]",
                 "-t",
@@ -157,8 +168,8 @@ async def audit(args):
             if key not in cache:
                 try:
                     cache[key] = {"text": await transcribe_file(path)}
-                except Exception as e:
-                    cache[key] = {"error": str(e)[:200]}  # noqa: BLE001 API/session failures are recorded per slice
+                except Exception as e:  # noqa: BLE001 API/session failures are recorded per slice
+                    cache[key] = {"error": str(e)[:200]}
                 cache_path.write_text(json.dumps(cache, indent=2) + "\n")
             row[name] = cache[key]
 
@@ -215,6 +226,9 @@ async def audit(args):
     ]
     args.report.write_text("\n".join(report) + "\n")
     print(report[-1])
+    errors = sum("error" in r[n] for r in rows for n in ("mix", "voice", "laptop"))
+    if errors:
+        raise RuntimeError(f"Incomplete Muse audit: {errors} API errors; see table/cache")
 
 
 if __name__ == "__main__":
