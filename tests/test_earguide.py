@@ -213,7 +213,7 @@ async def test_game_speech_holds_the_words_not_the_pings(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stop_ends_it_with_a_true_line(monkeypatch):
-    s, said, cues, emitted = session(monkeypatch, [[m(0.2, 0.01)]])
+    s, said, _cues, emitted = session(monkeypatch, [[m(0.2, 0.01)]])
     from playertwo.app import Session
 
     s.stop_side = lambda: Session.stop_side(s)
