@@ -89,6 +89,8 @@ def load_kokoro():
                 ort.preload_dlls()
             opts = ort.SessionOptions()
             opts.log_severity_level = 3
+            opts.intra_op_num_threads = 2
+            opts.inter_op_num_threads = 1
             sess = ort.InferenceSession(
                 onnx, opts, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
             if "CUDAExecutionProvider" in sess.get_providers():
@@ -99,6 +101,8 @@ def load_kokoro():
     # long error about missing libraries on every machine without them.
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
+    opts.intra_op_num_threads = 2
+    opts.inter_op_num_threads = 1
     sess = ort.InferenceSession(onnx, opts, providers=["CPUExecutionProvider"])
     return Kokoro.from_session(sess, voices), "cpu"
 
