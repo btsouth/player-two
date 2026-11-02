@@ -2,14 +2,19 @@
 
 import importlib.util
 import itertools
+import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 _path = Path(__file__).parents[1] / "scripts" / "make_video.py"
 _spec = importlib.util.spec_from_file_location("make_video", _path)
 mv = importlib.util.module_from_spec(_spec)
 sys.modules["make_video"] = mv  # dataclasses look their module up
 _spec.loader.exec_module(mv)
+
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
 
 
 def _cap(a, b, text="line", who="Player Two"):
@@ -471,6 +476,7 @@ def test_red_dead_no_code_claim_requires_a_verified_manifest_flag():
     assert mv.NO_CODE not in [o.text for o in view.overlays]
 
 
+@needs_ffmpeg
 def test_a_short_four_times_gap_encodes_with_a_real_silent_audio_track(tmp_path):
     import subprocess
     source=tmp_path/"source.mp4"
@@ -602,6 +608,7 @@ def test_sam_sequence_requires_logged_geometry_and_retains_unducked_actor_audio(
         mv.rdr_sam_pieces(take)
 
 
+@needs_ffmpeg
 def test_ducked_stems_retain_and_boost_the_last_stereo_ping(tmp_path,monkeypatch):
     import array
     import math
@@ -631,6 +638,7 @@ def test_ducked_stems_retain_and_boost_the_last_stereo_ping(tmp_path,monkeypatch
     assert max(map(abs,left))>.35 and max(map(abs,right))<.16
 
 
+@needs_ffmpeg
 def test_join_removes_per_clip_aac_padding_instead_of_accumulating_it(tmp_path):
     import array
     import subprocess

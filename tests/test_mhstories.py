@@ -88,7 +88,7 @@ def test_an_untyped_attack_changes_no_type_and_claims_none():
     v = view(arc="red", toward="Canyne", monster_type="Power", menu_type="Technical")
     plan = m.choose(v)
     assert plan.type == "Technical" and plan.why_type == "none"
-    line = m.Lines().reason(v, plan)
+    assert "counter" not in m.Lines().reason(v, plan)
     assert "counter" not in m.Lines().reason(view(arc="red", toward="Ogden"), m.Plan("attack"))
 
 

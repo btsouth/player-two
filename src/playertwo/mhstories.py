@@ -1031,7 +1031,7 @@ class Fight:
             name = str(self.status.get("name") or "")
             right = difflib.get_close_matches(name.lower(), KNOWN_TYPES, 1, 0.8)
             if right and right[0] != name.lower():
-                self.what_line = re.sub(re.escape(name), right[0].title(), self.what_line, flags=re.I)
+                self.what_line = re.sub(re.escape(name), right[0].title(), self.what_line, flags=re.IGNORECASE)
                 self.status["name"] = right[0].title()
 
         job = asyncio.ensure_future(reading())

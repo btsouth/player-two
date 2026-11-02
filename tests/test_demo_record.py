@@ -4,6 +4,10 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="the recorder is a POSIX shell script")
+
 SCRIPT = Path(__file__).parents[1] / "scripts/demo_record.sh"
 
 

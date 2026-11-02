@@ -1,8 +1,13 @@
 """A reviewed-source swap keeps originals intact and the manifest portable for rsync."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="takes are selected with a symlink swap")
 
 
 def test_selection_preserves_originals_and_other_takes(tmp_path):
