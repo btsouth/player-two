@@ -576,7 +576,8 @@ def mh_story_pieces(take: Take) -> list[Piece]:
             at=max(0,model['t']-take.start-a)
             p.overlays.append(Overlay(f"Muse read the monster's weak points, {model['seconds']:.2f} s",34,"tl",at,min(at+4,b-a)))
         if b-a>6:
-            p.overlays.append(Overlay("Muse reads the weak points once. Code written for this game takes the turns.",34,"mh-code",min(4,b-a),min(8,b-a)))
+            start=min(4,max(0,b-a-4))
+            p.overlays.append(Overlay("Muse reads the weak points once. Code written for this game takes the turns.",34,"mh-code",start,start+4))
         for c,d,who,text in take.caps:
             if who=="Player Two" and "Speed beats that" in text and min(b,d)>max(a,c):
                 p.overlays.append(Overlay("Speed beats Power in this game's attack triangle.",34,"mh-gloss",max(0,c-a),min(b-a,d-a+.8)))
