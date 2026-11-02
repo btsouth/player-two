@@ -26,7 +26,7 @@ checked against the game's screen.
 | Buy three potions | 6/6 | 17.3 to 20.4 s |
 | Take me back outside | 6/6 | 8.5 to 14.9 s |
 | Crono, use Cyclone | 4/5 | 6.1 to 8.5 s when he was ready |
-| Win this fight for me, from three allies at 1 HP | 4/5 | Wins 42 to 53 s |
+| Win this fight for me, after a combo took two or three of the party to 1 HP | 4/5 | Wins 42 to 53 s |
 
 In the one lost fight the party was wiped out right after Cyclone was picked. Player Two then went
 back through the title and loaded the last save without being asked. One more run didn't count
