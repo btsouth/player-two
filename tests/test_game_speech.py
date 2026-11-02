@@ -287,7 +287,7 @@ def test_maybe_narrate_keeps_the_screen_until_the_game_stops_talking():
     ears = Ears(speaking=True)
     s = ears_session(ears)
     s.pending = (frame(time.monotonic() - 1.0), 0.5)
-    s.narrating = None
+    s.narrating = s.describing = None
     s.utt, s.transcribing, s.hands_active = None, False, False
     s.error_until = s.soft_until = s.quiet_until = 0.0
     s._reads = lambda f: False
@@ -302,6 +302,32 @@ def test_maybe_narrate_keeps_the_screen_until_the_game_stops_talking():
         s._maybe_narrate()
         await asyncio.sleep(0)
         assert started and s.pending is None
+
+    asyncio.run(go())
+
+
+def test_a_new_scene_doesnt_cut_off_an_answer_still_being_said():
+    s = ears_session(Ears(ever=False))
+    s.pending = (frame(time.monotonic() - 1.0), 1.0)  # a whole new scene
+    s.utt, s.transcribing, s.hands_active = None, False, False
+    s.error_until = s.soft_until = s.quiet_until = 0.0
+    s.SCENE_CUT = 0.5
+    s._reads = lambda f: False
+    s._ears_on = lambda: False
+    idle = [False]
+    s.voice = SimpleNamespace(idle=lambda: idle[0])
+    started = []
+    s._narrate = lambda f, interrupt=False: started.append(interrupt) or asyncio.sleep(0)
+
+    async def go():
+        s.narrating = s.describing = asyncio.create_task(asyncio.sleep(0))
+        await s.narrating  # the model is done, its answer still playing
+        s._maybe_narrate()
+        assert not started and s.pending is not None
+        idle[0] = True  # heard out: the new scene gets its turn
+        s._maybe_narrate()
+        await asyncio.sleep(0)
+        assert started
 
     asyncio.run(go())
 

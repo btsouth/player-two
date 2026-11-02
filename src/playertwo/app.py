@@ -866,6 +866,9 @@ class Session:
             return  # never over the player; the newest screen waits until they're done
         if time.monotonic() < self.error_until:
             return
+        if self.describing is not None and self.narrating is self.describing \
+                and not self.voice.idle():
+            return  # the player asked: they hear the answer out, even over a new scene
         frame, change = self.pending
         if self._reads(frame):
             if self.read_t < frame.t - self.watcher.settle_s:
