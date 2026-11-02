@@ -755,3 +755,37 @@ def test_an_idle_nvidia_card_is_pointed_out(monkeypatch):
     assert voice.gpu_hint("gpu") == "" and voice.gpu_hint("screen reader") == ""
     monkeypatch.setattr(voice, "nvidia_card", lambda: False)
     assert voice.gpu_hint("cpu") == ""
+
+
+async def test_hands_free_description_acknowledges_before_waiting_for_the_scene():
+    from types import SimpleNamespace
+    from playertwo.app import Events, Session
+    s = Session.__new__(Session)
+    s.events = Events()
+    s.hands = object()
+    s.narrator = SimpleNamespace(language="English")
+    calls = []
+    async def after_local():
+        return None
+    s._after_local = after_local
+    s.spawn = lambda coro: coro.close()
+    async def announce(text, **kwargs):
+        calls.append(text)
+    async def wait_idle(timeout):
+        calls.append("idle")
+    async def grab():
+        calls.append("frame")
+        return object()
+    s.announce = announce
+    s.voice = SimpleNamespace(wait_idle=wait_idle)
+    s.grab_now = grab
+    s._start_narration = lambda frame, **kwargs: calls.append("scene")
+    await s._local("describe")
+    assert calls == ["Let me look.", "idle", "frame", "scene"]
+    calls.clear()
+    await s._local("atmosphere")
+    assert calls == ["One second.", "idle", "frame", "scene"]
+    calls.clear()
+    s.hands = None
+    await s._local("describe")
+    assert calls == ["frame", "scene"]

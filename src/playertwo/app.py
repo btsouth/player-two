@@ -1770,6 +1770,10 @@ class Session:
         await self.voice.say(line)
         return True
 
+    def _look_ack(self) -> str:
+        self._looks = getattr(self, "_looks", -1) + 1
+        return ("Let me look.", "One second.", "Just a sec.")[self._looks % 3]
+
     async def _agent(self, text: str) -> None:
         began = time.time()
         if self.narrating and not self.narrating.done():
@@ -1779,8 +1783,7 @@ class Session:
         # Heard, in the player's words, before the model's first word seconds later.
         line = ack(text) if "English" in (self.narrator.language or "English") else None
         if line == "Let me look.":  # questions in a row don't get the same words
-            self._looks = getattr(self, "_looks", -1) + 1
-            line = ("Let me look.", "One second.", "Just a sec.")[self._looks % 3]
+            line = self._look_ack()
         if line:
             self.announce(line, status=True)
         ticks = self.spawn(self._working_ticks())
@@ -2114,6 +2117,11 @@ class Session:
                 return
             await self._local("describe")
         elif action in ("describe", "atmosphere", "just_happened", "who_talks"):
+            if getattr(self, "hands", None) is not None and "English" in self.narrator.language:
+                # VAD endpointing already took a moment. Acknowledge hearing before
+                # model-backed scene work; let the short line finish before narration.
+                await self.announce(self._look_ack(), status=True)
+                await self.voice.wait_idle(3)
             try:
                 frame = await self.grab_now()
             except Exception as exc:  # noqa: BLE001
