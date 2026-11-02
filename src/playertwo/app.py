@@ -1602,13 +1602,13 @@ class Session:
             said = addressed(text)
             if said is not None and echo_possible and self.echo(text, named=True):
                 said = None
-            elif said is None and text and not (echo_possible and self.echo(text)):
-                # A game's bare "stop" is indistinguishable from the player's.
-                # Require the wake name for cancellation, including during a question.
-                if self.open_ear(started) and local_action(text) != "stop":
-                    said = text  # an answer or an explicitly invited follow-up
-                    # Heard without its name: over speakers that could be the game.
-                    self.unnamed_answer = self.answer is not None and not self.answer.done()
+            elif (said is None and text and not (echo_possible and self.echo(text))
+                  and self.open_ear(started) and local_action(text) != "stop"):
+                # A game's bare "stop" is indistinguishable from the player's:
+                # cancellation always needs the name, even during a question.
+                said = text  # an answer or an explicitly invited follow-up
+                # Heard without its name: over speakers that could be the game.
+                self.unnamed_answer = self.answer is not None and not self.answer.done()
             if said is None:
                 if text:
                     self.events.emit("overheard", text=text)
