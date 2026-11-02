@@ -140,11 +140,10 @@ def session(monkeypatch, looks, speaking=False):
     from types import SimpleNamespace
 
     from PIL import Image
+    from test_app import bare_session
 
     from playertwo import locate
     from playertwo.screen import Frame
-
-    from test_app import bare_session
 
     s = bare_session()
     said, cues, emitted = [], [], []

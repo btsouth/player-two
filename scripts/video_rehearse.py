@@ -11,10 +11,9 @@ import subprocess
 import time
 from pathlib import Path
 
+import make_video as m
 import numpy as np
 import soundfile as sf
-
-import make_video as m
 
 TAG = "TEMP-NOT-FOR-SUBMISSION"
 

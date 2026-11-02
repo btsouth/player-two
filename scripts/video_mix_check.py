@@ -10,9 +10,8 @@ import re
 import subprocess
 from pathlib import Path
 
-import numpy as np
-
 import make_video as m
+import numpy as np
 
 
 def words(s):

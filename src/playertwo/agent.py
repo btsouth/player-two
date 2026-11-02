@@ -584,8 +584,8 @@ def others_of_kind(m, name: str, said: str, at: tuple[float, float]) -> list[str
     return sorted(same, key=lambda n: math.dist(m.places[n], at))
 
 
-TOOL_MARKUP = re.compile(r'<(?:\w+:)?invoke name="(?:\w+\.)?(\w+)">(.*?)</(?:\w+:)?invoke>', re.S)
-TEXT_MARKUP = re.compile(r'<(?:\w+:)?parameter name="text">(.*?)</(?:\w+:)?parameter>', re.S)
+TOOL_MARKUP = re.compile(r'<(?:\w+:)?invoke name="(?:\w+\.)?(\w+)">(.*?)</(?:\w+:)?invoke>', re.DOTALL)
+TEXT_MARKUP = re.compile(r'<(?:\w+:)?parameter name="text">(.*?)</(?:\w+:)?parameter>', re.DOTALL)
 
 
 def plain_reply(content: str) -> str:
