@@ -66,10 +66,11 @@ STEAM_NEAR = 48  # how far from the last view the quick search looks, in game pi
 # it; down from the game's own top to STEAM_LOW below the game's own bottom.
 STEAM_FOLLOW = (152, 120)
 STEAM_LOW = 31
-# While the view follows the character it keeps its feet within a pixel or two of the
-# follow point (the game's RAM: 127-129, 136-138 against FOLLOW's 128, 138; Steam's
-# frames: 98% within 4 px). The party following close behind is 10 to 22 px off it:
-# along an axis the view follows, someone further off than this isn't the player.
+# While the game's own view follows the character it keeps its feet within a pixel or
+# two of the follow point (the RAM: 127-129, 136-138 against FOLLOW's 128, 138). The
+# party following close behind is 10 to 22 px off it: along an axis the view follows,
+# someone further off than this isn't the player. (Steam's view mostly keeps it within
+# 4 px, but not just after coming in, and its edges are known only to a tile.)
 FOLLOW_NEAR = 8
 STEAM_TAP = 0.1  # Steam misses a 60 ms tap; 100 ms is one step
 STEAM_LEAD = 0.2  # input lag and the look's own time: turns start this much early (s)
@@ -937,15 +938,25 @@ class Rooms:
             box = (sx - 24 if follows[0] else 0, sy - 28 if follows[1] else 0,
                    sx + 24 if follows[0] else w, sy + 28 if follows[1] else h)
         for s, seen in self._steam_feet(v, box, skip=standing(room, cam)):
-            # Not where the view keeps it: whoever follows it, close behind, more likely.
-            feet = to_view(seen, follow, follows)
+            if steam:
+                # Steam's view isn't always where the game's would be (just come in, or
+                # where its edges are known only to a tile): not far off where it keeps
+                # the player, and the nearer the better (the party following close
+                # behind fits about as well: take A2, Marle's feet 14 to 22 px off).
+                if (follows[0] and abs(seen[0] - follow[0]) > 24) or (
+                        follows[1] and abs(seen[1] - follow[1]) > 28):
+                    continue  # not where the view keeps it
+                feet, pull = seen, 2 * sum(abs(f - k) for f, k, h in
+                                           zip(seen, follow, follows, strict=True) if h)
+            else:  # the game's own view: where it keeps the player, to a pixel or two
+                feet = to_view(seen, follow, follows)
+                pull = 10 if feet != seen else 0
             far = math.dist(feet, prior)
             if s < 0.6 and not (s >= 0.4 and far <= 24):
                 continue
             # Feet on ground the survey walked, rather than off it.
             tile = (int(cam[1] + feet[1]) // TILE, int(cam[0] + feet[0]) // TILE)
-            cost = far + 100 * (1 - s) + (0 if tile in room.walk else 40) + \
-                (10 if feet != seen else 0)
+            cost = far + 100 * (1 - s) + (0 if tile in room.walk else 40) + pull
             if best is None or cost < best[0]:
                 best = (cost, feet)
         if best is not None:
