@@ -181,8 +181,8 @@ def wheel_title(img: Image.Image) -> np.ndarray:
 def wheel_open(img: Image.Image) -> bool:
     """The target wheel or a small monster's ring is open: its cyan ring, whatever's behind."""
     c = _arr(img, 520, 115, 810, 405)
-    cyan = (c[..., 1] > 190) & (c[..., 2] > 180) & (c[..., 0] < 150)
-    return float(cyan.mean()) > 0.012 and not menu_up(img)
+    cyan = (c[..., 1] > 215) & (c[..., 2] > 205) & (c[..., 0] < 140)
+    return float(cyan.mean()) > 0.008 and not menu_up(img)
 
 
 def wheel_has_parts(img: Image.Image) -> bool:
@@ -521,7 +521,7 @@ class Plan:
     double: bool = False
 
 
-HURT = {"Zerk": 0.5, "Canyne": 0.4, "Ogden": 0.4, "Chirpy": 0.35}
+HURT = {"Zerk": 0.6, "Canyne": 0.4, "Ogden": 0.4, "Chirpy": 0.35}
 
 
 def shrugged_off(view: View, part: Part) -> bool:
@@ -618,6 +618,11 @@ def is_are(part: str) -> str:
     return "are" if part.lower().endswith("s") else "is"
 
 
+def named(part: Part) -> bool:
+    """Muse gave this part its name: "part 2" is only a placeholder until then, never said."""
+    return not part.name.startswith("part ")
+
+
 class Lines:
     """What's said in a fight: short, varied, and never the same words twice in a fight."""
 
@@ -683,7 +688,7 @@ class Lines:
             return self.pick(f"{plan.item} on {'you' if plan.on == 'Zerk' else plan.on}.",
                              f"Another {plan.item.lower()} for "
                              f"{'you' if plan.on == 'Zerk' else plan.on}.")
-        part = plan.part.name.lower() if plan.part else ""
+        part = plan.part.name.lower() if plan.part and named(plan.part) else ""
         weapon = short(view.weapons[plan.weapon].name) if view.weapons else ""
         if plan.do == "skill" and plan.skill:
             where = f" on the {part}" if part else ""
@@ -1211,11 +1216,13 @@ class Fight:
                 self.keep_frame(await self._shot(), "no-wheel")
                 await self.back_out()
                 return ""
-            if self.parts and not wheel_open(img):
+            # The list can be gone a moment before the wheel is up.
+            if self.parts and not wheel_open(img) and await self.until(wheel_open, 0.7) is None:
                 return "played"
         self.weapon = plan.weapon
         if plan.part is not None and not await self.turn_wheel(plan.part):
             self.note("mh_note", {"text": f"wheel never showed {plan.part.name}"})
+            plan.part = None  # not checked, so not named: a far-off monster's wheel is small
         return "ready"
 
     def keep_frame(self, img: Image.Image, tag: str) -> None:
@@ -1449,12 +1456,12 @@ class Fight:
                 await self.read_status(hold=True)
             return self.what_line or f"It's a {self.status.get('name') or 'monster'}."
         if mode == "weak":
-            if not self.parts:
+            if not self.parts or not all(named(p) for p in self.parts):
                 if not self.weapons:
                     await self.load_gear()
                 await self.read_wheel(hold=True)
             return self.where_weak()
-        if not self.parts or not self.status:
+        if not self.parts or not self.status or not all(named(p) for p in self.parts):
             await self.study(say_weak=mode == "fight" and not self.parts)
             img = await self.until(menu_up, 3.0) or img
         self.studied = True

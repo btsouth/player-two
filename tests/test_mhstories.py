@@ -435,3 +435,10 @@ def test_jargon_and_repeats_stay_out_of_the_lines():
     assert lines.monster_low(0.1) == "It's almost done."
     plan = m.Plan("attack", type="Speed")
     assert "line" not in lines.reason(m.View([], [], 0, "Speed", arc="none"), plan)
+
+
+def test_a_part_muse_never_named_is_not_said():
+    part = m.Part("part 2", ["blunt"], False, 0.5, "", title("Legs"))
+    plan = m.Plan("attack", type="Speed", part=part)
+    line = m.Lines().choice(m.View([part], [], 0, "Speed"), plan, False)
+    assert "part" not in line
