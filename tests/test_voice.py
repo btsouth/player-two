@@ -85,3 +85,14 @@ async def test_stop_discards_a_status_batch_before_synthesis():
     v.stop()
     await task
     assert pushed == []
+
+
+async def test_cancelled_status_batch_does_not_poison_the_next_line():
+    v, pushed = fake_voice()
+    v.first_audio_ms = []
+    task = asyncio.create_task(v.say("Old status.", interrupt=False))
+    await asyncio.sleep(.01)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    await v.say("Fresh status.", interrupt=False)
+    assert pushed == ["Fresh status."]

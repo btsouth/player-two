@@ -22,4 +22,6 @@ def companion_line(text: str) -> str:
     text = re.sub(r"^(\w+) uses ([^.]+)\.$", r"\1's using \2.", text)
     text = re.sub(r"^(\w+)'s level increased!$", r"\1 went up a level!", text)
     text = re.sub(r"^Won the fight: (.+)\.$", r"We won! You earned \1.", text)
+    text = re.sub(r"^One (.+) down, (one|two|[0-9]+) left\.$",
+                  r"One \1's down; \2 left.", text)
     return text

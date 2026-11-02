@@ -216,7 +216,8 @@ class Voice:
         queued = self._gen  # a stop() or a newer line while it waits drops it
         if not interrupt:
             batch = getattr(self, "_batch", None)
-            if batch is not None and batch[0] == queued:
+            if (batch is not None and batch[0] == queued
+                    and not batch[2].done() and not batch[2].cancelling()):
                 batch[1].append(text)
                 await batch[2]
                 return
