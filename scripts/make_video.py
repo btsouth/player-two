@@ -515,6 +515,44 @@ def game_pieces(name: str, take: Take | None, no_code: bool, clip: tuple[float, 
 
 
 
+
+def mh_story_pieces(take: Take) -> list[Piece]:
+    """One continuous source run; selected true speech at 1x, other narration suppressed."""
+    config=take.edit["story"]
+    normal=[tuple(map(float,w)) for w in config["normal"]]
+    speed=float(config.get("gap_speed",28))
+    if speed<=1 or any(b<=a for a,b in normal) or any(a[1]>b[0] for a,b in itertools.pairwise(normal)):
+        raise ValueError("MH story windows must be ordered, nonoverlapping and accelerated gaps labelled")
+    for event in take.events:
+        if event.get("kind")=="spoken" and "coming at you with technical" in event.get("text","").lower():
+            a,b=event["began"]-take.start,event["ended"]-take.start
+            if any(min(b,y)>max(a,x) for x,y in normal):
+                raise ValueError("False MH line overlaps an audible story window")
+    parts=[]
+    for i,(a,b) in enumerate(normal):
+        if i:
+            gap=Piece(f"mh-gap-{i}","game2",line="MHS3",take=take.name,a=normal[i-1][1],b=a,
+                      speed=speed,captions=False,layout="mh")
+            gap.overlays=[Overlay(f"{speed:g}x",40,"speed",0,gap.out_s),
+                          Overlay("Narration muted",34,"gap",0,gap.out_s)]
+            parts.append(gap)
+        p=Piece(f"mh-beat-{i}","game2",line="MHS3",take=take.name,a=a,b=b,layout="mh",
+                duck=not any(min(b,y)>max(a,x) for x,y in config.get("unducked_windows",[])))
+        if i==0:
+            model=next((e for e in take.events if e.get("kind")=="mh" and e.get("name")=="mh_muse"
+                        and e.get("read")=="wheel" and e["t"]-take.start<=a),None)
+            if not model or not isinstance(model.get("seconds"),(float,int)):
+                raise ValueError("MH story needs its real completed Muse wheel read")
+            p.overlays=[Overlay(f"Muse Spark / wheel read {model['seconds']:.2f} s",34,"tl",0,min(4,b-a)),
+                        Overlay("Monster Hunter Stories 3",34,"trim",0,min(2,b-a))]
+            if b-a>4:
+                p.overlays.append(Overlay("Custom combat code acts on the read",34,"tl",4,min(8,b-a)))
+        elif i==1:
+            p.overlays=[Overlay("Custom combat code acts on the read",34,"tl",0,min(3,b-a))]
+        parts.append(p)
+    return parts
+
+
 def rdr_pieces(look: Take, dialogue: Take) -> list[Piece]:
     a,b=map(float,look.edit.get("clip",[18.4,28.1]))
     x,y=map(float,dialogue.edit.get("clip",[24,35]))
@@ -807,7 +845,8 @@ def make_plan(
             blocks=[("It’s not one game.", 72, True)],
         )
     ]
-    games += game_pieces("game2", takes.get("game2"), "game2" in no_code, clips.get("game2"), warnings)
+    mh=takes.get("game2")
+    games += mh_story_pieces(mh) if mh and mh.edit.get("story") else game_pieces("game2",mh,"game2" in no_code,clips.get("game2"),warnings)
     if takes.get("rdr-look") and takes.get("rdr-dialogue"):
         games += rdr_pieces(takes["rdr-look"], takes["rdr-dialogue"])
     else:
@@ -1231,7 +1270,7 @@ def evidence_overlays(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
     report = []
     for p in parts:
         take = takes.get(p.take)
-        if not take or p.kind != "clip" or not p.captions or p.id=="last-line":
+        if not take or p.kind != "clip" or not p.captions or p.id=="last-line" or (p.take=="game2" and take.edit.get("story")):
             continue
         heard = take.heard()
         before = [t for t, _ in heard if t <= p.a]
@@ -1420,6 +1459,7 @@ def ass_text(take: Take, layout: str = "") -> str:
     size, align, ml, mr, mv = {
         "map": (48, 2, 100, 100, 60),
         "rdr": (48, 2, 100, 100, 60),
+        "mh": (48, 8, 100, 100, 740),
         "fight": (48, 8, 100, 100, 240),
         "shop": (48, 9, 1000, 64, 420),
         "black": (80, 5, 200, 200, 30),
@@ -1460,7 +1500,7 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
     asses: dict[str, Path] = {}
     for name, take in takes.items():
         if take.caps:
-            for layout in ("map","fight","shop","black","rdr"):
+            for layout in ("map","fight","shop","black","rdr","mh"):
                 text=ass_text(take,layout)
                 path=work/f"{name}-{layout}.ass"
                 path.write_text(text,encoding="utf-8")

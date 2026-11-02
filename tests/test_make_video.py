@@ -498,3 +498,19 @@ def test_red_dead_request_and_badge_clear_the_actual_lower_left_hud(tmp_path):
     path=tmp_path/"rdr.png"
     mv.label_png(path,mv.Overlay("You: typed\nWhat do you see?\nMuse Spark / scene\nGeneration 2.24 s",42,"trace-rdr",0,1))
     assert Image.open(path).getchannel("A").getbbox()[3]<780
+
+
+def test_mh_story_is_one_run_with_false_narration_only_in_muted_uncaptioned_gap():
+    import pytest
+    take=_take([{"kind":"mh","name":"mh_muse","read":"wheel","seconds":3.94,"t":1},
+                _spoken("It's coming at you with technical.",12,14)],"game2",30)
+    take.edit={"story":{"normal":[[2,5],[20,23]],"gap_speed":28}}
+    parts=mv.mh_story_pieces(take)
+    assert all(a.b==b.a for a,b in itertools.pairwise(parts))
+    assert len(parts)==3 and parts[1].speed==28 and not parts[1].captions
+    assert parts[1].a<=12 and parts[1].b>=14
+    assert any("3.94" in o.text for o in parts[0].overlays)
+    assert not any(mv.NO_CODE in o.text for p in parts for o in p.overlays)
+    take.edit["story"]["normal"]=[[2,15],[20,23]]
+    with pytest.raises(ValueError,match="False MH line"):
+        mv.mh_story_pieces(take)

@@ -139,3 +139,18 @@ build limits belong in the private QC, not a false claim that the latest code re
 `take-A.edit.speeds` may override a single action's silent-gap speed, for example `{"A5": 4}`.
 `duck: false` in resolved cut JSON preserves both stems without ducking. Retake source selection,
 clock offsets, reveal points and menu positions remain in the manifest rather than hand edits to code.
+
+## A single Monster Hunter run
+
+`game2.edit.story` selects ordered `normal` source windows and a `gap_speed`. The entire source
+interval between the first and last window remains continuous: intervening footage is accelerated,
+labelled, silent and has captions disabled. This permits a scored-out false utterance to remain in
+the source chronology without putting its claim on the soundtrack or in captions. A guard refuses
+the known false technical-counter line if it intersects any audible window. Verify the rendered
+interval itself for silence and absence of caption pixels; a plan alone is insufficient.
+
+The first window requires a real completed `mh_muse` wheel event and displays its measured seconds.
+The chapter identifies custom combat code explicitly. Its story path never inherits the generic
+no-code overlay. `unducked_windows` preserves both audio stems without sidechain compression where
+an NPC response needs to remain audible. Caption placement leaves the battle menus and party HP
+clear. Source offsets and all windows belong in the take manifest, not the public repository.
