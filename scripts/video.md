@@ -175,13 +175,14 @@ dictionary. The paced plan uses whole source intervals at1x, visible quarter-sec
 and optional hold_after seconds after the last real frame. No new game action occurs in a hold.
 result_at is a manually frame-checked source timestamp; the guard requires at least1s afterward.
 The keyboard menu scene revalidates its model turns and actual journal press from the source log.
+The selected edit itself must include that press at1x; a separate proof window is insufficient.
 
 Before encoding, pacing_report checks duration, shot length, hard-cut density, speed, complete
 source speech, reply gaps, text reading time, text onsets, result dwell, chip count and game names.
 It writes pace-report.md and appends the report to QC.md. An unlisted issue blocks both proxy
 and final renders. Exceptions are exact issue IDs with reasons. Partial source speech, sped
 speech, unsupported result dwell, short shots and an over178s paced film cannot be waived.
-The current exceptions retain native continuous utterance cadence, two opening text onsets,
+The current exceptions retain native continuous utterance cadence, one opening text onset,
 and the required publisher small print. They do not excuse jump-cut chains or faster footage.
 
 Paced captions are explicitly condensed summaries of the unchanged recorded speech. Short
