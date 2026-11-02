@@ -7,6 +7,7 @@ import platform
 import re
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -185,6 +186,7 @@ class Voice:
         self.lang, self.voice_name = voice_for(settings.language, settings.voice)
         self._gen = 0
         self._lock = asyncio.Lock()
+        self._synth_gate = threading.Lock()
         self.last_spoken = ""
         self.first_audio_ms: list[float] = []
 
@@ -208,6 +210,19 @@ class Voice:
             sentence, voice=self.voice_name, speed=self.s.speech_rate, lang=self.lang
         )
         return sentence_tail(samples)
+
+    def _render(self, text: str, gen: int):
+        # One inference workspace, even when streamed text arrives faster than speech.
+        # A stopped job waiting its turn must not delay the player's next request.
+        gate = getattr(self, "_synth_gate", None)
+        if gate is None:
+            gate = self._synth_gate = threading.Lock()
+        if gen != self._gen:
+            return None
+        with gate:
+            if gen != self._gen:
+                return None
+            return self._synth(text)
 
     async def say(self, text: str, interrupt: bool = True) -> None:
         """Speak text. With interrupt, anything still playing is cut off first."""
@@ -250,8 +265,8 @@ class Voice:
         first = True
         sentences = speech_chunks(text)
         for sentence in sentences:
-            samples = await asyncio.to_thread(self._synth, sentence)
-            if gen != self._gen:
+            samples = await asyncio.to_thread(self._render, sentence, gen)
+            if gen != self._gen or samples is None:
                 return
             if first:
                 self.first_audio_ms.append((time.monotonic() - t0) * 1000)
@@ -282,10 +297,10 @@ class Voice:
 
         async def speak_chunk(chunk: str, prev: asyncio.Task | None) -> None:
             nonlocal gated
-            samples = await asyncio.to_thread(self._synth, chunk)
+            samples = await asyncio.to_thread(self._render, chunk, gen)
             if prev is not None:
                 await prev
-            if gated or gen != self._gen:
+            if gated or gen != self._gen or samples is None:
                 return
             if gate is not None and not await gate():
                 gated = True

@@ -103,3 +103,44 @@ async def test_voice_does_not_rewrite_a_game_line_it_was_asked_to_read():
     v.first_audio_ms = []
     await v.say("Frog uses Heal.")
     assert pushed == ["Frog uses Heal."]
+
+
+async def test_streamed_reply_uses_one_inference_workspace():
+    v, pushed = fake_voice()
+    active = 0
+    peak = 0
+    def synth(text):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        time.sleep(.04)
+        active -= 1
+        return text
+    v._synth = synth
+    async def deltas():
+        yield "First thought. "
+        yield "Second thought. "
+        yield "Third."
+    await v.say_stream(deltas())
+    assert peak == 1
+    assert " ".join(pushed) == "First thought. Second thought. Third."
+
+
+async def test_stopped_stream_discards_jobs_waiting_for_inference():
+    v, pushed = fake_voice()
+    called = []
+    def synth(text):
+        called.append(text)
+        time.sleep(.1)
+        return text
+    v._synth = synth
+    async def deltas():
+        yield "First. "
+        yield "Old second. "
+        yield "Old third."
+    task = asyncio.create_task(v.say_stream(deltas()))
+    await asyncio.sleep(.03)
+    v.stop()
+    await task
+    assert called == ["First."]
+    assert pushed == []
