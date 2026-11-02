@@ -450,8 +450,9 @@ right Blunt (a hammer block). A diamond crossed out with a red line doesn't work
 blue gauge (how much is left before it breaks) or the word Broken.
 The player carries: {weapons}.
 Then tell them where to hit it, the way a friend on the couch would who can see the screen and they \
-can't: one short plain sentence, naming each unbroken part and which of those weapons fits it. No \
-jargon, nothing the picture doesn't show.
+can't: one short plain sentence, naming each unbroken part and the one weapon that fits it, as in \
+"Hit the head with the harp, the legs with the hammer, and the tail with the sword." Go by the \
+diamond that isn't crossed out. No jargon, nothing the picture doesn't show.
 JSON: {{"parts": [{{"name": "...", "works": ["slash"|"pierce"|"blunt"], "broken": true|false, \
 "bonus": "words under Break Bonus, or empty"}}], "say": "..."}}"""
 
@@ -463,7 +464,8 @@ water, thunder, ice, dragon. Under each is a mark: red down arrows mean it's wea
 weapons Zerk carries have these elements: {elements}.
 Then tell them what they're up against, the way a friend on the couch would who can see the screen \
 and they can't: one short plain sentence with its name and level and the most useful thing about \
-its elements for those weapons. No dashes.
+its elements for those weapons. Two blue arrows is "strongly resists", said in those words. No \
+figures of speech, no dashes.
 JSON: {{"name": "...", "level": 0, "state": "...", "weak": ["..."], "very_weak": ["..."], \
 "resists": ["..."], "say": "..."}}"""
 
@@ -642,7 +644,8 @@ def amount(share: float) -> str:
     if share >= 0.97:
         return "full"
     for most, words in ((0.2, "almost nothing"), (0.32, "about a quarter"), (0.42, "about a third"),
-                        (0.6, "about half"), (0.8, "about two thirds"), (1.0, "most of it")):
+                        (0.6, "about half"), (0.72, "about two thirds"), (0.88, "about three quarters"),
+                        (1.0, "most of it")):
         if share < most:
             return words
     return "most of it"
@@ -1451,6 +1454,8 @@ class Fight:
                     else "Ogden and Chirpy doubled up." if "ogden" in text else "Double attack."))
             if "normal" in text or "angry" in text or "strange" in text:
                 self.seen_type = ""
+                if self.status:  # what it usually hits with goes by this
+                    self.status["state"] = "Normal" if "normal" in text else "Angry"
                 self.note("mh_seen", {"type": "", "phase": text})
                 self.say(self.lines.pick("It's calmed down." if "normal" in text
                                          else "Careful, it's changed gears."))

@@ -485,3 +485,16 @@ def test_one_early_top_up_a_fight_when_nothing_is_urgent():
     v = view(hp={"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.0, "Chirpy": 0.97})  # riding
     v.top_up = True
     assert m.choose(v).do != "item"
+
+
+def test_a_change_of_state_changes_what_it_usually_hits_with():
+    f = m.Fight(types.SimpleNamespace(on_action=None))
+    f.status = {"name": "Somnacanth", "state": "Normal"}
+    assert f.usual() == "Technical"
+    f.status["state"] = "Angry"
+    assert f.usual() == "Speed"
+
+
+def test_four_fifths_of_a_bar_is_not_two_thirds():
+    assert m.amount(0.8) == "about three quarters"
+    assert m.amount(0.66) == "about two thirds"
