@@ -1034,8 +1034,10 @@ def how_bridge(takes: dict[str, Take], vo: dict[str,str], vo_s: dict[str,float])
         name=w['take'];take=takes.get(name);a,b=float(w['a']),float(w['b'])
         if not take or not 0<=a<b<=take.duration:
             raise ValueError('How bridge source window outside its real take')
+        if name=='game2' and any(max(a,x)<min(b,y) for x,y in speech_spans(take.events,take.start)):
+            raise ValueError('Monster Hunter bridge must not omit a spoken line')
         p=Piece('c-how' if i==0 else f'c-how-{i}','games',line='how VO / general and specific',
-                take=name,a=a,b=b,captions=False,audio_mode='game',vol=.35,
+                take=name,a=a,b=b,captions=False,audio_mode='mix' if name=='game2' else 'game',vol=.35,
                 vo=vo.get('how',''),vo_offset=elapsed,vo_prompt=GENERAL_LINE,layout='map',
                 overlays=[Overlay(GENERAL_LINE,44,'how',0,b-a)])
         out.append(p);elapsed+=p.out_s
