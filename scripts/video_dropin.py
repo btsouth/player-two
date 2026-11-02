@@ -107,7 +107,7 @@ def stage(source: Path, mapping: dict, output: Path):
             if p.get("black_for") and "black_for" not in patch:
                 raise ValueError("New opening needs its frame-checked reveal point")
         p.update(patch)
-        if p.get('take') in mapping.get('takes',{}) and not synthetic:
+        if p.get('take') in mapping.get('takes',{}) and p.get('take') not in mapping.get('unchanged_windows',[]) and not synthetic:
             p['stand_in']=False
             if p.get('guide') and not mapping['takes'][p['take']].get('edit',{}).get('eyes_covered'):
                 raise ValueError('Real guide needs reviewed eyes_covered evidence')

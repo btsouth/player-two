@@ -1029,6 +1029,7 @@ def test_real_guide_caption_needs_explicit_eyes_covered_evidence():
 
 def test_transcribe_duration_is_qualified_and_absence_is_not_zero():
     assert mv.transcribe_label({})=='Muse Voice Transcribe'
+    assert mv.transcribe_label({'transcribe_s':1.4,'synthetic':True,'origin':'file ASR'}).endswith('file 1.40 s')
     assert mv.transcribe_label({'transcribe_s':2.3}).endswith('stream 2.30 s')
     assert mv.transcribe_label({'transcribe_s':2.3,'transcribe_finalize_s':.12}).endswith('finalize 0.12 s')
     assert mv.transcribe_label({'transcribe_s':float('nan')})=='Muse Voice Transcribe'
@@ -1093,3 +1094,32 @@ def test_real_guide_gets_the_exact_creator_caption_and_reveal_from_its_clock():
     p.black_for=0
     with pytest.raises(ValueError,match='reveal'):
         mv.guide_overlays([p],{'guide':t})
+
+
+def test_guide_graph_places_the_exact_source_box_and_logged_pan(tmp_path):
+    import json
+
+    from PIL import Image
+    sample={'box':[.1,.2,.4,.6],'pan':-.6,'seconds':1.23,'age':1.5}
+    f=tmp_path/'guide.png'
+    mv.label_png(f,mv.Overlay(json.dumps(sample),34,'guide-sample',0,2))
+    pixels=Image.open(f).convert('RGBA')
+    assert pixels.getpixel((192,216))[:3]==mv.ACCENT[:3]
+    assert pixels.getpixel((840,780))[:3]==mv.ACCENT[:3]
+    sample.update(box=None,pan=None)
+    mv.label_png(f,mv.Overlay(json.dumps(sample),34,'guide-sample',0,2))
+    pixels=Image.open(f).convert('RGBA')
+    assert pixels.getpixel((192,216))[3]==0
+    assert pixels.getpixel((840,780))[:3]!=mv.ACCENT[:3]
+
+
+@needs_ffmpeg
+def test_guide_rejects_a_mono_ping_stem_instead_of_inventing_stereo(tmp_path):
+    import wave
+    video=tmp_path/'guide.mp4'
+    for suffix,channels in [('.game.wav',2),('.voice.wav',1)]:
+        with wave.open(str(video.with_suffix(suffix)),'wb') as f:
+            f.setnchannels(channels);f.setsampwidth(2);f.setframerate(24000);f.writeframes(b'\0'*(2400*channels*2))
+    take=mv.Take('g',video,0,1,[],[])
+    with pytest.raises(ValueError,match='original stereo'):
+        mv.encode_clip(mv.Piece('g','game3',take='g',a=0,b=.1,guide=True),{'g':take},{},tmp_path,tmp_path/'out.mp4','libx264')

@@ -91,3 +91,12 @@ def test_replacing_a_pending_take_clears_only_that_shot(tmp_path):
     t.write_text(json.dumps(p));config['shots']={'hook':{'a':2,'b':5,'overlays':[]}}
     result=m.stage(source,config,tmp_path/'stage');shots=json.loads((result/'pacing.json').read_text())['shots']
     assert not shots[0]['stand_in'] and shots[1]['stand_in']
+
+
+def test_byte_identical_dry_run_does_not_clear_a_pending_spoken_take(tmp_path):
+    source,config=fixture(tmp_path);template=Path(config['template'])
+    (template/'old.mp4').write_text('data')
+    p=json.loads((template/'pacing.json').read_text());p['shots'][0]['stand_in']=True
+    (template/'pacing.json').write_text(json.dumps(p));config['unchanged_windows']=['take-B']
+    result=m.stage(source,config,tmp_path/'stage')
+    assert json.loads((result/'pacing.json').read_text())['shots'][0]['stand_in']

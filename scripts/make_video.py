@@ -1571,7 +1571,8 @@ def label_png(path: Path, o: Overlay) -> Path:
         d.text((740,732),text,font=_font(True,34),fill='white')
         d.text((736,775),'L',font=_font(True,25),fill='white')
         d.text((1170,775),'R',font=_font(True,25),fill='white')
-        d.text((740,815),f"capture→log {sample['age']:.1f} s",font=_font(False,34),fill='white')
+        age='layout fixture' if sample.get('fixture') else f"capture→log {sample['age']:.1f} s"
+        d.text((740,815),age,font=_font(False,34),fill='white')
     elif o.where.startswith('context'):
         f=_font(True,34);lines=[]
         for row in o.text.splitlines():lines+=_wrap(d,row,f,350 if o.where=='context-menu' else 600)
@@ -1907,7 +1908,7 @@ def guide_overlays(parts: list[Piece], takes: dict[str,Take]) -> None:
             next_at=events[i+1]['t']-take.start-p.a if i+1<len(events) else p.b-p.a
             end=next_at if box is None else min(next_at,at+2)
             # The overlay is a sampled detection, not a moving tracker. Misses clear it.
-            payload={'box':box,'pan':pan,'seconds':seconds,'age':e['t']-frame,'cycle':e.get('cycle'),'miss':'no target selected' if e.get('boxes') else 'no match'}
+            payload={'box':box,'pan':pan,'seconds':seconds,'age':e['t']-frame,'cycle':e.get('cycle'),'fixture':bool(e.get('synthetic')),'miss':'no target selected' if e.get('boxes') else 'no match'}
             p.overlays.append(Overlay(json.dumps(payload),34,'guide-sample',at,end))
 
 
@@ -1940,6 +1941,11 @@ def probe_s(path: Path) -> float:
     out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
                           "csv=p=0", str(path)], capture_output=True, text=True, check=True).stdout
     return float(out.strip())
+
+
+def audio_channels(path: Path) -> int:
+    out=subprocess.check_output(['ffprobe','-v','error','-select_streams','a:0','-show_entries','stream=channels','-of','csv=p=0',str(path)],text=True)
+    return int(out.strip())
 
 
 def _enc(vcodec: str) -> list[str]:
@@ -2053,6 +2059,8 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     game_audio = take.video.with_suffix(".game.wav")
     voice_audio = take.video.with_suffix(".voice.wav")
     stems = game_audio.exists() and voice_audio.exists()
+    if p.guide and (not stems or p.audio_mode=='game' or audio_channels(voice_audio)!=2):
+        raise ValueError('Guide needs its original stereo voice/ping and game stems')
     if p.hold_at is not None and not stems:raise ValueError('Held purchase result needs its original separate stems')
     stem_n = n
     if stems:
@@ -2537,7 +2545,7 @@ def main() -> None:
     for piece in parts:
         if piece.kind == "clip":
             piece.overlays = [o for o in piece.overlays if o.text not in (LOWER_A4, LOWER_B)
-                              and (not o.where.startswith('trace') or o.where=='trace-mh') and o.where != "draft"]
+                              and (not o.where.startswith('trace') or o.where=='trace-mh') and o.where not in ('draft','box','guide-sample')]
     for piece in parts:
         if piece.kind == "clip" and not piece.layout:
             piece.layout = "fight" if takes[piece.take].top else "map"
