@@ -394,7 +394,8 @@ def cut_line(line: str, take: Take, pick: int | None, max_talk: float | None) ->
     next_t = later[0] if later else take.duration
     done = next((e["t"] - take.start for e in take.events
                  if e.get("kind") == "agent" and heard_t < e["t"] - take.start < next_t), None)
-    own = request_lines(take.caps, heard_t, next_t, done, CHAIN[LINES[line][0]])
+    own = request_lines(take.caps, heard_t, next_t, done,
+                        3.0 if line=="A3b" else CHAIN[LINES[line][0]])
     left = 0.0
     if max_talk is not None:
         own, left = talk_cut(own, max_talk)

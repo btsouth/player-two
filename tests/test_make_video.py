@@ -558,3 +558,11 @@ def test_same_take_win_level_up_and_goodbye_form_one_real_field_ending(tmp_path)
     assert closing.a<29 and closing.b>=34 and closing.black_for==0
     assert not any(p.id=="goodbye-missing" for p in parts)
     assert parts[-2]==closing
+
+
+def test_fair_description_keeps_its_real_reply_after_a_two_second_location_pause():
+    take=_take([{"kind":"heard","t":1,"text":"What does it look like?","typed":True},
+                _spoken("Leene Square.",2,3),_spoken("A cozy market.",5.1,7),
+                _spoken("Striped stalls with fruit.",7.1,10)],"take-A",20)
+    cut=mv.cut_line("A3b",take,None,12)
+    assert cut.b==10.5
