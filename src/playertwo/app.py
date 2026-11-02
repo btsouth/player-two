@@ -1477,7 +1477,8 @@ class Session:
 
         With `named`, only its lines that say its own name count ("Hi, I'm Player Two"),
         and what was heard after the name is compared with all of such a line. One word
-        after the name ("Player Two, stop") always counts as the player's.
+        after the name ("Player Two, stop") counts as the player's unless it is
+        exactly a named phrase Player Two itself just said.
         """
         def words(t: str | None) -> set[str]:
             return set(re.findall(r"[a-z0-9']+", (t or "").lower()))
