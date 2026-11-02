@@ -222,6 +222,8 @@ class Game:
     def stick(self, which, way, ms, strength=1.0):
         if self.screen == "ring":
             self.ring = (self.ring + 1) % 4
+        elif way in ("up", "down"):
+            self.press(way)
         else:
             step = 1 if way == "right" else -1
             self.type = m.TYPES[(m.TYPES.index(self.type) + step) % 3]
