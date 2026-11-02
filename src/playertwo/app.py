@@ -1376,7 +1376,6 @@ class Session:
             return
         self.hands_active = False  # the talk key takes over from hands-free listening
         self.voice.stop()
-        self.voice.cue("listening")
         waiting = self.answer is not None and not self.answer.done()
         if self.agent_task and not self.agent_task.done() and not waiting:
             self.agent.hold()  # until it's clear what they want; see talk_stop
@@ -1391,6 +1390,7 @@ class Session:
             self.open_window(refocus=False)
             return
         self.mic = mic
+        self.voice.cue("listening")  # only signal ready once capture is actually open
         self.talk_started = time.monotonic()
         self.utt = Utterance(self.keywords,
                              on_partial=lambda p: self.events.emit("hearing", text=p))

@@ -542,3 +542,24 @@ async def test_a_damaged_named_stop_uses_the_real_local_cancel_route(monkeypatch
     assert s.handled == ['local:stop']
     event = next(e for e in s.events.recent if e['kind'] == 'heard')
     assert event['wake_form'] == 'Two' and event['wake_damaged'] is True
+
+
+def test_talk_key_ready_cue_waits_for_the_microphone(monkeypatch):
+    from playertwo import app
+    s = session(monkeypatch)
+    calls = []
+    class Mic:
+        def start(self):
+            calls.append('capture open')
+    class Utterance:
+        def __init__(self, *args, **kwargs):
+            pass
+        def start(self):
+            calls.append('socket task queued')
+    monkeypatch.setattr(app, 'Mic', Mic)
+    monkeypatch.setattr(app, 'Utterance', Utterance)
+    s.voice.cue = calls.append
+    s.keywords = []
+    s.spawn = lambda coro: coro.close()
+    s.talk_start()
+    assert calls == ['capture open', 'listening', 'socket task queued']
