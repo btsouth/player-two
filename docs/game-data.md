@@ -6,7 +6,7 @@ fixtures. With a key and a supported desktop, a judge can try generic descriptio
 and input tools. Without a key, the offline smoke check exercises reader loading and planning.
 
 **The demonstrated map navigation and seller approach cannot currently be reproduced from
-this repository alone.** The README's historical trials used additional local data that is
+this repository alone.** The README's live navigation/shop trials used additional local data that is
 not included. Installing or owning Chrono Trigger does not populate these files automatically.
 
 ## Preparation versus runtime
