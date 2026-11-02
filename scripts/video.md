@@ -143,3 +143,17 @@ after encoding. --accept-captions cannot bypass stale facts or sped-up speech. I
 sheets, individual overlay states, source facts and full-speed sound before submission.
 
 Quote source: [Archived release notes](https://web.archive.org/web/2020/https://www.libretro.com/index.php/category/accessibility/).
+
+## Castle-story and clean-combat cut
+
+The navigation manifest can provide edit.story windows with role/a/b and optional speed. It
+requires the original interrupted castle route, the model's fight decision and its multi-turn
+exit plan. Spoken spans always remain1x. Only verified speech-free gaps use faster video/audio;
+the game track is time-stretched without changing pitch. The source/output disclosure stays
+visible, and the join to the fair's other recording says it is another run of the same save.
+
+Clean Monster Hunter footage uses story.cuts_only=true. Every selected clip keeps both original
+stems at normal speed. There is no narration muting or accelerated speech; the steady line says
+cuts occur between requests and turns. carry_requests can recall an actual typed request on its
+answer; microphone requests must remain in the selected media. Status and weak-point badges
+retain their distinct real call durations. All source windows need fresh review on replacement.
