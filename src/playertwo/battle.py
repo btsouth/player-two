@@ -289,7 +289,7 @@ class Executor:
     async def pause(self, st: State | None = None) -> State:
         st = st or await self.look()
         if not self.t.use_pause or st.paused or not st.in_battle or victory(st) \
-                or st.kind not in self.t.pause_in:
+                or st.kind not in self.t.pause_in or (st.party and all(m.down for m in st.party)):
             return st
         # Menus freeze while paused, so this read stays true until the unpause: the first
         # presses after it can be planned from it (a paused screen reads badly).
@@ -923,6 +923,8 @@ class Executor:
                 else:
                     gone = 0.0
                 if st.party and all(m.down for m in st.party):
+                    # Left paused, the game over screen never comes and nothing can be done.
+                    st = await self.unpause(st)
                     return Outcome(False, "everyone is knocked out", st, "party down",
                                    self.presses[start:])
                 if st.kind in ("list", "target"):

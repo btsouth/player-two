@@ -414,6 +414,17 @@ async def test_an_actor_knocked_out_or_not_ready_stops():
     assert not out.ok and "isn't ready" in out.text
 
 
+async def test_win_with_everyone_down_unpauses_so_the_game_over_can_come():
+    p = party()
+    for m in p:
+        m.hp = 0
+    game = FakeCT(p, enemies(), ready=())
+    game.paused = True
+    out = await executor(game).win()
+    assert not out.ok and "everyone is knocked out" in out.text
+    assert not game.paused
+
+
 async def test_win_attacks_until_the_spoils_and_reads_them():
     game = FakeCT(party(), [(1000, 500, "Imp", 2)], ready=(0, 1, 2))
     out = await executor(game).win()
