@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from playertwo import guide as g
+from playertwo import earguide as g
 from playertwo.locate import Match
 
 

@@ -1742,7 +1742,7 @@ class Session:
         if action:
             await self.local(action)
             return
-        from .guide import guide_request
+        from .earguide import guide_request
         from .locate import where_request
 
         phrase = where_request(text)
@@ -1878,7 +1878,7 @@ class Session:
         return self.guide_task is not None and not self.guide_task.done()
 
     async def guide(self, phrase: str) -> None:
-        """Walk the player to a thing by ear (guide.py). Presses nothing: their hands. Ends
+        """Walk the player to a thing by ear (earguide.py). Presses nothing: their hands. Ends
         on arrival, on "stop", or at the timeout, with a true line."""
         try:
             await self._guide(phrase)
@@ -1905,7 +1905,7 @@ class Session:
 
     async def _guide(self, phrase: str) -> None:
         from .audio import tone
-        from .guide import START, Guide, picture_change
+        from .earguide import START, Guide, picture_change
         from .locate import locate
 
         if self.narrating and not self.narrating.done():
@@ -2188,7 +2188,7 @@ class Session:
             self.stop_side()
             self.voice.stop()
             if guiding:
-                from .guide import STOPPED
+                from .earguide import STOPPED
 
                 await self.announce(STOPPED, interrupt=True)
             if self.answer is not None and not self.answer.done():
