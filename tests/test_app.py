@@ -110,7 +110,10 @@ def test_talk_key_bind_is_added_once_with_a_backup(home):
     assert said.startswith("Done.")
     text = (hypr / "bindings.lua").read_text()
     assert text.startswith('o.bind("SUPER + R"')
-    assert text.count("ctl talk-start") == 1 and "o.bind_hold(\"F8\"" in text
+    # Omarchy 4.0.6 has no o.bind_hold; calling it there stops the whole config loading.
+    assert text.count("ctl talk-start") == 2 and text.count("ctl talk-stop") == 2
+    assert "if o.bind_hold then\n  o.bind_hold(\"F8\"" in text
+    assert "ctl talk-start\")\n" in text and "ctl talk-stop\", { release = true })\nend\n" in text
     assert len(list(hypr.glob("bindings.lua.bak.player-two-*"))) == 1
     assert desktop.talk_key_bound()
     assert "already" in desktop.install_talk_key()
