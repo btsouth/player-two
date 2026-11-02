@@ -108,6 +108,7 @@ LINES = (
     Line("B4", "B", "Win this fight for me.", r"^win this fight", 58.0, 76.0,
          must=r"\bwon\b|earn|experience|\bexp\b",
          allow=(Allow("fight animations and turns", 5.0),), ready="any", repeats_ok=True),
+    Line("Z", "B", "Goodbye.", r"^goodbye", 3.0, 3.0, must=r"bye", optional=True),
 )
 SLOT = {"A": 4, "B": 1}
 SAVE_FILE = {4: "save_20.bin", 1: "save_00.bin"}
@@ -915,7 +916,8 @@ def run_take(live: Live, take: str, run: int, lines: list[Line], reload_it: bool
                 problems.append("no fight came up walking down: the fight lines ran anyway")
             live.wait_combo()
         for ln in lines:
-            live.quiet(1.0, 15.0)
+            # --tight: at a person's pace, right after the last answer, as the video's opening needs.
+            live.quiet(*((0.3, 3.0) if a.tight else (1.0, 15.0)))
             if ln.ready and not live.wait_ready(ln.ready):
                 problems.append(f"{ln.id}: no command window for {ln.ready} in 20 s, sent anyway")
             heard = live.send(ln.request, max(60.0, ln.sheet * 2.5))
@@ -1044,6 +1046,7 @@ def main() -> int:
     r.add_argument("--take", required=True, choices=["A", "B", "AB"],
                    help="A: slot 4, looking and shopping. B: slot 1, a fight. AB: both")
     r.add_argument("--repeats", type=int, default=1)
+    r.add_argument("--tight", action="store_true", help="next request as soon as the last is answered")
     r.add_argument("--log", default="~/Videos/player-two/recording.events.jsonl",
                    help="the --log Player Two was started with")
     r.add_argument("--p2", default=_default_p2())
