@@ -43,6 +43,7 @@ AHEAD_LEAVE = 0.26
 LOW_HZ, HIGH_HZ = 660.0, 1760.0
 # The box's size, as a fraction of the screen, from far off to right there.
 FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.02, 0.05
+THERE_HEIGHT = 0.3  # or this tall: a thing end-on has a narrow box however near
 THERE_LOOKS = 2  # looks in a row at that size, since one box can be a fluke
 SIDE_LOOKS = 2  # looks on a new side before saying so
 LOST_S = 4.0  # not seen for this long: say so
@@ -129,7 +130,8 @@ class Guide:
         size = size_of(target.area)
         hz = LOW_HZ * (HIGH_HZ / LOW_HZ) ** size
         beeps = 3 if size >= 0.85 else 2 if size >= 0.55 else 1
-        self.there_looks = self.there_looks + 1 if target.area >= THERE_AREA else 0
+        tall = target.box is not None and target.box[3] - target.box[1] >= THERE_HEIGHT
+        self.there_looks = self.there_looks + 1 if target.area >= THERE_AREA or tall else 0
         wait_s = 1.0 - 0.7 * size
         if self.there_looks >= THERE_LOOKS:
             return Step(target, pan, hz, beeps, 0.0, THERE, side, end="there")

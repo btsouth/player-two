@@ -91,6 +91,13 @@ def test_arrival_needs_two_looks_in_a_row():
     assert step.end == "there" and step.say == "You're there."
 
 
+def test_a_thing_end_on_arrives_by_height():
+    guide = g.Guide(0.0)
+    narrow = Match(0.5, 0.5, 0.03, (0.46, 0.3, 0.54, 0.66))
+    assert guide.look([narrow], 1.0).end == ""
+    assert guide.look([narrow], 2.0).end == "there"
+
+
 def test_out_of_frame_says_turn_slowly_once_in_a_while_and_no_ping():
     guide = g.Guide(0.0)
     guide.said(guide.look([m(0.5)], 1.0).say, 1.0)
