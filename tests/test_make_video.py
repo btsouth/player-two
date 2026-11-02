@@ -686,3 +686,10 @@ def test_muted_request_intro_still_counts_as_a_shown_typed_request():
     p=mv.Piece('intro','game2',take='game2',a=0,b=3,speed=4,captions=False,
                overlays=[mv.Overlay("You: typed\nWhere's it weak?",42,'trace-mh',0,.75)])
     assert mv._shown_requests({'game2':take},[p])==[('game2',True)]
+
+
+def test_full_cut_does_not_fall_back_to_the_old_unproven_silence_claim(tmp_path):
+    parts,_,_=mv.make_plan({'rdr-look':_take([],'rdr-look'),
+                           'rdr-dialogue':_take([],'rdr-dialogue')},{},set(),[],{'_folder':str(tmp_path)},{},{})
+    assert any(p.id=='game3' and p.kind=='slate' for p in parts)
+    assert not any('stays quiet' in o.text for p in parts for o in p.overlays)

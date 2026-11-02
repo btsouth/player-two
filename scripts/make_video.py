@@ -1029,8 +1029,7 @@ def make_plan(
     mh=takes.get('game2')
     games+=mh_story_pieces(mh) if mh and mh.edit.get('story') else game_pieces('game2',mh,False,clips.get('game2'),warnings)
     if rdr:games+=rdr_sam_pieces(rdr)
-    elif takes.get('rdr-look') and takes.get('rdr-dialogue'):games+=rdr_pieces(takes['rdr-look'],takes['rdr-dialogue'])
-    else:games+=game_pieces('game3',takes.get('game3'),False,clips.get('game3'),warnings)
+    else:games+=game_pieces('game3',None,False,None,warnings)
     goodbye=takes.get('goodbye')
     ending=[goodbye_piece(goodbye)] if goodbye else [Piece('goodbye-missing','outro',kind='slate',secs=3.5,
                         blocks=[('ENDING DESIGN / real goodbye pending',48,True)])]
