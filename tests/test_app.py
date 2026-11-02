@@ -759,6 +759,7 @@ def test_an_idle_nvidia_card_is_pointed_out(monkeypatch):
 
 async def test_hands_free_description_acknowledges_before_waiting_for_the_scene():
     from types import SimpleNamespace
+
     from playertwo.app import Events, Session
     s = Session.__new__(Session)
     s.events = Events()
