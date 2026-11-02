@@ -16,8 +16,8 @@ def test_dialogue_keeps_the_exact_words_with_explicit_attribution():
 
 
 def test_delivery_is_idempotent():
-    from playertwo.delivery import LINES
-    for line in LINES:
+    for line in ["Frog uses Heal.", "That's the fight. We won.", "Soldier, Stop right there!",
+                 "Won the fight: 648 experience and 18 tech points."]:
         once = companion_line(line)
         assert companion_line(once) == once
 

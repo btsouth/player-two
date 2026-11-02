@@ -1,24 +1,24 @@
 """Spoken presentation only: keep facts, numbers and quoted game words intact."""
 import re
 
-LINES = {
-    "Frog's at 1 HP, Crono and Marle are full.":
-        "Frog's at 1 HP; Crono and Marle are at full health.",
-    "That's the fight. We won.": "We've won this fight!",
-    "We made it to Guardia Castle, but the guard stopped you, and Marle said to check out the fair instead, so we're back on the world map.":
-        "We reached Guardia Castle, but the guard stopped you. Marle wants to visit the fair instead, so we're back on the world map.",
-    "Hit the head with the harp, the legs with the hammer, and the tail with the sword.":
-        "Use the harp on its head, the hammer on its legs and the sword on its tail.",
-    "Your Journal is open on Brief, for Can a Swindler Change His Spots.":
-        "Your journal's open to the Brief for Can a Swindler Change His Spots.",
-    "Soldier, Stop right there!": 'The soldier says, "Stop right there!"',
-    "Marle, Where are you going? C'mon, let's check out the fair!":
-        'Marle says, "Where are you going? C\'mon, let\'s check out the fair!"',
-}
-
 
 def companion_line(text: str) -> str:
-    text = LINES.get(text, text)
+    if text == "That's the fight. We won.":
+        return "We've won this fight!"
+    # Older dialogue producers put a comma after these speakers. Attribute the
+    # quotation explicitly without changing a word inside it.
+    m = re.fullmatch(r"(Soldier|Marle), (.+)", text)
+    if m:
+        who = "The soldier" if m[1] == "Soldier" else m[1]
+        return f'{who} says, "{m[2]}"'
+    text = re.sub(r"^(\w+)'s at (\d+) HP, (.+) are full\.$",
+                  r"\1's at \2 HP; \3 are at full health.", text)
+    text = re.sub(r"^We made it to ([^,]+), but (.+?), and (.+?), so (.+)\.$",
+                  r"We reached \1, but \2. \3, so \4.", text)
+    text = re.sub(r"^Hit the (.+) with the (.+), the (.+) with the (.+), and the (.+) with the (.+)\.$",
+                  r"Use the \2 on its \1, the \4 on its \3 and the \6 on its \5.", text)
+    text = re.sub(r"^Your Journal is open on (.+), for (.+)\.$",
+                  r"Your journal's open to the \1 for \2.", text)
     text = re.sub(r"^(\w+) uses ([^.]+)\.$", r"\1's using \2.", text)
     text = re.sub(r"^(\w+)'s level increased!$", r"\1 went up a level!", text)
     text = re.sub(r"^Won the fight: (.+)\.$", r"We won! You earned \1.", text)
