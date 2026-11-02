@@ -629,7 +629,7 @@ def amount(share: float) -> str:
     """A bar's fill, said the way a friend would."""
     if share >= 0.97:
         return "full"
-    for most, words in ((0.15, "almost nothing"), (0.3, "about a quarter"), (0.42, "about a third"),
+    for most, words in ((0.2, "almost nothing"), (0.32, "about a quarter"), (0.42, "about a third"),
                         (0.6, "about half"), (0.8, "about two thirds"), (1.0, "most of it")):
         if share < most:
             return words
