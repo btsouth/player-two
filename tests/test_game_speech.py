@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 
 from playertwo import gameaudio
-from playertwo.app import Session
+from playertwo.app import Session, local_action
 from playertwo.audio import Mixer
 from playertwo.gameaudio import (
     GameEars,
@@ -287,7 +287,7 @@ def test_maybe_narrate_keeps_the_screen_until_the_game_stops_talking():
     ears = Ears(speaking=True)
     s = ears_session(ears)
     s.pending = (frame(time.monotonic() - 1.0), 0.5)
-    s.narrating = None
+    s.narrating = s.describing = None
     s.utt, s.transcribing, s.hands_active = None, False, False
     s.error_until = s.soft_until = s.quiet_until = 0.0
     s._reads = lambda f: False
@@ -302,6 +302,32 @@ def test_maybe_narrate_keeps_the_screen_until_the_game_stops_talking():
         s._maybe_narrate()
         await asyncio.sleep(0)
         assert started and s.pending is None
+
+    asyncio.run(go())
+
+
+def test_a_new_scene_doesnt_cut_off_an_answer_still_being_said():
+    s = ears_session(Ears(ever=False))
+    s.pending = (frame(time.monotonic() - 1.0), 1.0)  # a whole new scene
+    s.utt, s.transcribing, s.hands_active = None, False, False
+    s.error_until = s.soft_until = s.quiet_until = 0.0
+    s.SCENE_CUT = 0.5
+    s._reads = lambda f: False
+    s._ears_on = lambda: False
+    idle = [False]
+    s.voice = SimpleNamespace(idle=lambda: idle[0])
+    started = []
+    s._narrate = lambda f, interrupt=False: started.append(interrupt) or asyncio.sleep(0)
+
+    async def go():
+        s.narrating = s.describing = asyncio.create_task(asyncio.sleep(0))
+        await s.narrating  # the model is done, its answer still playing
+        s._maybe_narrate()
+        assert not started and s.pending is not None
+        idle[0] = True  # heard out: the new scene gets its turn
+        s._maybe_narrate()
+        await asyncio.sleep(0)
+        assert started
 
     asyncio.run(go())
 
@@ -375,6 +401,33 @@ def test_description_waits_for_a_real_pause_and_is_dropped_without_one():
         assert await s._narration_gap()
 
     asyncio.run(go())
+
+
+def test_answers_wait_a_moment_for_a_gap_but_are_always_said():
+    async def go():
+        ears = Ears(speaking=True)
+        s = ears_session(ears)
+        s.GAP_MAX_S = 0.1
+        t = time.monotonic()
+        assert await s._answer_gap()
+        assert time.monotonic() - t >= 0.1
+
+    asyncio.run(go())
+
+
+def test_what_just_happened_and_whos_talking_are_commands_of_their_own():
+    for said in ("what just happened", "What happened?", "what did I miss"):
+        assert local_action(said) == "just_happened", said
+    for said in ("who's talking", "Who is speaking now?", "who said that"):
+        assert local_action(said) == "who_talks", said
+
+
+def test_the_last_few_looks_are_kept_some_seconds_apart():
+    s = ears_session(Ears())
+    s.looks = deque(maxlen=4)
+    for t in (0.0, 1.0, 5.0, 6.0, 10.5, 20.0, 30.0):
+        s._keep_look(frame(t))
+    assert [f.t for f in s.looks] == [5.0, 10.5, 20.0, 30.0]
 
 
 def test_held_narration_restarts_a_few_times_at_most_and_goes_on_past_the_limit():
