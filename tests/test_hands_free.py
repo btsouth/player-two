@@ -426,7 +426,7 @@ async def test_an_obviously_truncated_action_is_not_sent_to_the_agent(monkeypatc
 
 def test_damaged_names_need_a_command_at_the_start():
     from playertwo.listen import wake_match
-    for name in ('Two', 'Too', '2', 'There too', 'Layer two', 'Prayer two', 'Play two', 'Player,'):
+    for name in ('Two', 'Too', '2', 'There too', 'There two', 'There 2', 'Layer two', 'Prayer two', 'Play two', 'Player,'):
         match = wake_match(f'{name} read this menu.')
         assert match and match[0] == 'read this menu' and match[2]
     assert addressed('two paused the game.') == 'paused the game'

@@ -255,7 +255,7 @@ COMMAND_START = (r"(?:what|where|who|how|when|why|can|could|please|read|open|ope
                  r"pause|paused|resume|stop|cancel|take|win|attack|heal|run|buy|use|set|keep|"
                  r"describe|repeat|help|goodbye|go|look)\b")
 DAMAGED_WAKE = re.compile(
-    r"^\s*(?P<form>(?:two|too|2)|there\s+too|layer\s+two|prayer\s+two|play\s+two|player(?=\s*,))"
+    r"^\s*(?P<form>(?:two|too|2)|there\s+(?:too|two|2)|layer\s+two|prayer\s+two|play\s+two|player(?=\s*,))"
     r"[\s,.!?:-]+(?=" + COMMAND_START + r")", re.IGNORECASE)
 
 
