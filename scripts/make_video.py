@@ -695,7 +695,8 @@ def rdr_pieces(look: Take, dialogue: Take) -> list[Piece]:
 def _shown_requests(takes: dict[str, Take], parts: list[Piece]) -> list[tuple[str, bool]]:
     shown: list[tuple[str, bool]] = []
     for p in parts:
-        if p.kind != "clip" or not p.captions or p.take not in takes:
+        request_chip=any(o.where.startswith('trace') for o in p.overlays)
+        if p.kind != "clip" or not (p.captions or request_chip) or p.take not in takes:
             continue
         take = takes[p.take]
         who = "Chrono Trigger" if p.take.startswith("take-") else (take.game_name() or p.take)

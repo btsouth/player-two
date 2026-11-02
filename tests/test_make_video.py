@@ -679,3 +679,10 @@ def test_new_founder_and_limit_slots_remain_final_requirements():
     parts=[mv.Piece('identity','hook',kind='card',secs=8.5),mv.Piece('limit','outro',kind='card',secs=6)]
     errors=mv.final_refusals(parts,[])
     assert 'missing voice-over audio: identity' in errors and 'missing voice-over audio: limit' in errors
+
+
+def test_muted_request_intro_still_counts_as_a_shown_typed_request():
+    take=_take([{'kind':'heard','t':1,'text':"Where's it weak?",'typed':True}],'game2',4)
+    p=mv.Piece('intro','game2',take='game2',a=0,b=3,speed=4,captions=False,
+               overlays=[mv.Overlay("You: typed\nWhere's it weak?",42,'trace-mh',0,.75)])
+    assert mv._shown_requests({'game2':take},[p])==[('game2',True)]
