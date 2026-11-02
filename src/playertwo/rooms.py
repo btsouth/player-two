@@ -66,6 +66,12 @@ STEAM_NEAR = 48  # how far from the last view the quick search looks, in game pi
 # it; down from the game's own top to STEAM_LOW below the game's own bottom.
 STEAM_FOLLOW = (152, 120)
 STEAM_LOW = 31
+# While the game's own view follows the character it keeps its feet within a pixel or
+# two of the follow point (the RAM: 127-129, 136-138 against FOLLOW's 128, 138). The
+# party following close behind is 10 to 22 px off it: along an axis the view follows,
+# someone further off than this isn't the player. (Steam's view mostly keeps it within
+# 4 px, but not just after coming in, and its edges are known only to a tile.)
+FOLLOW_NEAR = 8
 STEAM_TAP = 0.1  # Steam misses a 60 ms tap; 100 ms is one step
 STEAM_LEAD = 0.2  # input lag and the look's own time: turns start this much early (s)
 # Things named in a place that are ways out: the survey's own ways out stand for them (a
@@ -530,7 +536,11 @@ class Rooms:
             box = None
         fit = self._steam_feet(v[:200], box, 3, standing(room, cam)) if self.sprites else []
         # Feet on ground the survey walked (not someone behind a counter).
-        fit = [f for f in fit if on_ground(room, cam[0] + f[1][0], cam[1] + f[1][1])][:2]
+        # Along an axis the view follows the player on, where it keeps it (whoever is
+        # close behind is seen, not the player: the party following it).
+        held = (x0 + 2 < cam[0] < x1 - 2, y0 + 2 < cam[1] < y1 - 2)
+        fit = [(s, to_view(f, FOLLOW, held)) for s, f in fit
+               if on_ground(room, cam[0] + f[0], cam[1] + f[1])][:2]
         if fit:
             s0, (fx_, fy_) = fit[0]
             second = fit[1][0] if len(fit) > 1 else 0.0
@@ -571,6 +581,7 @@ class Rooms:
             cost = math.dist(feet, prior) + 80 * (1 - min(1.0, k / 150))
             if not on_ground(room, cam[0] + feet[0], cam[1] + feet[1]):
                 continue  # someone behind a counter, more likely
+            feet = to_view(feet, FOLLOW, held)
             if tracked and math.dist(feet, prior) > 64:
                 continue  # further than it walks between two looks: someone else
             if best is None or cost < best[0]:
@@ -926,16 +937,26 @@ class Rooms:
             sx, sy = follow
             box = (sx - 24 if follows[0] else 0, sy - 28 if follows[1] else 0,
                    sx + 24 if follows[0] else w, sy + 28 if follows[1] else h)
-        for s, feet in self._steam_feet(v, box, skip=standing(room, cam)):
+        for s, seen in self._steam_feet(v, box, skip=standing(room, cam)):
+            if steam:
+                # Steam's view isn't always where the game's would be (just come in, or
+                # where its edges are known only to a tile): not far off where it keeps
+                # the player, and the nearer the better (the party following close
+                # behind fits about as well: take A2, Marle's feet 14 to 22 px off).
+                if (follows[0] and abs(seen[0] - follow[0]) > 24) or (
+                        follows[1] and abs(seen[1] - follow[1]) > 28):
+                    continue  # not where the view keeps it
+                feet, pull = seen, 2 * sum(abs(f - k) for f, k, h in
+                                           zip(seen, follow, follows, strict=True) if h)
+            else:  # the game's own view: where it keeps the player, to a pixel or two
+                feet = to_view(seen, follow, follows)
+                pull = 10 if feet != seen else 0
             far = math.dist(feet, prior)
             if s < 0.6 and not (s >= 0.4 and far <= 24):
                 continue
-            if (follows[0] and abs(feet[0] - follow[0]) > 24) or (
-                    follows[1] and abs(feet[1] - follow[1]) > 28):
-                continue  # not where the view keeps it
             # Feet on ground the survey walked, rather than off it.
             tile = (int(cam[1] + feet[1]) // TILE, int(cam[0] + feet[0]) // TILE)
-            cost = far + 100 * (1 - s) + (0 if tile in room.walk else 40)
+            cost = far + 100 * (1 - s) + (0 if tile in room.walk else 40) + pull
             if best is None or cost < best[0]:
                 best = (cost, feet)
         if best is not None:
@@ -1257,6 +1278,47 @@ def centre(t: tuple[int, int]) -> tuple[float, float]:
     return t[1] * TILE + TILE / 2, t[0] * TILE + 13
 
 
+def on_tile(room: Room, x: float, y: float, last: tuple[int, int] | None = None
+            ) -> tuple[int, int]:
+    """The walked tile feet at x, y count as on: their own when the survey walked it;
+    else (between tiles, or on a tile the feet only reach the edge of: they go 8 px into
+    a fence's row from above) the walked tile round it whose spot to stand on (centre)
+    is nearest, `last` (the one it was on) when that's about as near. By rows and
+    columns alone the tile above a fence and the one below it are as near, and walking
+    from the one beyond goes into the fence (live: 6 s at the fair's item seller)."""
+    t = (int(y) // TILE, int(x) // TILE)
+    if t in room.walk or not room.walk:
+        return t
+    near = [(t[0] + dr, t[1] + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+            if (t[0] + dr, t[1] + dc) in room.walk]
+    if not near:  # further off what was surveyed: the nearest by rows and columns
+        return min(room.walk, key=lambda w: (abs(w[0] - t[0]) + abs(w[1] - t[1]),
+                                             math.dist(centre(w), (x, y))))
+    return min(near, key=lambda w: math.dist(centre(w), (x, y)) - (6 if w == last else 0))
+
+
+def to_view(feet: tuple[float, float], follow: tuple[float, float], held: tuple[bool, bool],
+            near: float = FOLLOW_NEAR) -> tuple[float, float]:
+    """Feet seen on the screen, put where the view keeps the player along each axis it
+    follows it on (`held`) when they're further off than `near`: someone close by was
+    seen (the party following the player), and the view says where the player is that
+    way. Live, the fair: Marle's feet taken for Crono's, 10 to 22 px off, a tile out;
+    the SNES's memory, 15 to 18 px, and once locked onto someone else for 11 s."""
+    return (follow[0] if held[0] and abs(feet[0] - follow[0]) > near else feet[0],
+            follow[1] if held[1] and abs(feet[1] - follow[1]) > near else feet[1])
+
+
+def leapt(seen: tuple | None, now: Here, t: float) -> bool:
+    """Whether a look puts the player further from where it was surely seen a moment
+    ago (seen: when, place, x, y) than it walks, or runs, in the time: the view matched
+    on a part of the place that looks alike, not a step (SNES with RAM, the fair: read
+    78 px off in a tenth of a second, then kept there for 5 s)."""
+    if seen is None or not now.sure or now.loc != seen[1]:
+        return False
+    dt = t - seen[0]
+    return dt < 1.0 and math.dist((now.x, now.y), seen[2:]) > 32 + 160 * dt
+
+
 def on_ground(room: Room, x: float, y: float) -> bool:
     """Whether feet at x, y are on (or at the edge of) a tile the survey walked."""
     return not room.walk or any((int(y + dy) // TILE, int(x + dx) // TILE) in room.walk
@@ -1368,6 +1430,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     dud: set = set()  # ways out walked into that didn't go through
     trail: deque = deque()  # (when, place, x, y) over the last seconds
     best: tuple[int, int, float] = (-1, 10**6, 0.0)  # place, fewest tiles to go, since when
+    last_tile: tuple[int, int] | None = None  # the walked tile it was last counted on
+    seen: tuple | None = None  # (when, place, x, y): where it was last surely seen
+    leaps = 0  # looks in a row put further off than it can have walked
 
     coming: Here | None = None  # where a way out just taken comes out, to look there first
 
@@ -1439,6 +1504,14 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             "a scene?): look")
                 await asyncio.sleep(0.1)
                 continue
+            if leaps < 3 and leapt(seen, now, time.monotonic()):
+                # Further than it walks since a moment ago: the screen matched on a part
+                # of the place that looks alike (the fair's fences). Again, from there.
+                leaps += 1
+                continue
+            leaps = 0
+            if now.sure:
+                seen = (time.monotonic(), now.loc, now.x, now.y)
             if now.loc not in unboxed and await asyncio.to_thread(rooms.boxed, shot, now):
                 # The place shows, but a text box is over part of it (a scene, someone
                 # who stopped the player): walking can't go on till it's read.
@@ -1476,9 +1549,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
             if here.loc == goal and at is not None:
                 # The last of it: to a tile to stand on by it, facing it.
                 tiers = rooms.stand_tiers(room, at, person)
-                tile = here.tile
-                if tile not in room.walk:
-                    tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
+                tile = last_tile = on_tile(room, here.x, here.y, last_tile)
                 if not tiers:
                     steer(None)
                     return f"blocked: nowhere to stand by {target}"
@@ -1621,10 +1692,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                         log(f"rooms: the way out at {gone_by.frm} didn't open")
                         gone_by = None
                     continue
-                tile = here.tile
-                if tile not in room.walk:
-                    # Between tiles or off what was surveyed: the nearest walked tile.
-                    tile = min(room.walk, key=lambda t: abs(t[0] - tile[0]) + abs(t[1] - tile[1]))
+                # Between tiles or off what was surveyed: the nearest walked tile.
+                tile = last_tile = on_tile(room, here.x, here.y, last_tile)
                 goals = {e.frm for e in ways}
                 path = rooms.route(room, tile, goals)
                 if path is not None:
@@ -1670,6 +1739,10 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     aim = c
                     break
             last = here.loc == goal and at is not None and len(path) == 2
+            # A spot to stand on by someone that can't be got onto (the survey walked
+            # its edge: beside the fair's item seller) is shut like any other, for the
+            # next best; a way out's tile isn't (a step on, it may go through).
+            by_spot = here.loc == goal and at is not None
             if last:  # onto where to stand: its middle (clear of whoever's beside it)
                 aim = centre(path[1])
             a = angle_to(aim[0] - px, aim[1] - py)
@@ -1695,7 +1768,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     steer(None)
                     return FIGHT_STARTED if over == "fight" else BOX_UP
                 stalls += 1
-                if path[1] not in goals:
+                if path[1] not in goals or by_spot:
                     room.learned.add(path[1])
                 blocker = in_the_way(room, here, path[1], goals) or blocker
                 log(f"rooms: no nearer for 6 s at {tile} in {rooms.name(here.loc)}, shut "
@@ -1723,7 +1796,7 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                          int((here.x + 12 * math.sin(rad)) // TILE))
                 if ahead in (here.tile, tile) and len(path) > 1:
                     ahead = path[1]  # (the tile it stands on, as the survey has it)
-                if ahead not in goals:
+                if ahead not in goals or by_spot:
                     room.learned.add(ahead)
                 blocker = in_the_way(room, here, ahead, goals) or blocker
                 log(f"rooms: stuck at {tile} in {rooms.name(here.loc)}, shut {ahead} "
