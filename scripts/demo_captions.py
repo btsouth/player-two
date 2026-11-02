@@ -73,9 +73,12 @@ def _played_lines(events: list[dict], narrator: bool) -> list[tuple[float, float
             if near and min(near, key=lambda x: abs(x["t"] - e["began"])).get(
                     "source") == "narrator":
                 continue
-        if out and e["began"] - out[-1][1] < 0.25 and not re.search(r"[.!?]$", out[-1][2]) \
+        hp_continues = bool(out and out[-1][2].endswith("HP.") and text.startswith("to "))
+        if out and e["began"] - out[-1][1] < 0.25 \
+                and (not re.search(r"[.!?]$", out[-1][2]) or hp_continues) \
                 and len(out[-1][2]) + len(text) <= 120:
-            out[-1] = (out[-1][0], e["ended"], f"{out[-1][2]} {text}")
+            prior = out[-1][2].removesuffix(".") if hp_continues else out[-1][2]
+            out[-1] = (out[-1][0], e["ended"], f"{prior} {text}")
         else:
             out.append((e["began"], e["ended"], text))
     return out

@@ -27,6 +27,7 @@ import argparse
 import dataclasses
 import hashlib
 import io
+import itertools
 import json
 import math
 import re
@@ -57,14 +58,23 @@ CT_LIMIT = 110.0  # "about 1:55"
 GAME_BUDGET = {"game2": (20.0, 25.0), "game3": (10.0, 15.0)}
 PLACEHOLDER_S = {"game2": 22.0, "game3": 12.0}
 GAMES = ("game2", "game3")
-NO_CODE = "No code written for this game, only a short notes file."
+NO_CODE = "No code written for this game. One line of notes."
+LIMIT_LINE = "Creator-tested. No blind player has tried it yet. That's next."
+SE_NOTICE = ("The copyright of the materials used on this page or video is owned by SQUARE ENIX CO., LTD. "
+             "or its licensors. The unauthorized reproduction and distribution of the images is prohibited.\n"
+             "© 1995, 2018 SQUARE ENIX\nIllustration: © 1995 BIRD STUDIO / SHUEISHA\n"
+             "Story and Screenplay: © 1995, 2008 ARMOR PROJECT / SQUARE ENIX")
+LEGAL_LINE = ("Games and footage belong to their publishers. Shown to demonstrate accessibility. "
+              "No affiliation or endorsement.")
 
 LINES = {
     "A1": ("A", r"^where am i\b"),
     "A2": ("A", r"^what'?s on the screen"),
     "A3": ("A", r"^take me to the fair"),
+    "A3b": ("A", r"^what does it look like"),
     "A4": ("A", r"^buy three potions"),
     "A5": ("A", r"^take me back outside"),
+    "B0": ("B", r"^how are we doing"),
     "B1": ("B", r"^what are we fighting"),
     "B2": ("B", r"^crono,? use cyclone"),
     "B3": ("B", r"^attack the one on the left"),
@@ -114,12 +124,14 @@ class Piece:
     a: float = 0.0
     b: float = 0.0
     speed: float = 1.0
+    reveal_s: float = 1.0
     black_for: float = 0.0  # seconds of black, then a 1s reveal; audio remains continuous
     layout: str = ""  # map, fight, shop, black
     proof: str = ""  # path to saved atlas proof sidecar
     sharp_at: float | None = None  # take time the blur lifts; past b, it never does
     captions: bool = True
     vol: float = 1.0
+    duck: bool = True
     fade_in: bool = False
     fade_out: bool = False
     vo: str = ""
@@ -147,6 +159,7 @@ class Take:
     events: list
     caps: list  # (from, to, who, text) in seconds of the video
     top: bool = False
+    edit: dict = field(default_factory=dict)
 
     def heard(self) -> list[tuple[float, dict]]:
         if self.start is None:
@@ -386,6 +399,8 @@ def cut_line(line: str, take: Take, pick: int | None, max_talk: float | None) ->
     if max_talk is not None:
         own, left = talk_cut(own, max_talk)
     end = (own[-1][1] if own else heard_t + 3.0) + 0.5
+    if done is not None and left == 0:
+        end = max(end, done + 1.2)  # let the completed action's real timing remain readable
     start = heard_t - _lead(take, heard_t, event)
     # A line still being said as the request starts stays whole, not cut into mid-word.
     said = [c[0] for c in take.caps if c[2] == "Player Two" and c[0] < start < c[1]
@@ -427,11 +442,11 @@ def ct_pieces(takes: dict[str, Take], picks: dict[str, int], drop: set[str], max
         if take is None:
             warnings.append(f"{line}: no take-{name}")
             continue
-        cut = cut_line(line, take, picks.get(line), max_talk if line == "A2" else None)
+        cut = cut_line(line, take, picks.get(line), 12.0 if line == "A3b" else max_talk if line == "A2" else None)
         if cut is None:
             warnings.append(f"{line}: not found in take-{name}'s log")
             continue
-        pieces = line_pieces(cut, take, SPEED[name])
+        pieces = line_pieces(cut, take, float(take.edit.get("speeds",{}).get(line,SPEED[name])))
         overlays: list[Overlay] = []
         if line == "A1":
             overlays.append(Overlay("1. Where am I?", 44, "tl", 0.0, 2.5))
@@ -444,6 +459,10 @@ def ct_pieces(takes: dict[str, Take], picks: dict[str, int], drop: set[str], max
                 total = sum(p.out_s for p in pieces)
                 overlays.append(Overlay(f"(it describes for about {more} seconds more)", 36, "bc",
                                         max(0.0, total - 3.5), total))
+        elif line == "A3b":
+            if cut.left_out > 1:
+                total=sum(p.out_s for p in pieces)
+                overlays.append(Overlay("Description shortened",34,"trim",max(0,total-2.5),total))
         elif line == "A3":
             overlays.append(Overlay("2. Getting around", 44, "tl", 0.0, 2.5))
         elif line == "A4":
@@ -493,6 +512,25 @@ def game_pieces(name: str, take: Take | None, no_code: bool, clip: tuple[float, 
     if no_code:
         p.overlays.append(Overlay(NO_CODE, 40, "tl2", 0.0, min(5.0, b - a)))
     return [p]
+
+
+
+def rdr_pieces(look: Take, dialogue: Take) -> list[Piece]:
+    a,b=map(float,look.edit.get("clip",[18.4,28.1]))
+    x,y=map(float,dialogue.edit.get("clip",[24,35]))
+    vista=Piece("rdr-look","game3",line="RDR view",take=look.name,a=a,b=b,layout="rdr")
+    vista.overlays += [Overlay("Red Dead Redemption",40,"tl",0,min(3,b-a)),
+                       Overlay("Description shortened",34,"trim",max(0,b-a-2),b-a)]
+    if look.edit.get("notes_only_verified"):
+        vista.overlays.append(Overlay(NO_CODE,40,"tl2",3,min(8,b-a)))
+    if dialogue.start is not None and any(e.get("kind")=="spoken" and
+            min(y,e["ended"]-dialogue.start)>max(x,e["began"]-dialogue.start)
+            for e in dialogue.events):
+        raise ValueError("Red Dead quiet window contains logged Player Two speech")
+    quiet=Piece("rdr-dialogue","game3",line="RDR voices",take=dialogue.name,a=x,b=y,
+                layout="map",captions=False,duck=False)
+    quiet.overlays.append(Overlay("Player Two stays quiet while the game's voices talk.",42,"bc",0,y-x))
+    return [vista,quiet]
 
 
 def _shown_requests(takes: dict[str, Take], parts: list[Piece]) -> list[tuple[str, bool]]:
@@ -584,83 +622,142 @@ def atlas_beat(folder: Path) -> list[Piece]:
 
 
 def cold_open(take: Take | None) -> tuple[list[Piece], list[str]]:
+    """Fight narration, player choice, Cyclone reveal, then delegation: one real run."""
     if not take:
-        return [
-            Piece(
-                "cold-missing",
-                "hook",
-                line="cold",
-                kind="slate",
-                secs=45,
-                blocks=[
-                    ("PLACEHOLDER: one continuous fight take", 58, True),
-                    ("Black for 13 seconds. Then reveal the same fight.", 42, False),
-                ],
-            )
-        ], []
-    first = cut_line("B1", take, None, None)
-    win = cut_line("B4", take, None, None)
-    if first is None or win is None or win.heard <= first.heard:
-        return [
-            Piece(
-                "cold-missing",
-                "hook",
-                line="cold",
-                kind="slate",
-                secs=45,
-                blocks=[("PLACEHOLDER: paired fight requests required", 58, True)],
-            )
-        ], ["cold open incomplete: missing paired requests"]
-    between = [e for t, e in take.heard() if first.heard < t < win.heard]
-    warnings = []
-    if between or win.heard - first.heard > 20:
-        warnings.append(
-            "cold open incomplete: pair must be close together without intervening requests"
-        )
-    a, b = first.a, win.b
-    acknowledgement = [c for c in take.caps if c[2] == "Player Two"
-                       and win.heard - 0.2 <= c[0] <= win.heard + 3
-                       and "fight" in c[3].lower()]
-    if not acknowledgement or acknowledgement[0][1] - a > 15:
-        warnings.append("cold open incomplete: the second acknowledgement must finish during black")
-    if b - a < 14:
-        warnings.append("cold open incomplete: the fight ends before the reveal")
-    # No acceleration, cut or hidden-time jump during black or reveal.
-    black_s = max(13.0, min(15.0, acknowledgement[0][1] - a + 0.2)) if acknowledgement else 13.0
-    first_end = min(a + black_s + 2, b)
-    intro = Piece(
-        "cold-0",
-        "hook",
-        line="cold",
-        take=take.name,
-        a=a,
-        b=first_end,
-        black_for=black_s,
-        layout="black",
-    )
-    intro.overlays.append(
-        Overlay("This is the game with the picture off.", 34, "intro", 0, 4.5)
-    )
-    spans = [(x, y) for x, y, who, _ in take.caps if who == "Player Two"]
-    spans += [
-        (t - _lead(take, t, e), t + 1.5) for t, e in take.heard() if not e.get("typed")
-    ]
-    parts = [intro]
-    for i, (x, y, sp) in enumerate(split_speed(first_end, b, spans, 3)):
-        p = Piece(
-            f"cold-{i + 1}",
-            "hook",
-            line="cold",
-            take=take.name,
-            a=x,
-            b=y,
-            speed=sp,
-            layout="fight",
-        )
-        if sp > 1:
-            p.overlays.append(Overlay(f"{sp:g}x", 40, "tr", 0, p.out_s))
-        parts.append(p)
-    return parts, warnings
+        return [Piece("cold-missing","hook",line="cold",kind="slate",secs=45,
+                      blocks=[("PLACEHOLDER: continuous fight take",58,True)])], []
+    doing=cut_line("B0",take,None,None)
+    cyclone=cut_line("B2",take,None,None)
+    win=cut_line("B4",take,None,None)
+    if not doing or not cyclone or not win or not doing.heard<cyclone.heard<win.heard:
+        return [Piece("cold-missing","hook",line="cold",kind="slate",secs=45,
+                      blocks=[("PLACEHOLDER: health, Cyclone, then delegation",58,True)])], [
+                          "cold open incomplete: health, Cyclone and Win must occur in that order"]
+    fights=[c for c in take.caps if c[2]=="Player Two" and c[0]<doing.heard
+            and c[3].removeprefix("Player Two: ").strip().lower()=="fight."]
+    warnings=[]
+    if fights:
+        a=max(0,fights[-1][0]-0.3)
+    else:
+        prior=[c[0] for c in take.caps if c[2]=="Player Two" and c[0]<doing.heard]
+        a=max(0,min(prior,default=doing.a)-0.3)
+        warnings.append("cold open incomplete: original Fight speech record missing")
+    reveal=take.edit.get("reveal_at")
+    if not isinstance(reveal,(int,float)):
+        reveal=cyclone.heard+2
+        warnings.append("cold open incomplete: choose reveal_at from actual Cyclone frames")
+    reveal_s=float(take.edit.get("reveal_duration",0.3))
+    if not cyclone.heard<reveal<win.heard or not 0<reveal_s<=1:
+        warnings.append("cold open incomplete: measured reveal must follow Cyclone and precede Win")
+    first_end=min(float(take.edit.get("normal_until",reveal+2)),win.b)
+    if first_end<reveal+reveal_s:
+        raise ValueError("normal_until must include the entire Cyclone reveal")
+    # All original speech remains normal speed. The manifest may tighten only silent gaps.
+    spans=speech_spans(take.events,take.start)
+    spans += [(t-_lead(take,t,e),t+1.8) for t,e in take.heard()]
+    spans += [(reveal-0.1,first_end)]
+    if "gap_speed" not in take.edit:
+        spans.append((a,first_end))
+    gap_speed=float(take.edit.get("gap_speed",3))
+    gap_cap=take.edit.get("gap_max_output")
+    cuts=split_speed(a,win.b,spans,gap_speed,
+                     min_gap=float(take.edit.get("min_gap",2)),
+                     pad=float(take.edit.get("speech_pad",0.3)))
+    parts=[]
+    for x,y,speed in cuts:
+        # Keep both edges of an accelerated gap; removed middle silence is explicitly labelled.
+        windows=[(x,y)]
+        trimmed=gap_cap is not None and speed>1 and (y-x)/speed>float(gap_cap)
+        if trimmed:
+            edge=float(gap_cap)*speed/2
+            windows=[(x,x+edge),(y-edge,y)]
+        for lo,hi in windows:
+            bounds=[lo]+[t for t in (reveal,first_end) if lo<t<hi]+[hi]
+            for xx,yy in itertools.pairwise(bounds):
+                before=xx<first_end
+                p=Piece(f"cold-{len(parts)}","hook",line="cold",take=take.name,a=xx,b=yy,
+                        speed=speed,black_for=(999 if yy<=reveal else max(0,reveal-xx)),
+                        reveal_s=reveal_s,layout="black" if before else "fight")
+                if speed>1:
+                    p.overlays.append(Overlay(f"{speed:g}x",40,"speed",0,p.out_s))
+                if trimmed:
+                    p.overlays.append(Overlay("Silent gap shortened",34,"gap",0,p.out_s))
+                parts.append(p)
+    elapsed=0.0
+    for p in parts:
+        if elapsed<4.5:
+            p.overlays.append(Overlay("This is the game with the picture off.",34,"intro",0,
+                                      min(p.out_s,4.5-elapsed)))
+        elapsed+=p.out_s
+    return parts,warnings
+
+
+def reserve_win_line(opening: list[Piece], take: Take | None) -> tuple[list[Piece], list[Piece]]:
+    """The same run's earned result closes on black; never repeat or invent it."""
+    if not take or take.start is None or not opening or any(p.kind != "clip" for p in opening):
+        return opening, []
+    win=cut_line("B4",take,None,None)
+    if not win:
+        return opening, []
+    results=[e for e in take.events if e.get("kind")=="spoken"
+             and e.get("text","").lower().startswith("won the fight")
+             and win.heard <= e["began"]-take.start < win.b]
+    if not results:
+        return opening, []
+    e=results[-1]
+    a=max(0,e["began"]-take.start-0.05)
+    b=min(take.duration,e["ended"]-take.start+0.12)
+    kept=[]
+    for p in opening:
+        if p.kind!="clip" or p.a>=a:
+            continue
+        p.b=min(p.b,a)
+        p.overlays=[dataclasses.replace(o,f1=min(o.f1,p.out_s)) for o in p.overlays
+                    if o.f0<p.out_s]
+        kept.append(p)
+    ending=Piece("last-line","outro",line="last line",take=take.name,a=a,b=b,
+                 black_for=999,layout="black")
+    ending.overlays.append(Overlay("The same fight. The result.",34,"intro",0,2.5))
+    return kept,[ending]
+
+
+
+def goodbye_piece(take: Take) -> Piece:
+    """Use a bounded, genuine last exchange; never fill it with a new synthetic voice."""
+    request=next(((t,e) for t,e in take.heard() if re.fullmatch(r"goodbye[.!?]?",e["text"].strip(),re.IGNORECASE)),None)
+    if request is None or take.start is None:
+        raise ValueError("Goodbye take needs its real logged request")
+    heard,event=request
+    said=[e for e in take.events if e.get("kind")=="spoken" and e["began"]-take.start>=heard]
+    joined=" ".join(e["text"] for e in said).lower()
+    if not re.search(r"bye for now[.!]?\s+have fun[.!]?",joined):
+        raise ValueError("Goodbye take needs real Bye for now and Have fun spoken records")
+    end=next(e for e in said if "have fun" in e["text"].lower())
+    return Piece("goodbye","outro",line="goodbye",take=take.name,a=max(0,heard-_lead(take,heard,event)),
+                 b=min(take.duration,end["ended"]-take.start+.3),black_for=999,layout="black")
+
+
+def shop_scene_layouts(pieces: list[Piece], take: Take | None) -> list[Piece]:
+    """Change only chip placement; keep source video and audio completely continuous."""
+    menu=take.edit.get("shop_menu") if take else None
+    if not menu:
+        return pieces
+    lo,hi=map(float,menu)
+    for p in pieces:
+        if p.kind!="clip" or p.line!="A4":
+            continue
+        a,b=(lo-p.a)/p.speed,(hi-p.a)/p.speed
+        placed=[]
+        for o in p.overlays:
+            if o.where!="trace":
+                placed.append(o)
+                continue
+            bounds=[o.f0]+[t for t in (a,b) if o.f0<t<o.f1]+[o.f1]
+            for x,y in itertools.pairwise(bounds):
+                where="trace-shop-menu" if a<=(x+y)/2<b else "trace-shop"
+                placed.append(dataclasses.replace(o,f0=x,f1=y,where=where))
+        p.overlays=placed
+    return pieces
 
 
 def make_plan(
@@ -676,11 +773,11 @@ def make_plan(
     del rates  # the film ends with a human line, not a rates wall
     folder = Path(vo.get("_folder", "."))
     opening, warnings = cold_open(takes.get("take-B"))
-    # Each request appears once. The entire fight now lives in the opening.
-    drop = set(force_drop) | {"B1", "B2", "B3", "B4"}
+    # Each request appears once; the same fight's real result is reserved for the ending.
+    drop = set(force_drop) | {"B0", "B1", "B2", "B3", "B4"}
     lines = ct_pieces(takes, picks, drop, 8, warnings)
     maps = []
-    for line in ("A1", "A2", "A3", "A4", "A5"):
+    for line in ("A1", "A2", "A3", "A3b", "A4", "A5"):
         if line == "A3":
             maps += atlas_beat(folder)
         maps += lines.get(line, [])
@@ -700,19 +797,7 @@ def make_plan(
                    and any(valid_box(box) for box in e.get("boxes", [])) for e in sam.events):
             warnings.append("missing SAM geometry: no via=sam-3.1 boxes in this take")
     else:
-        sam_parts = [
-            Piece(
-                "sam-missing",
-                "ct",
-                line="sam",
-                kind="slate",
-                secs=7,
-                blocks=[
-                    ("PLACEHOLDER: Where’s the door?", 58, True),
-                    ("Actual SAM box and stereo ping required", 42, False),
-                ],
-            )
-        ]
+        sam_parts = []
     games = [
         Piece(
             "c-games",
@@ -722,32 +807,22 @@ def make_plan(
             blocks=[("It’s not one game.", 72, True)],
         )
     ]
-    for g in GAMES:
-        games += game_pieces(g, takes.get(g), g in no_code, clips.get(g), warnings)
-    ending = takes.get("ending")
-    if ending:
-        end_parts = [
-            Piece(
-                "last-line",
-                "outro",
-                line="last line",
-                take="ending",
-                a=0,
-                b=ending.duration,
-                black_for=999,
-                layout="black",
-            )
-        ]
+    games += game_pieces("game2", takes.get("game2"), "game2" in no_code, clips.get("game2"), warnings)
+    if takes.get("rdr-look") and takes.get("rdr-dialogue"):
+        games += rdr_pieces(takes["rdr-look"], takes["rdr-dialogue"])
     else:
-        end_parts = [
-            Piece(
-                "last-line-missing",
-                "outro",
-                kind="slate",
-                secs=3.5,
-                blocks=[("PLACEHOLDER: one last real Player Two line", 48, True)],
-            )
-        ]
+        games += game_pieces("game3", takes.get("game3"), "game3" in no_code, clips.get("game3"), warnings)
+    opening,reserved_ending=reserve_win_line(opening,takes.get("take-B"))
+    end_parts=reserved_ending or [Piece("win-missing","outro",kind="slate",secs=3.5,
+                    blocks=[("PLACEHOLDER: real win line",48,True)])]
+    goodbye=takes.get("goodbye")
+    if goodbye:
+        end_parts.append(goodbye_piece(goodbye))
+    else:
+        end_parts.append(Piece("goodbye-missing","outro",line="goodbye",kind="slate",secs=3.5,
+                blocks=[("ENDING DESIGN / clean take pending",34,False),
+                        ("You: Goodbye.",64,True),
+                        ("Player Two: Bye for now. Have fun.",64,True)]))
     how = Piece(
         "c-how",
         "outro",
@@ -766,12 +841,13 @@ def make_plan(
         *sam_parts,
         *games,
         how,
+        Piece("limit","outro",kind="card",secs=3.2,blocks=[(LIMIT_LINE,58,True)]),
         *end_parts,
     ]
     # Cut whole optional requests, never the payoff of one already shown.
     dropped = []
     for line in ("A2", "A5", "A1"):
-        if sum(p.out_s for p in parts) + 6 <= TOTAL_LIMIT - 1.0:
+        if sum(p.out_s for p in parts) + 8 <= TOTAL_LIMIT - 1.0:
             break
         parts = [p for p in parts if p.line != line]
         dropped.append(line)
@@ -780,19 +856,20 @@ def make_plan(
             "c-end",
             "outro",
             kind="card",
-            secs=6,
+            secs=8,
             blocks=[
                 ("Player Two", 96, True),
                 ("You choose. We play.", 56, True),
                 ("github.com/btsouth/player-two", 40, False),
-                ("Creator-tested prototype. No blind-player testing yet.", 34, False),
                 (
                     requests_wording(
                         _shown_requests(takes, parts), any(p.speed > 1 for p in parts)
                     ),
-                    34,
+                    30,
                     False,
                 ),
+                (LEGAL_LINE,24,False),
+                (SE_NOTICE,22,False),
             ],
         )
     )
@@ -832,12 +909,12 @@ def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
 def round2_cards(folder: Path) -> list[Piece]:
     ahead_vo = _vo(folder, "ahead")
     ahead_s = max(2.5, probe_s(Path(ahead_vo)) + 0.25) if ahead_vo else 2.5
-    return [
+    cards = [
         Piece(
             "identity",
             "hook",
             kind="card",
-            secs=2.5,
+            secs=2,
             blocks=[
                 ("Player Two", 96, True),
                 ("An AI co-op partner for blind and motor-impaired gamers.", 48, False),
@@ -855,6 +932,7 @@ def round2_cards(folder: Path) -> list[Piece]:
                     True,
                 ),
                 ("RetroArch 1.8.2 release post, December 2019", 36, False),
+                ("Lavos is still ahead. Here’s how far we’ve got.",42,True),
             ],
         ),
         Piece(
@@ -866,6 +944,7 @@ def round2_cards(folder: Path) -> list[Piece]:
             blocks=[("Lavos is still ahead. Here’s how far we’ve got.", 64, True)],
         ),
     ]
+    return cards if ahead_vo else cards[:2]
 
 
 def sample_plan(takes: dict[str, Take], folder: Path) -> tuple[list[Piece], list[str]]:
@@ -950,9 +1029,19 @@ def _wrap(draw, text: str, font, width: int) -> list[str]:
     return out
 
 
-def card_png(path: Path, blocks: list, bg=BG) -> Path:
+def card_png(path: Path, blocks: list, bg=BG, end: bool = False) -> Path:
     img = Image.new("RGBA", (W, H), tuple(bg))
     d = ImageDraw.Draw(img)
+    if end:
+        positions=[160,290,410,560,720,820]
+        for (text,size,bold),y in zip(blocks,positions,strict=True):
+            f=_font(bold,size)
+            for paragraph in text.splitlines():
+                for ln in _wrap(d,paragraph,f,W-192):
+                    d.text((96,y),ln,font=f,fill="white" if size>30 else (176,190,202))
+                    y+=int(size*1.35)
+        img.save(path)
+        return path
     d.line((96, 120, 180, 120), fill=ACCENT, width=6)
     d.text((96, 66), "PLAYER TWO  /  CO-OP, BY VOICE", font=_font(True, 25), fill=ACCENT)
     laid = [( _wrap(d, text, _font(bold, size), W - 240), _font(bold, size), size)
@@ -987,11 +1076,20 @@ def label_png(path: Path, o: Overlay) -> Path:
         typed = "typed" in lines[0]
         top = o.where in ("trace-fight", "trace-shop", "trace-black")
         x, y = 64, (200 if o.where == "trace-black" else 60 if top else 700)
-        f = _font(True, 42)
+        if o.where=="trace-shop-menu":
+            x,y=1000,550
+        if o.where=="trace-rdr":
+            y=520
+        black=o.where=="trace-black"
+        f = _font(True, 64 if black else 42)
         text = ("You (typed): " if typed else "You: ") + req
-        wrapped = _wrap(d, text, f, 1450)
+        wrapped = _wrap(d, text, f, 1000 if o.where=="trace-shop-menu" else 1450)
+        if black:
+            x=(W-int(max(d.textlength(t,font=f) for t in wrapped))-108)//2
+            y=250
         width = int(max(d.textlength(t, font=f) for t in wrapped)) + 108
-        height = len(wrapped) * 56 + 32
+        line_h=84 if black else 56
+        height = len(wrapped) * line_h + 32
         d.rounded_rectangle(
             (x, y, x + width, y + height), radius=20, fill=(9, 15, 25, 220)
         )
@@ -1003,11 +1101,14 @@ def label_png(path: Path, o: Overlay) -> Path:
         d.arc((mx - 5, my + 6, mx + 18, my + 30), 0, 180, fill=ACCENT, width=3)
         d.line((mx + 6, my + 30, mx + 6, my + 37), fill=ACCENT, width=3)
         for i, ln in enumerate(wrapped):
-            d.text((x + 66, y + 16 + i * 56), ln, font=f, fill="white")
+            d.text((x + 66, y + 16 + i * line_h), ln, font=f, fill=ACCENT if black else "white")
         by = y + height + 14
         # Latest results, retaining scope labels so action and inference aren't conflated.
         bx = x
-        for layer, timing in list(zip(lines[2::2], lines[3::2], strict=False))[-2:]:
+        pairs=list(zip(lines[2::2], lines[3::2], strict=False))[-2:]
+        if o.where=="trace-black":
+            pairs=[]  # Black opening is the game heard through dialogue, not a dashboard.
+        for layer, timing in pairs:
             label = layer.replace("Local action", "Local").replace(
                 " / scene", " / scene"
             )
@@ -1033,13 +1134,20 @@ def label_png(path: Path, o: Overlay) -> Path:
     else:
         f = _font(True, max(34, o.size))
         lines = _wrap(d, o.text, f, 1600)
-        if o.text.endswith("x"):
+        is_speed=bool(re.fullmatch(r"\d+(?:\.\d+)?x",o.text))
+        if is_speed:
             lines = [o.text + " SPEED"]
         y = 52 if o.where in ("tl", "tl2", "tr", "trl", "intro") else 700
         if o.where == "intro":
             y = 66
+        if o.where == "gap":
+            y = 150
+        if is_speed or o.where in ("speed","trim"):
+            y = 64
+        if o.where=="speed-shop":
+            y = 700
         tw = int(max(d.textlength(ln, font=f) for ln in lines))
-        x = (W - tw) // 2 if o.where in ("bc", "intro") else 64
+        x = ((W-tw)//2 if o.where in ("bc","intro") else W-tw-64 if is_speed or o.where in ("speed","trim") else 64)
         bh = len(lines) * int(f.size * 1.35) + 28
         d.rounded_rectangle(
             (x - 20, y - 12, x + tw + 20, y + bh), radius=18, fill=(9, 15, 25, 218)
@@ -1081,7 +1189,7 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
                 if ms and "muse" in brain.lower():
                     facts.append((e, "Muse Spark", f"Model time {sum(ms):.2f} s"))
                 elif turns == [] and e.get("steps") and all(
-                        x.get("tool") in {"go_to_place", "go_to_exit", "battle", "fight", "shop"}
+                        x.get("tool") in {"go_to_place", "go_to_exit", "battle", "fight", "shop", "where_am_i"}
                         for x in e["steps"]):
                     facts.append((e, "Local action", f"Action time {e['seconds']:.2f} s"))
                 else:
@@ -1123,7 +1231,7 @@ def evidence_overlays(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
     report = []
     for p in parts:
         take = takes.get(p.take)
-        if not take or p.kind != "clip" or not p.captions:
+        if not take or p.kind != "clip" or not p.captions or p.id=="last-line":
             continue
         heard = take.heard()
         before = [t for t, _ in heard if t <= p.a]
@@ -1142,7 +1250,8 @@ def evidence_overlays(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
             )
             for row in found:
                 row["badge_from"] += offset
-            report += found
+            if p.layout != "black":
+                report += found
     return report
 
 
@@ -1207,6 +1316,8 @@ def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], 
     inputs: list[str] = []
     chain, last = "", "v0"
     for i, o in enumerate(p.overlays):
+        if p.layout in ("shop","shop-menu") and re.fullmatch(r"\d+(?:\.\d+)?x",o.text):
+            o=dataclasses.replace(o,where="speed-shop")
         if o.where == "trace":
             o = dataclasses.replace(o, where="trace-" + (p.layout or ("fight" if p.take=="take-B" else "map")))
         png = work / ("ov-" + hashlib.sha1(f"{CODE}|{o.text}|{o.size}|{o.where}".encode())
@@ -1224,8 +1335,8 @@ def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], 
 
 
 def encode_card(p: Piece, work: Path, out: Path, vcodec: str) -> None:
-    bg = BG if p.kind == "card" else (32, 25, 43, 255)
-    png = card_png(work / f"{p.id}.png", p.blocks, bg)
+    bg = (0,0,0,255) if p.id=="goodbye-missing" else BG if p.kind == "card" else (32,25,43,255)
+    png = card_png(work / f"{p.id}.png", p.blocks, bg, end=p.id=="c-end")
     audio = ["-i", p.vo] if p.vo else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
     inputs, chain, last = _overlays_chain(p, work, 2)
     fc = f"[0:v]scale={W}:{H},format=yuv420p,fade=t=in:d=0.15,fade=t=out:st={max(0,p.secs-0.15)}:d=0.15[v0]{chain}"
@@ -1252,8 +1363,8 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         n += 2
     ov_inputs, chain, last = _overlays_chain(p, work, n)
     v = f"[0:v]scale={GAME_W}:{GAME_H}:flags=lanczos,fps={FPS},setpts=PTS-STARTPTS"
-    if p.black_for:
-        v += f",fade=t=in:st={p.black_for}:d=1.0"
+    if p.black_for or (p.line=="cold" and p.layout=="black"):
+        v += f",fade=t=in:st={p.black_for}:d={p.reveal_s}"
     if p.sharp_at is not None:
         if p.sharp_at >= p.b:
             v += f",gblur=sigma={BLUR}"
@@ -1272,13 +1383,22 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     dur = p.out_s
     # Accelerated gaps are silent: no sped-up voices or frantic game music.
     gain = 0 if p.speed > 1 else p.vol
-    if stems:
+    if p.speed>1:
+        # Very short accelerated gaps can exhaust atempo before AAC receives a frame.
+        # They are silent by design, so generate exact-length silence without time-stretching.
+        a=f"anullsrc=r=48000:cl=stereo,atrim=duration={dur},asetpts=PTS-STARTPTS"
+    elif stems and p.duck:
         # Voice stem contains Player Two + the microphone; the game stem contains only game.
         a = (f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}asplit[voice][side];"
              f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}anull"
              "[game];[game][side]sidechaincompress=threshold=0.025:ratio=8:"
              "attack=15:release=220[duck];[duck][voice]amix=inputs=2:normalize=0:"
              f"duration=first,volume={gain}")
+    elif stems:
+        # Preserve both stems untouched by the sidechain, including any unexpected voice.
+        a = (f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}anull[game];"
+             f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}anull[voice];"
+             f"[game][voice]amix=inputs=2:normalize=0:duration=first,volume={gain}")
     else:
         a = f"[0:a]asetpts=PTS-STARTPTS,{tempo}volume={gain}"
     a += f",afade=t=in:d=0.012,afade=t=out:st={max(0,dur-0.018):.3f}:d=0.018"
@@ -1299,9 +1419,10 @@ def ass_text(take: Take, layout: str = "") -> str:
     layout = layout or ("fight" if take.top else "map")
     size, align, ml, mr, mv = {
         "map": (48, 2, 100, 100, 60),
+        "rdr": (48, 2, 100, 100, 60),
         "fight": (48, 8, 100, 100, 240),
         "shop": (48, 9, 1000, 64, 420),
-        "black": (64, 5, 160, 160, 30),
+        "black": (80, 5, 200, 200, 30),
     }[layout]
     head = demo_captions.ASS_HEAD.replace("PlayResX: 512", "PlayResX: 1920").replace(
         "PlayResY: 288", "PlayResY: 1080"
@@ -1326,7 +1447,8 @@ def ass_text(take: Take, layout: str = "") -> str:
         rows.append(
             f"Dialogue: 0,{demo_captions._ass_stamp(a)},"
             f"{demo_captions._ass_stamp(b)},P2,,0,0,0,,"
-            + r"{\fad(90,70)}"
+            + (r"{\fad(90,70)\1c&HFFFFFF&}" if layout != "black" else
+               r"{\fad(90,70)\1c&HD7EFFF&}")
             + txt.replace(chr(10), " ")
         )
     return head + "\n".join(rows) + "\n"
@@ -1338,7 +1460,7 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
     asses: dict[str, Path] = {}
     for name, take in takes.items():
         if take.caps:
-            for layout in ("map","fight","shop","black"):
+            for layout in ("map","fight","shop","black","rdr"):
                 text=ass_text(take,layout)
                 path=work/f"{name}-{layout}.ass"
                 path.write_text(text,encoding="utf-8")
@@ -1492,6 +1614,9 @@ def load_take(folder: Path, name: str, top: bool) -> Take | None:
             raise ValueError(f"Audio stem shorter than take: {video}")
     stamp = folder / config.get("start", f"{name}.mp4.start")
     start = float(stamp.read_text().split()[0]) if stamp.exists() else None
+    if start is not None:
+        # GSR begins after the shell writes its timestamp. Measure against the voice stem.
+        start += float(config.get("edit", {}).get("recording_delay", 0.0))
     log = folder / config.get("events", f"{name}.events.jsonl")
     events: list[dict] = []
     if start is not None and log.exists():
@@ -1503,7 +1628,7 @@ def load_take(folder: Path, name: str, top: bool) -> Take | None:
                 events.append(e)
     caps = demo_captions.captions(_old_narrations(events), start) if events else []
     caps = [c for c in caps if c[0] < duration]
-    return Take(name, video, start, duration, events, caps, top)
+    return Take(name, video, start, duration, events, caps, top, config.get("edit",{}))
 
 
 def _vo(folder: Path, which: str) -> str:
@@ -1592,7 +1717,7 @@ def main() -> None:
     out = a.out or a.folder.parent / "video.mp4"
     tops = set(filter(None, a.top.split(",")))
     takes = {}
-    for name in ("take-A", "take-B", "sam", "ending", *GAMES):
+    for name in ("take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", *GAMES):
         take = load_take(a.folder, name, name in tops)
         if take is not None:
             takes[name] = take
@@ -1603,6 +1728,8 @@ def main() -> None:
         sys.exit(f"--no-code takes {','.join(GAMES)}")
     warnings: list[str] = []
     dropped: list[str] = []
+    manifest_path=a.folder/"takes.json"
+    edit=json.loads(manifest_path.read_text()).get("edit",{}) if manifest_path.exists() else {}
     if a.cut:
         parts = [_piece_from(d) for d in json.loads(a.cut.read_text())]
     else:
@@ -1610,7 +1737,7 @@ def main() -> None:
         vo_s = {w: probe_s(Path(v)) for w, v in vo.items()}
         vo["_folder"]=str(a.folder)
         parts, dropped, warnings = make_plan(takes, _picks(a.pick), no_code, rates, vo, vo_s,
-                                             _clips(a.clip), set(filter(None, a.drop.split(","))))
+                                             _clips(a.clip), set(filter(None, a.drop.split(","))) | set(edit.get("drop",[])))
     # Remove legacy overlays before rebuilding the floating chips from source evidence.
     for piece in parts:
         if piece.kind == "clip":
@@ -1618,10 +1745,11 @@ def main() -> None:
     for piece in parts:
         if piece.kind == "clip" and not piece.layout:
             piece.layout = "fight" if takes[piece.take].top else "map"
-        if piece.line=="A4":
+        if piece.line=="A4" and piece.layout not in ("shop","shop-menu"):
             piece.layout="shop"
     evidence = evidence_overlays(parts, takes)
     sam_boxes(parts,takes)
+    parts=shop_scene_layouts(parts,takes.get("take-A"))
     if not a.final:
         for piece in parts:
             piece.overlays.append(Overlay("DRAFT / NOT SUBMISSION FOOTAGE", 20, "draft", 0, piece.out_s))

@@ -6,17 +6,17 @@ folder directly, so no system font install is needed.
 
 ```sh
 python3 scripts/make_video.py takes --out round2-sample.mp4 --sample --sheet --jobs 2
-python3 scripts/make_video.py takes --out draft3b-proxy.mp4 --proxy --sheet --jobs 2
-python3 scripts/make_video.py takes --out draft3b.mp4 --sheet --jobs 2
+python3 scripts/make_video.py takes --out draft3d-proxy.mp4 --proxy --sheet --jobs 2
+python3 scripts/make_video.py takes --out draft3d.mp4 --sheet --jobs 2
 python3 scripts/make_video.py takes --out final.mp4 --final --sheet --jobs 2
 ```
 
 Full: 1920x1080 at 60 fps, full-bleed Lanczos scaling, 42px request chips, 34px measured badges,
-48px speech captions (64px on black). Proxies: 960x540 at 30 fps. No FPS-counter masking.
+48px speech captions (80px on black). Proxies: 960x540 at 30 fps. No FPS-counter masking.
 
 ## Takes
 
-Use `take-A.mp4`, `take-B.mp4`, `game2.mp4`, `game3.mp4`, optional `sam.mp4` and `ending.mp4`.
+Use `take-A.mp4`, `take-B.mp4`, `game2.mp4`, `game3.mp4`, optional `sam.mp4` and `goodbye.mp4`.
 Each has `<name>.mp4.start` (Unix recording start) and `<name>.events.jsonl` (original log).
 For other filenames, `takes.json` maps names to relative `video`, `start` and `events` paths.
 All referenced files must be included when syncing the takes folder. Symlinks may be dereferenced.
@@ -30,23 +30,53 @@ The cutter cannot judge gameplay, privacy, spoken correctness or whether an acti
 
 ## Cold opening and ending
 
-B must contain “What are we fighting?” then “Win this fight for me”, close together, with no
-other requests between them. The first 15 seconds remain continuous at normal speed. Picture
-is black for 13 seconds, then fades up over one second, without changing audio or source time.
-The rest of that same request runs to its result; later gaps alone may be sped up, visibly labelled.
-The fight requests are not repeated later. Final mode refuses an incomplete pair.
+The accepted B sequence is fight narration, “How are we doing?”, “Crono, use Cyclone.”, then
+“Win this fight for me.” The picture is black from before the logged first “Fight.” through the
+choice. Every spoken line stays in order. It fades up on the actual spin, which must be measured
+from source frames, not guessed from the completed action event. The reveal and spin stay normal
+speed. Manifest settings can accelerate silent gaps at 4x and shorten only their silent middles;
+all original spoken spans remain normal speed and chronological. Every accelerated piece has a
+speed label; shortened silence also says “Silent gap shortened”. Typed requests
+stay visibly typed. Missing opening speech or unmeasured reveal is refused by final mode.
 
-The 45-second sample uses one continuous old Win exchange because the older two questions are
-65 seconds apart. It does not splice a fake paired conversation or dub a typed request. Its old
-source and the missing final take are clearly labelled. The sample is a style test, not the
-complete requested paired exchange.
+Add measured settings to the take-B manifest entry, for example:
 
-The full film follows with the product card, four-second RetroArch excerpt, and “Lavos is still
-ahead. Here’s how far we’ve got.” `vo-ahead.wav` optionally voices that line. No glasses story.
-Then map, actual saved map proof, walking/shop, optional SAM, other games, how, last line and
-end card. `ending.mp4` is a short real Player Two utterance with its original audio/log, displayed
-on black. Missing footage is visibly reserved with placeholders. No rates wall.
-`vo-how.wav` voices the how card. `vo-why` is retired. Silent cards retain the words for silent viewing.
+```json
+{
+  "take-A": {"edit": {"recording_delay": 0.4}},
+  "take-B": {
+    "edit": {"recording_delay": 0.32, "reveal_at": 33.35,
+             "reveal_duration": 0.25, "normal_until": 35.35,
+             "gap_speed": 4, "gap_max_output": 0.3,
+             "min_gap": 0.35, "speech_pad": 0.06}
+  },
+  "edit": {"drop": ["A2"]}
+}
+```
+
+`recording_delay` corrects the measured delay between the shell timestamp and actual recorder
+start, verified against the voice stem. It adjusts log-to-video mapping without changing any
+original timestamps. Reveal values remain absolute SOURCE VIDEO seconds, independent of that
+epoch correction. Those values apply to the reviewed run, not arbitrary replacement footage. Review every new
+reveal against its frames. Use the original full session log when a per-check log omits speech
+from before the first request. Preserve original timestamps and never synthesize a missing line.
+
+The same run's final real “Won the fight…” spoken record is reserved once for the black-screen
+ending, labelled “The same fight. The result.” It is neither repeated in the opening nor dubbed.
+A missing result remains a placeholder. `goodbye.mp4` supplies the separate real closing exchange:
+logged “Goodbye.” followed by actual spoken “Bye for now.” and “Have fun.”. Missing or out-of-order
+records are refused. Until captured, that slot is explicitly labelled as an ending design.
+
+The film follows with a two-second product card and four-second RetroArch excerpt containing
+“Lavos is still ahead. Here’s how far we’ve got.” `vo-ahead.wav` optionally adds a spoken ahead card. No glasses story.
+Then map proof, actual walking/shop, optional SAM when usable footage exists, other games, how,
+honest limit card, real win and goodbye, then the end card. The complete Square Enix proprietary
+notice is copied verbatim from its Chrono Trigger policy into the end card, alongside the general
+publisher attribution and no-endorsement line. These notices are not a claim of contest clearance. `A3b` (“What does it look like?”) retains whole descriptive sentences
+and marks its shortened tail. No rates wall. `vo-how.wav` voices the how card; `vo-why` is retired.
+
+The earlier `--sample` remains a 45-second style sample based on a continuous Win excerpt; it is
+not the new full choice/delegation story. The full render is the default command.
 
 ## Model evidence and SAM
 
@@ -80,6 +110,32 @@ and -2.5 dBTP; measure decoded AAC with ebur128 again.
 Cut/evidence JSON, caption warnings and optional sheets accompany the output. `--cut` replays a
 hand-edited cut; rebuild without it to discover new source/VO files. Cache keys include renderer,
 font, source size/mtime, captions and settings. `--final` refuses placeholders, missing how VO,
-incomplete cold opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
+incomplete choice/delegation opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
 sped-up speech and duration above 3:00, including after encoding. `--accept-captions` cannot bypass
 stale facts or sped-up speech. Human frame and full-speed listening checks remain essential.
+
+Completed action windows hold at least 1.2 seconds after the logged result so measured completion
+badges remain readable. Speed labels stay physically clear of request chips; shop speed labels use
+the lower-right open area, away from its quantity/item menus. Recheck placement on new games.
+
+A take can also supply `edit.shop_menu: [83.5, 87.6]` (measured absolute source-video seconds).
+While that menu is open, the request chip uses its empty lower item panel; controls, quantity,
+prices, gold and HP remain visible. Only timed overlays change, never source video/audio boundaries.
+
+## Red Dead: description, then restraint
+
+Use `rdr-look.mp4` and `rdr-dialogue.mp4` with start, events and both stems. Per-take `edit.clip`
+selects the exact continuous source interval. The description is normal-speed and any omitted
+last sentence is labelled. Choose a whole spoken sentence boundary from the actual voice stem.
+The dialogue segment refuses logged Player Two speech in its interval. It keeps BOTH stems,
+with sidechain compression disabled, so real game voices stay audible and unexpected Player Two
+speech cannot be hidden by muting its stem. Verify digital silence in that source voice window.
+
+`rdr-look.edit.notes_only_verified: true` enables “No code written for this game. One line of notes.”
+only after checking current runtime code and the actual notes file. Do not carry that flag forward
+without rechecking it. Recorded typed questions remain explicitly typed. Source timing and old/new
+build limits belong in the private QC, not a false claim that the latest code recorded an older take.
+
+`take-A.edit.speeds` may override a single action's silent-gap speed, for example `{"A5": 4}`.
+`duck: false` in resolved cut JSON preserves both stems without ducking. Retake source selection,
+clock offsets, reveal points and menu positions remain in the manifest rather than hand edits to code.

@@ -189,14 +189,14 @@ def test_final_refuses_placeholders_voice_over_labels_and_draft_rates():
     parts, _dropped, warnings = _plan(_events())
     refused = " | ".join(mv.final_refusals(parts, warnings))
     assert "placeholder: game2" in refused and "placeholder: game3" in refused
-    assert "voice-over" in refused and "last-line-missing" in refused
+    assert "voice-over" in refused and "win-missing" in refused and "goodbye-missing" in refused
 
 
 def test_the_quote_and_the_honest_lines_are_on_cards():
     parts, _dropped, _warnings = _plan(_events())
     words = " ".join(str(b[0]) for p in parts for b in p.blocks)
     assert "nor defeat Lavos in Chrono Trigger" in words
-    assert "Lavos is still ahead" in words and "No blind-player testing yet" in words
+    assert "Lavos is still ahead" in words and "No blind player has tried it yet" in words
     assert "Muse understands scenes" in words and "common actions" in words
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
@@ -205,7 +205,7 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
 def test_the_end_card_wording_comes_from_the_shown_requests():
     parts, _dropped, _warnings = _plan(_events())
     assert parts[-1].id == "c-end"
-    assert "typed" in parts[-1].blocks[-1][0]
+    assert any("typed" in b[0] for b in parts[-1].blocks)
 
 
 def test_final_refuses_a_speed_up_without_its_label():
@@ -281,20 +281,48 @@ def test_missing_fight_gets_a_visible_placeholder_not_a_silent_omission():
     assert "placeholder: cold-missing" in mv.final_refusals(parts, [])
 
 
-def test_cold_open_keeps_time_continuous_and_unsped_through_reveal():
-    es=[{"t":1,"kind":"heard","text":"What are we fighting?","typed":True},
-        _spoken("Three imps.",2,4),
-        {"t":6,"kind":"heard","text":"Win this fight for me.","typed":True},
-        _spoken("Okay, I'll take this fight.",6.1,8),
-        _spoken("Won.",24,25), {"t":25,"kind":"agent","seconds":19,"turns":[],"steps":[]}]
-    take=_take(es,"take-B",30,True)
+def _choice_take():
+    es=[_spoken("Fight.",1,1.6),
+        {"t":3,"kind":"heard","text":"How are we doing?","typed":True},
+        _spoken("Frog is at 1 HP.",3.2,5),
+        {"t":8,"kind":"heard","text":"Crono, use Cyclone.","typed":True},
+        _spoken("Okay, Crono will use Cyclone.",8.1,10),
+        _spoken("Crono used Cyclone.",12,13),
+        {"t":16,"kind":"heard","text":"Win this fight for me.","typed":True},
+        _spoken("Okay, I'll take this fight.",16.1,18),
+        _spoken("Frog uses Heal.",23,24),
+        _spoken("Won the fight.",29,30),
+        {"t":30,"kind":"agent","seconds":14,"turns":[],"steps":[]}]
+    take=_take(es,"take-B",35,True)
+    take.edit={"reveal_at":11,"reveal_duration":.25,"normal_until":13.5}
+    return take
+
+
+def test_cold_open_keeps_all_speech_and_time_continuous_through_measured_spin():
+    take=_choice_take()
     parts,warnings=mv.cold_open(take)
-    assert not warnings and parts[0].speed==1 and parts[0].out_s==15
-    assert parts[0].black_for==13
-    assert all(abs(a.b-b.a)<0.001 for a,b in itertools.pairwise(parts))
+    assert not warnings and parts[0].speed==1
+    assert parts[0].a==.7
+    assert any(p.a==11 and p.b==13.5 and p.speed==1 for p in parts)
+    assert all(p.black_for==999 for p in parts if p.b<=11)
+    assert next(p for p in parts if p.a==11).reveal_s==.25
+    assert all(abs(a.b-b.a)<.001 for a,b in itertools.pairwise(parts))
     mv.evidence_overlays(parts,{"take-B":take})
     words=" ".join(o.text for p in parts for o in p.overlays)
-    assert "What are we fighting?" in words and "Win this fight for me." in words
+    assert all(x in words for x in ["How are we doing?","Crono, use Cyclone.","Win this fight for me."])
+    for a,b,who,_ in take.caps:
+        if who=="Player Two":
+            assert not any(p.speed>1 and min(p.b,b)-max(p.a,a)>.01 for p in parts)
+
+
+def test_real_win_is_reserved_once_for_the_black_ending_without_repeating_speech():
+    take=_choice_take()
+    parts,_=mv.cold_open(take)
+    opening,ending=mv.reserve_win_line(parts,take)
+    assert len(ending)==1 and ending[0].black_for==999
+    assert abs(opening[-1].b-ending[0].a)<.001
+    assert opening[-1].b<29 and ending[0].a<29<ending[0].b
+    assert ending[0].b>=30
 
 
 def test_sam_overlay_requires_actual_sam_box_not_a_centre_or_fallback():
@@ -310,18 +338,163 @@ def test_sam_overlay_requires_actual_sam_box_not_a_centre_or_fallback():
     assert p.overlays[0].f0==4
 
 
-def test_cold_open_refuses_a_pair_that_cannot_finish_during_black():
-    es=[{"t":1,"kind":"heard","text":"What are we fighting?","typed":True},
-        _spoken("Three imps.",2,4),
-        {"t":17,"kind":"heard","text":"Win this fight for me.","typed":True},
-        _spoken("Okay, I'll take this fight.",17.1,19),
-        _spoken("Won.",29,30), {"t":30,"kind":"agent","seconds":13,"turns":[],"steps":[]}]
-    parts,warnings=mv.cold_open(_take(es,"take-B",35,True))
-    assert any("finish during black" in w for w in warnings)
+def test_cold_open_requires_actual_spin_measurement_and_request_order():
+    take=_choice_take()
+    take.edit={}
+    parts,warnings=mv.cold_open(take)
+    assert any("actual Cyclone frames" in w for w in warnings)
     assert any("cold open incomplete" in w for w in mv.final_refusals(parts,warnings))
+    take=_choice_take()
+    next(e for e in take.events if e.get("text")=="Crono, use Cyclone.")["t"]=19
+    _,warnings=mv.cold_open(take)
+    assert any("in that order" in w for w in warnings)
 
 
 def test_invalid_or_inverted_sam_boxes_are_not_drawn():
     assert not mv.valid_box([.4,.2,.1,.6])
     assert not mv.valid_box([.1,.2,1.2,.6])
     assert not mv.valid_box([.5,.5])
+
+
+def test_missing_cold_sequence_keeps_its_placeholder_even_if_a_win_is_logged():
+    take=_choice_take()
+    take.events=[e for e in take.events if e.get("text")!="How are we doing?"]
+    opening,_=mv.cold_open(take)
+    kept,ending=mv.reserve_win_line(opening,take)
+    assert kept==opening and kept[0].kind=="slate" and ending==[]
+
+
+def test_measured_recorder_delay_aligns_captions_without_rewriting_source(tmp_path,monkeypatch):
+    import json
+    (tmp_path/"take-A.mp4").write_bytes(b"test")
+    (tmp_path/"take-A.mp4.start").write_text("1000")
+    es=[{"kind":"spoken","t":1002,"began":1001,"ended":1002,"text":"Fight."}]
+    (tmp_path/"take-A.events.jsonl").write_text(json.dumps(es[0])+"\n")
+    (tmp_path/"takes.json").write_text(json.dumps({"take-A":{"edit":{"recording_delay":.32}}}))
+    monkeypatch.setattr(mv,"probe_s",lambda _:10)
+    take=mv.load_take(tmp_path,"take-A",False)
+    assert abs(take.caps[0][0]-.68)<.001
+    assert take.events==es and (tmp_path/"take-A.mp4.start").read_text()=="1000"
+
+
+def test_speed_label_stays_clear_of_the_upper_request_chip(tmp_path):
+    from PIL import Image
+    path=tmp_path/"speed.png"
+    mv.label_png(path,mv.Overlay("2x",48,"tr",0,1))
+    bbox=Image.open(path).getchannel("A").getbbox()
+    assert bbox[0]>mv.W*.7  # caller's legacy top-right slot must still be physically right
+    mv.label_png(path,mv.Overlay("2x",48,"speed-shop",0,1))
+    assert Image.open(path).getchannel("A").getbbox()[1]>mv.H*.6
+
+
+def test_shop_completion_is_not_cut_before_its_measured_result_can_be_read():
+    es=[{"t":1,"kind":"heard","text":"Buy three potions.","typed":True},
+        _spoken("Bought. You have 370 gold left.",3,5),
+        {"t":6.2,"kind":"agent","request":"Buy three potions.","turns":[],"steps":[],"seconds":5.2}]
+    cut=mv.cut_line("A4",_take(es),None,None)
+    assert cut.b>=7.4-.001
+
+
+def test_shop_scene_repositioning_preserves_continuous_source_and_speed_labels():
+    take=_take([])
+    take.edit={"shop_menu":[3,7]}
+    p=mv.Piece("shop","ct",line="A4",take="take-A",a=0,b=10,speed=2,
+               overlays=[mv.Overlay("2x",48,"tr",0,5),
+                         mv.Overlay("You: typed\nBuy three potions.",42,"trace",0,5)])
+    result=mv.shop_scene_layouts([p],take)
+    assert len(result)==1 and (p.a,p.b,p.speed)==(0,10,2)
+    assert p.overlays[0].text=="2x" and (p.overlays[0].f0,p.overlays[0].f1)==(0,5)
+    assert [o.where for o in p.overlays[1:]]==["trace-shop","trace-shop-menu","trace-shop"]
+    assert [(o.f0,o.f1) for o in p.overlays[1:]]==[(0,1.5),(1.5,3.5),(3.5,5)]
+
+
+def test_tightened_four_times_gaps_never_remove_or_speed_original_speech():
+    take=_choice_take()
+    take.edit.update(gap_speed=4,gap_max_output=.45,min_gap=.7,speech_pad=.12)
+    parts,warnings=mv.cold_open(take)
+    assert not warnings
+    assert any(p.speed==4 for p in parts)
+    assert any(o.text=="Silent gap shortened" for p in parts for o in p.overlays)
+    for e in take.events:
+        if e.get("kind")!="spoken":
+            continue
+        covered=sum(max(0,min(p.b,e["ended"])-max(p.a,e["began"])) for p in parts if p.speed==1)
+        assert abs(covered-(e["ended"]-e["began"]))<.001
+    for p in parts:
+        assert not p.speed>1 or p.out_s<=.45+.001
+    assert all(p.a>=a.b for a,p in itertools.pairwise(parts))
+
+
+def test_red_dead_silent_window_uses_game_audio_without_ducking_or_fake_captions():
+    look=_take([{"kind":"heard","t":19,"text":"What do you see?","typed":True}],"rdr-look",50)
+    look.edit["notes_only_verified"]=True
+    quiet=_take([],"rdr-dialogue",100)
+    view,dialogue=mv.rdr_pieces(look,quiet)
+    assert mv.NO_CODE in [o.text for o in view.overlays]
+    assert dialogue.speed==1 and not dialogue.duck and not dialogue.captions
+    assert dialogue.out_s==11
+    quiet.events.append(_spoken("An interruption.",25,26))
+    import pytest
+    with pytest.raises(ValueError,match="contains logged"):
+        mv.rdr_pieces(look,quiet)
+
+
+def test_end_card_contains_full_notice_and_goodbye_stays_a_placeholder_until_recorded(tmp_path):
+    parts,_,_=mv.make_plan({}, {}, set(), [], {"_folder":str(tmp_path)}, {}, {})
+    assert any(p.id=="limit" and p.blocks[0][0]==mv.LIMIT_LINE for p in parts)
+    assert any(p.id=="goodbye-missing" and p.kind=="slate" for p in parts)
+    end=parts[-1]
+    assert mv.SE_NOTICE in [b[0] for b in end.blocks]
+    assert mv.LEGAL_LINE in [b[0] for b in end.blocks]
+    mv.card_png(tmp_path/"end.png",end.blocks,end=True)
+
+
+def test_black_captions_are_large_and_use_a_distinct_player_two_colour():
+    text=mv.ass_text(_take([_spoken("Fight.",1,2)]),"black")
+    assert "Inter,80" in text and "\\1c&HD7EFFF&" in text
+
+
+def test_goodbye_slot_requires_real_ordered_request_and_spoken_exchange():
+    import pytest
+    take=_take([{"kind":"heard","t":2,"text":"Goodbye.","typed":True},
+                _spoken("Bye for now.",2.1,3),_spoken("Have fun.",3.2,4)],"goodbye",10)
+    p=mv.goodbye_piece(take)
+    assert p.a==1.6 and p.b==4.3 and p.black_for==999
+    take.events=take.events[:-1]
+    with pytest.raises(ValueError,match="spoken records"):
+        mv.goodbye_piece(take)
+
+
+def test_red_dead_no_code_claim_requires_a_verified_manifest_flag():
+    view,_=mv.rdr_pieces(_take([],"rdr-look",50),_take([],"rdr-dialogue",100))
+    assert mv.NO_CODE not in [o.text for o in view.overlays]
+
+
+def test_a_short_four_times_gap_encodes_with_a_real_silent_audio_track(tmp_path):
+    import subprocess
+    source=tmp_path/"source.mp4"
+    subprocess.run(["ffmpeg","-v","error","-f","lavfi","-i","color=s=64x64:r=60:d=1",
+                    "-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-t","1",
+                    "-c:v","libx264","-c:a","aac",str(source)],check=True)
+    take=mv.Take("t",source,0,1,[],[])
+    p=mv.Piece("gap","hook",take="t",a=.2,b=.8,speed=4,captions=False)
+    mv.encode_clip(p,{"t":take},{},tmp_path,tmp_path/"gap.mp4","libx264")
+    import json
+    streams=json.loads(subprocess.check_output(["ffprobe","-v","error","-show_streams",
+                                               "-of","json",str(tmp_path/"gap.mp4")]))["streams"]
+    assert any(s["codec_type"]=="audio" and int(s["nb_frames"])>0 for s in streams)
+    assert abs(mv.probe_s(tmp_path/"gap.mp4")-.15)<.06
+
+
+def test_real_spoken_goodbye_keeps_the_request_from_listening_start():
+    take=_take([{"kind":"status","t":1,"state":"listening"},
+                {"kind":"heard","t":3,"text":"Goodbye."},
+                _spoken("Bye for now.",3.2,4),_spoken("Have fun.",4.1,5)],"goodbye",10)
+    assert abs(mv.goodbye_piece(take).a-.7)<.001
+
+
+def test_red_dead_request_and_badge_clear_the_actual_lower_left_hud(tmp_path):
+    from PIL import Image
+    path=tmp_path/"rdr.png"
+    mv.label_png(path,mv.Overlay("You: typed\nWhat do you see?\nMuse Spark / scene\nGeneration 2.24 s",42,"trace-rdr",0,1))
+    assert Image.open(path).getchannel("A").getbbox()[3]<780
