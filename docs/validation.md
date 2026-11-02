@@ -28,8 +28,14 @@ Restricting the same installed client to IPv4 succeeded; a controlled comparison
 the failure in the source environment without the IPv4 restriction. After disabling IPv6 on
 that disposable VM, the unmodified installed command succeeded. This is a network workaround,
 not proof that all Linux networks work or a change to the application's transport. The Windows
-call needed no network workaround. Temporary API-key files were restricted to the test user and
-removed after the requests; setup stored no API key in these trials.
+call needed no network workaround. The tested workaround on the disposable Ubuntu VM was:
+
+```bash
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+```
+
+This changes that VM's networking; it is not a Player Two setting. Temporary API-key files were
+restricted to the test user and removed after the requests; setup stored no API key in these trials.
 
 ## Public checks versus live play
 

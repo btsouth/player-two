@@ -67,6 +67,7 @@ GENERAL_LINE = "Red Dead has no code at all, just Muse looking at the picture. C
 HOW_SECONDS = 9.0
 MAP_LINE = "Muse labelled this map. I checked it. Local code walks it."
 RETRO_QUOTE = "A blind person still cannot ... nor defeat Lavos in Chrono Trigger."
+RETRO_CREDIT = "Devin Prater, blind accessibility instructor, for libretro, 2019"
 SE_NOTICE = ("The copyright of the materials used on this page or video is owned by SQUARE ENIX CO., LTD. "
              "or its licensors. The unauthorized reproduction and distribution of the images is prohibited.\n"
              "© 1995, 2018 SQUARE ENIX\nIllustration: © 1995 BIRD STUDIO / SHUEISHA\n"
@@ -1345,7 +1346,7 @@ def round2_cards(folder: Path) -> list[Piece]:
                 ('Player Two.',80,True),("For players who can't see the screen or can't hold a controller.",58,True),
                 ('You ask. It reads, answers and presses the buttons.',44,False)]),
             Piece('lavos','hook',kind='card',secs=6,blocks=[
-                (RETRO_QUOTE,48,True),('libretro, 2019',34,False),
+                (RETRO_QUOTE,48,True),(RETRO_CREDIT,34,False),
                 ("Lavos is the final boss. Not beaten yet. Here's how far we've got.",44,True)])]
 
 
@@ -1554,7 +1555,7 @@ def label_png(path: Path, o: Overlay) -> Path:
             texts=[("Player Two.",80),("For players who can't see the screen or can't hold a controller.",58),
                    ("You ask. It reads, answers and presses the buttons.",44)]
         else:
-            texts=[(RETRO_QUOTE,48),("libretro, 2019",34),
+            texts=[(RETRO_QUOTE,48),(RETRO_CREDIT,34),
                    ("Lavos is the final boss. Not beaten yet. Here's how far we've got.",44)]
         y=175
         for text,size in texts:

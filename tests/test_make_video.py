@@ -208,6 +208,28 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
         o.text for p in parts for o in p.overlays)
 
 
+@pytest.mark.parametrize("layout", ["card", "overlay"])
+def test_historical_quote_renders_author_credit_without_clipping(tmp_path, monkeypatch, layout):
+    drawn = []
+    original = mv.ImageDraw.ImageDraw.text
+
+    def record(draw, xy, text, *args, **kwargs):
+        drawn.append((text, draw.textbbox(xy, text, font=kwargs.get("font"))))
+        return original(draw, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(mv.ImageDraw.ImageDraw, "text", record)
+    if layout == "card":
+        lavos = next(p for p in mv.round2_cards(tmp_path) if p.id == "lavos")
+        mv.card_png(tmp_path / "card.png", lavos.blocks)
+    else:
+        mv.label_png(tmp_path / "overlay.png", mv.Overlay("", 34, "lavos", 0, 1))
+
+    assert "Devin Prater, blind accessibility instructor, for libretro, 2019" in " ".join(
+        text for text, _bounds in drawn)
+    assert all(0 <= x0 < x1 <= mv.W and 0 <= y0 < y1 <= mv.H
+               for _text, (x0, y0, x1, y1) in drawn)
+
+
 def test_the_end_card_wording_comes_from_the_shown_requests():
     parts, _dropped, _warnings = _plan(_events())
     assert parts[-1].id == "c-end"

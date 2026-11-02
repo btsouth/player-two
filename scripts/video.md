@@ -146,12 +146,12 @@ stale spoken facts, sped-up speech, missing time disclosures and duration above3
 after encoding. --accept-captions cannot bypass stale facts or sped-up speech. Inspect contact
 sheets, individual overlay states, source facts and full-speed sound before submission.
 
-Quote source: [Archived release notes](https://web.archive.org/web/2020/https://www.libretro.com/index.php/category/accessibility/).
+Historical quote: credit **Devin Prater, blind accessibility instructor, for libretro, 2019**. [Original libretro article](https://www.libretro.com/index.php/retroarch-1-8-2-coming-soon-accessibility-features-for-blind-people/). Keep the date and the ellipsis in the shortened excerpt; this is not today's state of the art or an endorsement of Player Two.
 
 ## Castle-story and clean-combat cut
 
 The navigation manifest can provide edit.story windows with role/a/b and optional speed. It
-requires the original interrupted castle route, the model's fight decision and its multi-turn
+requires the original interrupted castle route, the model's fight-tool request and its multi-turn
 exit plan. Spoken spans always remain1x. Only verified speech-free gaps use faster video/audio;
 the game track is time-stretched without changing pitch. The source/output disclosure stays
 visible, and the join to the fair's other recording says it is another run of the same save.
