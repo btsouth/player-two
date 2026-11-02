@@ -192,11 +192,23 @@ def wheel_has_parts(img: Image.Image) -> bool:
 DIAMONDS = {"slash": 635.5, "pierce": 670.0, "blunt": 704.0}
 
 
+def _ring_dx(img: Image.Image) -> int:
+    """How far the wheel sits right of its usual place (it moves a few pixels as a fight goes
+    on), from the left edge of its cyan ring."""
+    c = _arr(img, 496, 200, 530, 320)
+    cols = np.flatnonzero(((c[..., 1] > 215) & (c[..., 2] > 205) & (c[..., 0] < 140)).mean(axis=0) > 0.05)
+    if not cols.size:
+        return 0
+    dx = round(496 + cols.min() * 34 / c.shape[1]) - 512
+    return dx if abs(dx) <= 14 else 0
+
+
 def wheel_works(img: Image.Image) -> list[str]:
     """The damage types this part takes: the diamonds with no red line through them."""
     out = []
+    dx = _ring_dx(img)
     for name, x in DIAMONDS.items():
-        c = _arr(img, x - 15, 246, x + 15, 276)
+        c = _arr(img, x + dx - 15, 246, x + dx + 15, 276)
         red = float(((c[..., 0] > 150) & (c[..., 1] < 90) & (c[..., 2] < 95)).mean())
         if red < 0.012:
             out.append(name)
@@ -205,7 +217,8 @@ def wheel_works(img: Image.Image) -> list[str]:
 
 def part_broken(img: Image.Image) -> bool:
     """The wheel's chosen part says Broken: gold letters where its blue gauge would be."""
-    c = _arr(img, 630, 284, 705, 298)
+    dx = _ring_dx(img)
+    c = _arr(img, 630 + dx, 284, 705 + dx, 298)
     r, g, b = c[..., 0], c[..., 1], c[..., 2]
     gold = ((r > 170) & (g > 140) & (b < 140) & (r - b > 45)).mean()
     cyan = ((b > 140) & (g > 120) & (r < 120)).mean()
@@ -214,7 +227,8 @@ def part_broken(img: Image.Image) -> bool:
 
 def wheel_gauge(img: Image.Image) -> float:
     """How much of this part's break gauge is left, 0 to 1."""
-    c = _arr(img, 632, 285, 697, 295)
+    dx = _ring_dx(img)
+    c = _arr(img, 632 + dx, 285, 697 + dx, 295)
     fill = (c[..., 2] > 150) & (c[..., 1] > 120) & (c[..., 0] < 130)
     cols = np.flatnonzero(fill.mean(axis=0) > 0.4)
     return float((cols.max() + 1) / c.shape[1]) if cols.size else 0.0
@@ -1133,11 +1147,13 @@ class Fight:
         mask = wheel_title(img)
         scored = [(_title_gap(mask, p.mask), i) for i, p in enumerate(self.parts)
                   if p.mask is not None]
-        return self.parts[min(scored)[1]] if scored else None
+        if not scored or min(scored)[0] > 0.7 * max(int(mask.sum()), 1):
+            return None  # a part that only shows once another has broken, like the stomach
+        return self.parts[min(scored)[1]]
 
     async def turn_wheel(self, part: Part) -> bool:
         """Round the open wheel to this part, checking its title each step."""
-        for _ in range(len(self.parts) + 1):
+        for _ in range(len(self.parts) + 2):
             img = await self.settled_wheel()
             if self.current_part(img) is part:
                 part.broken = part_broken(img)
@@ -1490,8 +1506,9 @@ class Fight:
 def _title_gap(a: np.ndarray, b: np.ndarray) -> int:
     """How far apart two title masks are. The wheel can sit a few pixels off, so the best of the
     small shifts counts."""
+    k = max(1, a.shape[1] // 180)  # the grab can be bigger than 1280 wide
     return min(int(np.logical_xor(a, np.roll(np.roll(b, dx, axis=1), dy, axis=0)).sum())
-               for dx in range(-10, 11, 2) for dy in (-2, 0, 2))
+               for dx in range(-12 * k, 12 * k + 1, 2 * k) for dy in (-2 * k, 0, 2 * k))
 
 
 def _same(a: np.ndarray, b: np.ndarray) -> bool:
