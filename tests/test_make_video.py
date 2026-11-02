@@ -189,7 +189,7 @@ def test_final_refuses_placeholders_voice_over_labels_and_draft_rates():
     parts, _dropped, warnings = _plan(_events())
     refused = " | ".join(mv.final_refusals(parts, warnings))
     assert "placeholder: game2" in refused and "placeholder: game3" in refused
-    assert "voice-over" in refused and "win-missing" in refused and "goodbye-missing" in refused
+    assert "voice-over" in refused and "cold-missing" in refused and "goodbye-missing" in refused and "nav-pending" in refused
 
 
 def test_the_quote_and_the_honest_lines_are_on_cards():
@@ -197,7 +197,8 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
     words = " ".join([str(b[0]) for p in parts for b in p.blocks]+[o.text for p in parts for o in p.overlays])
     assert "nor defeat Lavos in Chrono Trigger" in words
     assert "Lavos is still ahead" in words and "No blind player has tried it yet" in words
-    assert "Muse understands scenes" in words and "common actions" in words
+    assert mv.GENERAL_LINE in words and mv.RETRO_QUOTE in words
+    assert "..." not in mv.RETRO_QUOTE
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
 
@@ -545,7 +546,7 @@ def test_field_goodbye_uses_real_video_and_preserves_request_lead_in():
     assert p.black_for==0 and p.layout=="fight" and p.a==1.6 and p.b==4.3
 
 
-def test_same_take_win_level_up_and_goodbye_form_one_real_field_ending(tmp_path):
+def test_win_pays_off_before_identity_and_only_goodbye_is_saved_for_the_end(tmp_path):
     import dataclasses
     take=_choice_take()
     take.events += [_spoken("Crono's level increased!",30.5,31.5),
@@ -554,10 +555,13 @@ def test_same_take_win_level_up_and_goodbye_form_one_real_field_ending(tmp_path)
     take.caps=mv.demo_captions.captions(take.events,0)
     bye=dataclasses.replace(take,name="goodbye",edit={"field":True})
     parts,_,_=mv.make_plan({"take-B":take,"goodbye":bye},{},set(),[],{"_folder":str(tmp_path)},{},{})
-    closing=next(p for p in parts if p.id=="closing-exchange")
-    assert closing.a<29 and closing.b>=34 and closing.black_for==0
-    assert not any(p.id=="goodbye-missing" for p in parts)
-    assert parts[-2]==closing
+    identity=next(i for i,p in enumerate(parts) if p.id=='identity')
+    assert any(p.take==take.name and p.a<=29<p.b for p in parts[:identity])
+    assert not any(p.take==take.name and not p.freeze and p.a<=29<p.b for p in parts[identity:])
+    farewell=parts[-2]
+    assert farewell.id=='goodbye' and farewell.a>31 and farewell.b>=34 and farewell.black_for==0
+    assert parts[-1].secs==5 and parts[identity].freeze
+    assert not any('The same fight.' in o.text for p in parts for o in p.overlays)
 
 
 def test_fair_description_keeps_its_real_reply_after_a_two_second_location_pause():
@@ -581,12 +585,13 @@ def test_player_two_captions_have_no_repeated_speaker_prefix():
     assert "Player Two:" not in text and "A real reply." in text
 
 
-def test_sam_sequence_requires_logged_geometry_and_retains_unducked_actor_audio():
+def test_sam_sequence_requires_logged_geometry_and_retains_unducked_actor_audio(monkeypatch):
+    monkeypatch.setattr(mv,"rdr_bench",lambda _: ("Verified bench", "proof.json"))
     import pytest
     take=_take([{"kind":"where","t":3,"via":"sam-3.1","seconds":1.21,"boxes":[[0,.1,.5,.9]]},
                 {"kind":"where","t":9,"via":"sam-3.1","seconds":1.08,"boxes":[[.1,.2,.8,.7]]}],"rdr-sam",30)
-    take.edit={"view":[0,2],"trees":[2,7],"wagon":[8,12],"dialogue":[13,23],
-               "ping_boosts":{"trees":[[6,6.05,3.5]],"wagon":[[11,11.05,3.5]]}}
+    take.edit={"view":[0,2],"horse":[2,7],"wagon":[8,12],"dialogue":[13,23],
+               "ping_boosts":{"horse":[[6,6.05,3.5]],"wagon":[[11,11.05,3.5]]}}
     ps=mv.rdr_sam_pieces(take)
     mv.sam_boxes(ps,{take.name:take})
     tree=ps[1];boxes=[o for o in tree.overlays if o.where=="box"]
@@ -640,3 +645,37 @@ def test_join_removes_per_clip_aac_padding_instead_of_accumulating_it(tmp_path):
     assert 2<=len(samples)/48000<2.03  # one master AAC tail, never twenty clip tails
     assert abs(mv.probe_s(joined)-2)<.03
     assert max(map(abs,samples[int(1.95*48000):int(1.98*48000)]))>.05
+
+
+def test_steady_time_summary_is_mathematical_and_guards_reject_tampering():
+    ps=[mv.Piece('one','hook',take='t',a=0,b=2),mv.Piece('two','hook',take='t',a=4,b=8,speed=2)]
+    mv.steady_timing(ps,'cold')
+    assert mv.valid_timing_group(ps,'cold')
+    assert all(any(o.text=='Waits between lines cut: 8 s of play in 4 s' for o in p.overlays) for p in ps)
+    assert mv.final_refusals(ps,[])==[]
+    ps[1].overlays[0].f1-=.1
+    assert any('no 2x label' in x for x in mv.final_refusals(ps,[]))
+    mv.steady_timing(ps,'cold');ps[1].b=9
+    assert not mv.valid_timing_group(ps,'cold')
+
+
+def test_recorded_clip_benchmark_is_recomputed_and_absent_proof_drops_the_shot(tmp_path):
+    import json
+    assert mv.rdr_bench(tmp_path)==('','')
+    root=tmp_path/'rdr-bench';root.mkdir()
+    (root/'words.json').write_text(json.dumps([[0,10,'actor'],[10,20,'words']]))
+    for name,end in [('before',12.7),('after',1.1)]:
+        (root/f'{name}.t0.json').write_text(json.dumps({'t0':100,'pos':3.05}))
+        (root/f'{name}.events.jsonl').write_text(json.dumps(_spoken('line',100,100+end))+'\n')
+    text,proof=mv.rdr_bench(tmp_path)
+    assert '12.7 s' in text and '1.1 s' in text and Path(proof).is_file()
+    stamp=Path(proof).stat().st_mtime_ns;mv.rdr_bench(tmp_path)
+    assert Path(proof).stat().st_mtime_ns==stamp
+    (root/'after.events.jsonl').write_text(json.dumps(_spoken('line',100,102))+'\n')
+    assert mv.rdr_bench(tmp_path)==('','')
+
+
+def test_new_founder_and_limit_slots_remain_final_requirements():
+    parts=[mv.Piece('identity','hook',kind='card',secs=8.5),mv.Piece('limit','outro',kind='card',secs=6)]
+    errors=mv.final_refusals(parts,[])
+    assert 'missing voice-over audio: identity' in errors and 'missing voice-over audio: limit' in errors

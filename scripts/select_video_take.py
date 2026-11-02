@@ -9,11 +9,12 @@ from pathlib import Path
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('takes',type=Path)
-    p.add_argument('name',choices=['take-A','take-B','goodbye','game2'])
+    p.add_argument('name',choices=['take-A','take-B','goodbye','game2','nav'])
     p.add_argument('source',type=Path)
     p.add_argument('--delay',type=float,required=True,help='Measured recording launch delay in seconds')
     p.add_argument('--shop-menu',nargs=2,type=float,help='Measured source-video menu interval for A')
     p.add_argument('--session-log',type=Path,help='Original session log supplying missing ready metadata')
+    p.add_argument('--clip',nargs=2,type=float,help='Reviewed source-video interval for the walking slot')
     a=p.parse_args()
     source=a.source.resolve()
     for name in ['run.mp4','run.mp4.start','events.jsonl','run.game.wav','run.voice.wav']:
@@ -21,6 +22,8 @@ def main():
             p.error(f'Missing source file: {source/name}')
     if a.name=='take-A' and (not a.shop_menu or a.shop_menu[0]>=a.shop_menu[1]):
         p.error('A selection requires a measured --shop-menu START END')
+    if a.name=='nav' and (not a.clip or not 0<=a.clip[0]<a.clip[1]):
+        p.error('Navigation selection requires a reviewed --clip START END')
     prefix=b''
     if a.session_log:
         epoch=float((source/'run.mp4.start').read_text())
@@ -50,6 +53,8 @@ def main():
     edit['recording_delay']=a.delay
     if a.shop_menu:
         edit['shop_menu']=a.shop_menu
+    if a.clip:
+        edit['clip']=a.clip
     config.pop('reject',None)
     staging=manifest.with_suffix('.json.next')
     staging.write_text(json.dumps(data,indent=2)+'\n')

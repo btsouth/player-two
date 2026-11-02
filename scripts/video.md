@@ -1,221 +1,143 @@
 # Build the Player Two demo
 
-Encode on devbox. Python 3, Pillow and ffmpeg with libass are required. The renderer opens no
-game or desktop. Inter 4.1 and its OFL license are bundled in `assets/video`; libass loads that
-folder directly, so no system font install is needed.
+Run heavy encoding on devbox. Python 3, Pillow and ffmpeg with libass are required. Inter4.1
+and its OFL license are bundled in assets/video. No game or desktop is opened by the renderer.
 
 ```sh
-python3 scripts/make_video.py takes --out round2-sample.mp4 --sample --sheet --jobs 2
-python3 scripts/make_video.py takes --out draft3d-proxy.mp4 --proxy --sheet --jobs 2
-python3 scripts/make_video.py takes --out draft3d.mp4 --sheet --jobs 2
-python3 scripts/make_video.py takes --out final.mp4 --final --sheet --jobs 2
+python3 scripts/make_video.py TAKES --out draft.mp4 --sheet --jobs 2
+python3 scripts/make_video.py TAKES --out proxy.mp4 --proxy --sheet --jobs 2
+python3 scripts/make_video.py TAKES --out final.mp4 --final --sheet --jobs 2
 ```
 
-Full: 1920x1080 at 60 fps, full-bleed Lanczos scaling, 42px request chips, 34px measured badges,
-52px plain white reply captions (80px on black), with the person’s request in a separate chip. Proxies: 960x540 at 30 fps. No FPS-counter masking.
+Full output is1920x1080 at60fps; proxies are960x540 at30fps. Gameplay fills the frame, with Lanczos
+scaling and no FPS-counter masking. Speech is plain white52px (80px on black); the person's
+request has a separate chip with a real typed/spoken label. Measured model badges are at least34px.
 
-## Takes
+## Portable takes and swaps
 
-Use `take-A.mp4`, `take-B.mp4`, `game2.mp4`, `game3.mp4`, optional `sam.mp4` and `goodbye.mp4`.
-Each has `<name>.mp4.start` (Unix recording start) and `<name>.events.jsonl` (original log).
-For other filenames, `takes.json` maps names to relative `video`, `start` and `events` paths.
-All referenced files must be included when syncing the takes folder. Symlinks may be dereferenced.
-A manifest entry with `"reject": "reason"` excludes a take. Replace all source files before
-removing it. `--sample` alone permits rejected footage for an explicitly marked style test;
-`--sample --final` is forbidden. Never submit private notifications or rejected gameplay.
+Each take has video, a recording-start Unix timestamp, original events.jsonl, and optional paired
+.game.wav/.voice.wav stems. The stems start at video zero and must cover the video. takes.json
+maps names to relative video/start/events paths and reviewed edit settings. Symlinks are fine
+when rsync dereferences them. Never change source logs or reuse timing values for another run.
 
-A and B requests are selected from their actual logs. `--pick A4=1` selects the first matching
-attempt (default last). `--clip game2=12-35` or `--clip sam=2-10` selects a continuous excerpt.
-The cutter cannot judge gameplay, privacy, spoken correctness or whether an action succeeded.
-
-## Cold opening and ending
-
-The accepted B sequence is fight narration, “How are we doing?”, “Crono, use Cyclone.”, then
-“Win this fight for me.” The picture is black from before the logged first “Fight.” through the
-choice. Every spoken line stays in order. It fades up on the actual spin, which must be measured
-from source frames, not guessed from the completed action event. The reveal and spin stay normal
-speed. Manifest settings can accelerate silent gaps at 4x and shorten only their silent middles;
-all original spoken spans remain normal speed and chronological. Every accelerated piece has a
-speed label; shortened silence also says “Silent gap shortened”. Typed requests
-stay visibly typed. Missing opening speech or unmeasured reveal is refused by final mode.
-
-Add measured settings to the take-B manifest entry, for example:
-
-```json
-{
-  "take-A": {"edit": {"recording_delay": 0.4}},
-  "take-B": {
-    "edit": {"recording_delay": 0.32, "reveal_at": 33.35,
-             "reveal_duration": 0.25, "normal_until": 35.35,
-             "gap_speed": 4, "gap_max_output": 0.3,
-             "min_gap": 0.35, "speech_pad": 0.06}
-  },
-  "edit": {"drop": ["A2"]}
-}
-```
-
-`recording_delay` corrects the measured delay between the shell timestamp and actual recorder
-start, verified against the voice stem. It adjusts log-to-video mapping without changing any
-original timestamps. Reveal values remain absolute SOURCE VIDEO seconds, independent of that
-epoch correction. Those values apply to the reviewed run, not arbitrary replacement footage. Review every new
-reveal against its frames. Use the original full session log when a per-check log omits speech
-from before the first request. Preserve original timestamps and never synthesize a missing line.
-
-The same run's final real “Won the fight…” spoken record is reserved once for the black-screen
-ending, labelled “The same fight. The result.” It is neither repeated in the opening nor dubbed.
-A missing result remains a placeholder. `goodbye.mp4` supplies the separate real closing exchange:
-logged “Goodbye.” followed by actual spoken “Bye for now.” and “Have fun.”. Missing or out-of-order
-records are refused. Until captured, that slot is explicitly labelled as an ending design.
-
-The film follows with a two-second product card and four-second RetroArch excerpt over moving map footage containing
-“Lavos is still ahead. Here’s how far we’ve got.” `vo-ahead.wav` optionally adds a spoken ahead card. No glasses story.
-Then map proof, actual walking/shop, optional SAM when usable footage exists, other games, how,
-honest limit card, real win and goodbye, then the end card. The complete Square Enix proprietary
-notice is copied verbatim from its Chrono Trigger policy into the end card, alongside the general
-publisher attribution and no-endorsement line. These notices are not a claim of contest clearance. `A3b` (“What does it look like?”) retains whole descriptive sentences
-and marks its shortened tail. No rates wall. `vo-how.wav` voices the how explanation; `vo-why` is retired.
-
-The earlier `--sample` remains a 45-second style sample based on a continuous Win excerpt; it is
-not the new full choice/delegation story. The full render is the default command.
-
-## Model evidence and SAM
-
-Only completed, logged measurements get badges. `model_s` is measured model time; local action
-seconds include walking/animation. Local classification requires empty model turns AND a recognized
-local step. Empty turns alone do not prove no model work. Scene narration is separately labelled.
-Typed requests stay visibly typed. Never claim a transcriber latency without a measured event.
-Every badge retains its source event timestamp in the evidence JSON.
-
-SAM requires `where.via == sam-3.1`; the rectangle comes only from that event's normalized `boxes`
-array, never from a centre point or Spark fallback. The app logs returned SAM boxes and queried-frame
-time. Capture a stationary camera/target around the response so a returned box remains valid on the
-recorded frame. The default display lasts at most 1.5 seconds after completion. A reviewed `rdr-sam` beat can retain the box through its last real ping, using the manifest’s measured ping windows. Keep the actual
-stereo ping. A SAM take without real logged boxes is refused by final mode.
-
-`atlas-proof.json` supplies one real `raw_place` from saved label_atlas output, the same-name
-`checked_place` with x/y, and `raw_sha256` / `checked_sha256`. The five-second sequence overlays the saved model name/icon result, human check and local
-destination on moving map footage, then leads into the actual navigation request. It is clearly a saved response,
-not a fabricated live model call; those stages are not represented as latency measurements.
-Do not include fan-made map art or source dumps in the public repo.
-
-## Audio and checks
-
-Optional `<take>.game.wav` and `<take>.voice.wav` replace the mixed recording audio. Both must
-start at video time zero and cover its duration. Voice contains microphone + Player Two; game is
-separate. The game ducks under voice (15ms attack, 220ms release, 8:1). An incomplete pair is an
-error. Premixed takes cannot be independently ducked. No added music. Accelerated gaps are silent;
-all speech stays at normal speed. Cut ramps prevent clicks. Two-pass normalization targets -14 LUFS
-and -4 dBTP before AAC; measure decoded AAC with ebur128 again. New takes have produced over2dB of reconstruction overshoot, so the decoded measurement is required.
-
-Cut/evidence JSON, caption warnings and optional sheets accompany the output. `--cut` replays a
-hand-edited cut; rebuild without it to discover new source/VO files. Cache keys include renderer,
-font, source size/mtime, captions and settings. `--final` refuses placeholders, missing how VO,
-incomplete choice/delegation opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
-sped-up speech and duration above 3:00, including after encoding. `--accept-captions` cannot bypass
-stale facts or sped-up speech. Human frame and full-speed listening checks remain essential.
-
-Completed action windows hold at least 1.2 seconds after the logged result so measured completion
-badges remain readable. Speed labels stay physically clear of request chips; shop speed labels use
-the lower-right open area, away from its quantity/item menus. Recheck placement on new games.
-
-A take can also supply `edit.shop_menu: [83.5, 87.6]` (measured absolute source-video seconds).
-While that menu is open, the request chip uses its empty lower item panel; controls, quantity,
-prices, gold and HP remain visible. Only timed overlays change, never source video/audio boundaries.
-
-## Red Dead: description, then restraint
-
-Use `rdr-look.mp4` and `rdr-dialogue.mp4` with start, events and both stems. Per-take `edit.clip`
-selects the exact continuous source interval. The description is normal-speed and any omitted
-last sentence is labelled. Choose a whole spoken sentence boundary from the actual voice stem.
-The dialogue segment refuses logged Player Two speech in its interval. It keeps BOTH stems,
-with sidechain compression disabled, so real game voices stay audible and unexpected Player Two
-speech cannot be hidden by muting its stem. Verify digital silence in that source voice window.
-
-`rdr-look.edit.notes_only_verified: true` enables “No code written for this game. One line of notes.”
-only after checking current runtime code and the actual notes file. Do not carry that flag forward
-without rechecking it. Recorded typed questions remain explicitly typed. Source timing and old/new
-build limits belong in the private QC, not a false claim that the latest code recorded an older take.
-
-`take-A.edit.speeds` may override a single action's silent-gap speed, for example `{"A5": 4}`.
-`duck: false` in resolved cut JSON preserves both stems without ducking. Retake source selection,
-clock offsets, reveal points and menu positions remain in the manifest rather than hand edits to code.
-
-## A single Monster Hunter run
-
-`game2.edit.story` selects ordered `normal` source windows and a `gap_speed`. The entire source
-interval between the first and last window remains continuous: intervening footage is accelerated,
-labelled, silent and has captions disabled. This permits a scored-out false utterance to remain in
-the source chronology without putting its claim on the soundtrack or in captions. A guard refuses
-the known false technical-counter line if it intersects any audible window. Verify the rendered
-interval itself for silence and absence of caption pixels; a plan alone is insufficient.
-
-The first window requires a real completed `mh_muse` wheel event and displays its measured seconds.
-The chapter identifies custom combat code explicitly. Its story path never inherits the generic
-no-code overlay. `unducked_windows` preserves both audio stems without sidechain compression where
-an NPC response needs to remain audible. Caption placement leaves the battle menus and party HP
-clear. Source offsets and all windows belong in the take manifest, not the public repository.
-
-A retake may set `take-B.edit.opening_line` to its actual first chosen spoken damage line instead
-of “Fight.”. It must match an original logged caption before the health request; a missing anchor
-still fails final validation. Measure the Cyclone reveal against the retake's own frames.
-
-`goodbye.edit.field: true` preserves field video for the real farewell. When goodbye and take-B
-refer to the same video and aligned epoch, the closing interval stays continuous from the earned
-win through the level-up and farewell. The goodbye request and both spoken replies are still
-validated before merging that interval. The end card follows the last actual reply.
-
-To select a reviewed A recorder folder in one command:
+The full story uses take-A, take-B, nav, game2, rdr-sam and goodbye. Missing footage remains a
+marked placeholder and blocks final mode. A reject reason in a take manifest excludes it.
 
 ```sh
-python3 scripts/select_video_take.py TAKES take-A REVIEWED_FOLDER \
+python3 scripts/select_video_take.py TAKES take-A REVIEWED_RECORDER_FOLDER \
   --delay MEASURED_SECONDS --shop-menu SOURCE_START SOURCE_END
+python3 scripts/select_video_take.py TAKES nav REVIEWED_RECORDER_FOLDER \
+  --delay MEASURED_SECONDS --clip SOURCE_START SOURCE_END
 ```
 
-It requires video/start/events/both stems, records the measured clock/menu values in takes.json,
-and makes a relative source alias so the existing dereferencing rsync remains portable. Original
-files are unchanged. Review the new plan and frames after rebuilding; do not reuse old source times.
+The selector requires run.mp4, run.mp4.start, events.jsonl and both stems. It preserves originals,
+creates a portable source alias, and changes only the manifest. An optional --session-log prepends
+the last original ready record before recording into a derived sidecar if the take omitted model
+identity. It preserves original event bytes. Never infer a backend from a request's wording.
 
-If the recorder's excerpt omitted the model identity, `--session-log ORIGINAL_EVENTS` prepends the
-last actual `ready` record before recording into a derived sidecar. Original event bytes and source
-files remain unchanged. No model identity is inferred from the wording of a request.
+recording_delay corrects measured recorder launch delay without rewriting original timestamps.
+Measure it against the actual voice waveform. Clip, menu, reveal and ping times are SOURCE VIDEO
+seconds, independent of that offset. Inspect each replacement's own frames and resolved plan.
 
-After loudness normalization the master passes a 192kHz oversampled lookahead limiter, with
-automatic makeup gain disabled, before returning to48kHz/AAC. This catches transient overshoots
-seen on new recordings. Always measure the decoded file; neither the loudnorm target nor an
-intermediate PCM ceiling is proof of the encoded peak. Shortened descriptions end on the last
-complete caption boundary, without carrying a half-second of the omitted next sentence.
+## Opening, audience, quote and ending
 
+One B run supplies damage, How are we doing, Cyclone, delegation, healing and the real win. All
+shown speech stays normal speed, in order. Black begins before the actual opening_line caption;
+reveal_at/reveal_duration/normal_until must match the recorded Cyclone spin. Only quiet gaps may
+be shortened or accelerated. The win now pays off in the opening, before the audience title.
+There is no later replay of that result. The real goodbye is a separate short field excerpt:
+logged Goodbye, actual Bye for now and Have fun, then the five-second end card.
 
-## Reviewed SAM montage and How voice slot
+The audience title holds one real field frame (identity_at), with a founder VO slot underneath.
+The complete RetroArch quote, source date, explanation of Lavos and honest still-ahead line stay
+over moving map footage. The quote is attributed to the December2019 RetroArch1.8.2 release notes.
+It is outside evidence of a gap, not a claim this prototype has beaten Lavos.
 
-A `rdr-sam` manifest entry supplies one continuous source file, its original event log, start and
-both stems. Its edit settings contain `view`, `trees`, `wagon`, `dialogue` and `how` source windows,
-plus the measured `recording_delay`. SAM clips require real `where` events with `via=sam-3.1`,
-returned boxes and numeric seconds. Geometry appears only once the result arrives. The actor
-window refuses logged Player Two speech and retains both stems without sidechain ducking.
-The one-line-notes claim requires an explicitly verified `notes_only_verified` flag.
+The full publisher notices stay intact on the end card, alongside the general ownership and
+no-endorsement line. Notices are attribution, not a claim of additional publication clearance.
+The tagline is “You choose. It reads and presses.” Input-method wording comes from the actual
+shown requests, followed by “Waits are cut and fast parts are marked.”
 
-`ping_boosts` maps each SAM beat to `[source_start, source_end, gain]` windows. These are measured
-from the actual stereo tone waveform, not inferred from the response end timestamp. Both channels
-receive the identical gain, preserving pan. Boost only the real tone; do not fabricate a longer
-or differently positioned cue. Inspect the encoded result, including both tree pings. The ducking
-filter flushes its finite input buffers with bounded padding and trims back to the actual cut,
-so a last ping or final spoken word cannot disappear at filter EOF.
+## Navigation and model evidence
 
-The How explanation sits over a separate game-only wide shot before the RDR demonstration.
-Its slot is exactly the `how` window length (5.50 seconds in Draft 3g); a longer VO is refused.
-Place `vo-how.wav` beside takes.json and rebuild. Missing How VO still blocks `--final`.
-Game-only audio is used only for illustrative map/quote/How footage, never as evidence that the
-app stayed silent. The quiet-actors proof retains both stems.
+The fair entry is a door press and is omitted as navigation proof. The nav slot reserves about12s
+for a reviewed real world-map walk at1x. It requires a logged local go_to_place result and the
+saved atlas-proof.json name/check/hash evidence. Only the single line “Muse labelled this map.
+I checked it. Local code walks it.” is displayed; coordinates and raw model output are not shown.
+The seller walk can use take-A.edit.speeds.A4=1. shop_menu changes chip placement without altering
+video/audio boundaries, keeping quantity, prices, gold and HP clear.
 
-`take-B.edit.pause_windows` supplies source intervals confirmed paused against the footage and
-application behavior. Only their intersections with shown pieces receive the explanatory chip.
-Never infer a pause from a long response or display the label across an unpaused section.
-Monster Hunter remains a replaceable `game2` manifest entry with its own measured story windows.
+Badges require completed logged measurements. Local action seconds include movement/animation;
+model_s is inference time; scene latency is labelled generation. Empty model turns alone do not
+prove local execution: a recognized local step is also required. Source timestamps are retained
+in evidence JSON. The opening keeps request chips uncluttered; local measurements remain in the
+sidecar rather than being repeated over the paused fight. pause_windows needs frame/code proof
+that those exact intervals are held for the next player request, not model deliberation.
 
+## Persistent timing disclosures
 
-Audio assembly decodes each piece before joining and trims it to that piece's actual video frame
-count. The video concat list uses those same durations. AAC packet copying across many tiny cuts
-can accumulate encoder priming and break synchronization; do not restore that shortcut. The
-master has one continuous audio clock and one final AAC tail. Verify cue timing in the whole
-film as well as isolated clips.
+Cold-open and Monster Hunter summaries stay visible throughout their montages. They are computed
+from the actual first/last source boundary and the summed output durations. The cold line states
+“Waits between lines cut: N s of play in M s”. MH states the source fight span, output duration,
+and that narration is muted in fast parts. No unreadable six-frame disclosure is relied on.
+
+Final mode checks the summary's arithmetic, common source, ordered nonoverlapping windows and
+full coverage of every piece. Removing a label, shortening it or changing its values fails. Other
+accelerated clips still require their full-duration numerical label. These are checks, not an
+exception that permits unlabelled compression.
+
+## Monster Hunter
+
+The story manifest supplies ordered normal windows, gap_speed and optional request_intro:
+[source_start, first_normal_start, speed]. The intro must contain a real logged request; it is
+explicitly accelerated/muted so a partial earlier answer is not presented as the current answer.
+The first completed mh_muse weak-point read supplies its actual duration. The visible language
+explains weak points instead of unexplained “wheel” jargon. Code written for this game takes
+turns after the read; this path never inherits a no-code claim. A Speed-versus-Power gloss explains
+the attack triangle when that advice is retained.
+
+Intervening footage stays in source order, accelerated, silent and uncaptioned. The known false
+technical-counter line is refused if it overlaps an audible window. Verify the rendered muted
+piece itself. unducked_windows retains both stems for a game character's reply. Replace video,
+start, log, stems and all reviewed windows together for a new take.
+
+## Red Dead and its benchmark
+
+rdr-sam uses one source and its original events. Edit windows are view, horse, wagon, dialogue and
+how. Horse and wagon require actual where events with via=sam-3.1, normalized boxes and measured
+seconds. Boxes appear only once the result arrives and remain through the real ping. A Spark
+fallback or a centre point is not SAM proof. The movement chip explicitly says the person walks.
+
+ping_boosts supplies measured [source_start, source_end, gain] windows. Multiply both channels
+identically to preserve pan. Never move, extend or synthesize the cue. horse_wait_cut may remove
+only checked silence and carries a steady measured wait-cut disclosure. Verify actual cue timing
+and direction in the finished master, not just its isolated clip.
+
+The short actor shot retains BOTH stems with ducking disabled and refuses logged Player Two
+speech. Its caption is a separate recorded-clip benchmark, not a claim that silence in this shot
+proves the fix. Private rdr-bench contains words.json plus before/after.events.jsonl and t0.json
+files from the same replayed source. The renderer recomputes overlap over170s, merging word gaps
+under0.35s, and only displays the12.7s/1.1s comparison when it matches. Missing or contradictory proof drops the shot. Raw benchmark video and private source dumps do not belong in the repo.
+
+## Monday voice slots and audio
+
+Put vo-intro.wav, vo-how.wav and vo-limit.wav beside takes.json, then rebuild without --cut.
+Current slot ceilings: intro8.50s, How7.00s, limit6.00s. Longer takes are refused. The exact prompts
+are stored in the cut's vo_prompt fields. Intro and How use quiet game-only illustrative footage;
+that is never used as evidence of the app's silence. The creator-testing limit remains a clean
+card, with the first-person limit line spoken over it. Missing VO still blocks final mode.
+
+The game ducks under real voice stems (15ms attack,220ms release,8:1). No added music. Accelerated
+parts are silent. Short cut ramps avoid clicks. Bounded padding flushes finite-stem sidechain
+buffers, then trims to the real cut so a last word or ping cannot disappear at EOF.
+
+Audio is decoded and trimmed per piece to its actual video frame count before joining. Video
+uses those same durations. Do not restore packet-copy AAC joins: per-clip priming accumulates.
+The master has one continuous audio clock. Two-pass loudness targets-14LUFS with headroom;
+a192kHz oversampled limiter precedes48kHz/AAC. Always measure decoded ebur128 loudness/true peak.
+
+--cut replays a resolved cut. Cache keys include renderer/font/source metadata/captions/settings.
+--final refuses placeholders, missing required VO, incomplete opening, unsupported timing/SAM,
+stale spoken facts, sped-up speech, missing time disclosures and duration above3:00, including
+after encoding. --accept-captions cannot bypass stale facts or sped-up speech. Inspect contact
+sheets, individual overlay states, source facts and full-speed sound before submission.
