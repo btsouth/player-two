@@ -1091,6 +1091,7 @@ def test_real_guide_gets_the_exact_creator_caption_and_reveal_from_its_clock():
     mv.guide_overlays([p],{'guide':t})
     assert any(o.text.startswith('Creator test. Eyes covered. Not a blind player.') for o in p.overlays)
     assert next(o.f0 for o in p.overlays if o.text=='Picture on.')==6.2
+    assert next(o.where for o in p.overlays if o.text=='Picture on.')=='picture-on'
     p.black_for=0
     with pytest.raises(ValueError,match='reveal'):
         mv.guide_overlays([p],{'guide':t})

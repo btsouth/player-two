@@ -1894,8 +1894,8 @@ def guide_overlays(parts: list[Piece], takes: dict[str,Take]) -> None:
         if not events:raise ValueError('Guide shot needs per-cycle guide events')
         if not any(o.where=='guide-test' for o in p.overlays):
             p.overlays.append(Overlay('Creator test. Eyes covered. Not a blind player.\nNo 3D autopilot. You walk.',42,'guide-test',1.3,p.out_s))
-        if not any(o.text=='Picture on.' for o in p.overlays):
-            p.overlays.append(Overlay('Picture on.',44,'bc',p.black_for+p.reveal_s,p.out_s))
+        if not any(o.text.startswith('Picture on.') for o in p.overlays):
+            p.overlays.append(Overlay('Picture on.',44,'picture-on',p.black_for+p.reveal_s,p.out_s))
         for i,e in enumerate(events):
             box=e.get('box');pan=e.get('pan');seconds=e.get('seconds');frame=e.get('frame_t')
             if box is not None and not valid_box(box):raise ValueError('Invalid logged guide box')
