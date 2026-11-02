@@ -175,3 +175,17 @@ def test_stand_probe_sorts_the_tiles():
     assert res["never"] == [(1, 3)]  # the fence's top row: tried, not got onto
     assert res["unseen"] == [(5, 5)]  # not got near: left as the survey had it
     assert res["cuts"] == [((2, 1), (1, 1))]  # both stood on, the step between shut
+
+
+def test_a_look_further_off_than_it_walks_is_looked_again():
+    from playertwo.rooms import Here, leapt
+
+    seen = (100.0, 5, 360.0, 701.0)
+    # The fair on the SNES: read 78 px up in a tenth of a second (the view matched on
+    # the other fence), then kept there 5 s.
+    assert leapt(seen, Here(5, (208, 489), 336.0, 627.0, 0.9), 100.1)
+    assert not leapt(seen, Here(5, (232, 543), 366.0, 701.0, 0.9), 100.1)  # a step
+    assert not leapt(seen, Here(5, (208, 489), 336.0, 627.0, 0.9), 100.4)  # running
+    assert not leapt(seen, Here(5, (208, 489), 336.0, 627.0, 0.9, sure=False), 100.1)
+    assert not leapt(seen, Here(6, (0, 0), 30.0, 30.0, 0.9), 100.1)  # another place
+    assert not leapt(None, Here(5, (0, 0), 30.0, 30.0, 0.9), 100.1)

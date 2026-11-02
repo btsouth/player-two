@@ -1297,6 +1297,17 @@ def to_view(feet: tuple[float, float], follow: tuple[float, float], held: tuple[
             follow[1] if held[1] and abs(feet[1] - follow[1]) > near else feet[1])
 
 
+def leapt(seen: tuple | None, now: Here, t: float) -> bool:
+    """Whether a look puts the player further from where it was surely seen a moment
+    ago (seen: when, place, x, y) than it walks, or runs, in the time: the view matched
+    on a part of the place that looks alike, not a step (SNES with RAM, the fair: read
+    78 px off in a tenth of a second, then kept there for 5 s)."""
+    if seen is None or not now.sure or now.loc != seen[1]:
+        return False
+    dt = t - seen[0]
+    return dt < 1.0 and math.dist((now.x, now.y), seen[2:]) > 32 + 160 * dt
+
+
 def on_ground(room: Room, x: float, y: float) -> bool:
     """Whether feet at x, y are on (or at the edge of) a tile the survey walked."""
     return not room.walk or any((int(y + dy) // TILE, int(x + dx) // TILE) in room.walk
@@ -1405,6 +1416,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
     trail: deque = deque()  # (when, place, x, y) over the last seconds
     best: tuple[int, int, float] = (-1, 10**6, 0.0)  # place, fewest tiles to go, since when
     last_tile: tuple[int, int] | None = None  # the walked tile it was last counted on
+    seen: tuple | None = None  # (when, place, x, y): where it was last surely seen
+    leaps = 0  # looks in a row put further off than it can have walked
 
     coming: Here | None = None  # where a way out just taken comes out, to look there first
 
@@ -1476,6 +1489,14 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                             "a scene?): look")
                 await asyncio.sleep(0.1)
                 continue
+            if leaps < 3 and leapt(seen, now, time.monotonic()):
+                # Further than it walks since a moment ago: the screen matched on a part
+                # of the place that looks alike (the fair's fences). Again, from there.
+                leaps += 1
+                continue
+            leaps = 0
+            if now.sure:
+                seen = (time.monotonic(), now.loc, now.x, now.y)
             if now.loc not in unboxed and await asyncio.to_thread(rooms.boxed, shot, now):
                 # The place shows, but a text box is over part of it (a scene, someone
                 # who stopped the player): walking can't go on till it's read.
