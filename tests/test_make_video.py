@@ -693,3 +693,17 @@ def test_full_cut_does_not_fall_back_to_the_old_unproven_silence_claim(tmp_path)
                            'rdr-dialogue':_take([],'rdr-dialogue')},{},set(),[],{'_folder':str(tmp_path)},{},{})
     assert any(p.id=='game3' and p.kind=='slate' for p in parts)
     assert not any('stays quiet' in o.text for p in parts for o in p.overlays)
+
+
+def test_final_checks_a_wait_cut_summary_even_without_acceleration():
+    ps=[mv.Piece('ask','game3',take='t',a=0,b=1),mv.Piece('reply','game3',take='t',a=1.3,b=3)]
+    mv.steady_timing(ps,'horse')
+    assert mv.final_refusals(ps,[])==[]
+    ps[1].a=1.1
+    assert 'unsupported time summary: horse' in mv.final_refusals(ps,[])
+
+
+def test_final_rechecks_benchmark_evidence_on_a_loaded_cut(tmp_path):
+    p=mv.Piece('actors','game3',take='t',a=0,b=5,captions=False,proof=str(tmp_path/'rdr-bench/verified.json'),
+               overlays=[mv.Overlay('Recorded-clip benchmark\nTalking over actors, same clip: 12.7 s before this fix, 1.1 s after.',42,'bench',0,5)])
+    assert 'unsupported benchmark caption: actors' in mv.final_refusals([p],[])

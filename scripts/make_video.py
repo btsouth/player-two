@@ -5,9 +5,9 @@
     python scripts/make_video.py TAKES --out video.mp4 --cut video.mp4.cut.json   # hand edits
     python scripts/make_video.py TAKES --out video.mp4 --final                    # no placeholders
 
-TAKES holds take-A.mp4, take-B.mp4, game2.mp4 and game3.mp4 (symlinks are fine), each with
+TAKES holds take-A.mp4, take-B.mp4, game2.mp4 and rdr-sam.mp4 (symlinks are fine), each with
 <name>.mp4.start (demo_record.sh writes it) and <name>.events.jsonl (the session log; only the
-video's time range is used), and optionally vo-why.* and vo-how.* (voice-over audio). A missing
+video's time range is used), plus nav/goodbye takes and optional vo-intro/how/limit audio. A missing
 game clip becomes a labelled placeholder. No footage belongs in the repo.
 
 Every request is found in its take's log by the run sheet's words. Its window runs from the
@@ -17,9 +17,10 @@ has one) and are burned once, per piece, from the raw take. The resolved cut goe
 <out>.cut.json; edit it and pass it back with --cut. Pieces whose settings haven't changed are
 not encoded again.
 
-The order is the one in games-plan.md: hook, why, Chrono Trigger, "not one game", how and what's
-next. The budget is Chrono Trigger about 1:55, game 2 20 to 25 s, game 3 8 to 10 s, and 3:00 in
-all. Over it, B3 goes first, then A5, then the description gets shorter.
+The opening fight pays off before the audience title and historical quote. Navigation, scene
+description and shopping lead into the general/specific explanation and other games. The limit,
+real goodbye and end card close the film. The manifest keeps source-specific timings editable;
+final mode refuses unsupported evidence or a film over 3:00 rather than cutting a spoken payoff.
 """
 from __future__ import annotations
 
@@ -1055,6 +1056,8 @@ def end_card(takes: dict[str, Take], parts: list[Piece]) -> Piece:
 def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
     """What --final won't ship."""
     out = [f"placeholder: {p.id}" for p in parts if p.kind == "slate"]
+    for group in {p.timing_group for p in parts if p.timing_group}:
+        if not valid_timing_group(parts,group):out.append(f"unsupported time summary: {group}")
     for p in parts:
         if p.id in ("c-how","identity","limit") and not p.vo:
             out.append(f"missing voice-over audio: {p.id}")
@@ -1062,6 +1065,11 @@ def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
             out.append(f"no voice-over for {p.id} (vo-why.* in the folder)")
         if any(DRAFT_MARK in str(b[0]) for b in p.blocks):
             out.append("draft rates: pass --rates")
+        for o in p.overlays:
+            if o.where=='bench':
+                text,_=rdr_bench(Path(p.proof).parent.parent)
+                if not text or o.text!='Recorded-clip benchmark\n'+text:
+                    out.append(f"unsupported benchmark caption: {p.id}")
         if p.kind == "clip" and p.speed != 1 and not any(
                 o.text == f"{p.speed:g}x" and o.f0 <= 0.01 and o.f1 >= p.out_s - 0.05
                 for o in p.overlays) and not (p.timing_group and valid_timing_group(parts,p.timing_group)):
@@ -1942,7 +1950,8 @@ def main() -> None:
     # Remove legacy overlays before rebuilding the floating chips from source evidence.
     for piece in parts:
         if piece.kind == "clip":
-            piece.overlays = [o for o in piece.overlays if o.text not in (LOWER_A4, LOWER_B) and o.where != "trace" and o.where != "draft"]
+            piece.overlays = [o for o in piece.overlays if o.text not in (LOWER_A4, LOWER_B)
+                              and (not o.where.startswith('trace') or o.where=='trace-mh') and o.where != "draft"]
     for piece in parts:
         if piece.kind == "clip" and not piece.layout:
             piece.layout = "fight" if takes[piece.take].top else "map"
