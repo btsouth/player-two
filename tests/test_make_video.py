@@ -189,13 +189,13 @@ def test_final_refuses_placeholders_voice_over_labels_and_draft_rates():
     parts, _dropped, warnings = _plan(_events())
     refused = " | ".join(mv.final_refusals(parts, warnings))
     assert "placeholder: game2" in refused and "placeholder: game3" in refused
-    assert "voice-over" in refused and "draft rates" in refused
+    assert "voice-over" in refused and "last-line-missing" in refused
 
 
 def test_the_quote_and_the_honest_lines_are_on_cards():
     parts, _dropped, _warnings = _plan(_events())
     words = " ".join(str(b[0]) for p in parts for b in p.blocks)
-    assert "What if you could play by asking?" in words
+    assert "nor defeat Lavos in Chrono Trigger" in words
     assert "Lavos is still ahead" in words and "No blind-player testing yet" in words
     assert "Muse understands scenes" in words and "common actions" in words
     assert "works out what you want" not in " ".join(
@@ -219,7 +219,7 @@ def test_final_refuses_a_speed_up_without_its_label():
 def test_captions_at_the_top_clear_the_games_message_bar():
     take = _take([{"t": 1.0, "kind": "heard", "text": "hi", "typed": True}], "take-B", top=True)
     head = mv.ass_text(take)
-    assert "PlayResX: 1920" in head and "368,64,30,1" in head
+    assert "PlayResX: 1920" in head and "Style: P2,Inter,48" in head
     assert "DejaVu" not in head
 
 
@@ -247,7 +247,7 @@ def test_evidence_never_guesses_a_model_from_request_words():
     assert report[0]["layer"] == "Local action"
     assert "SAM" not in report[0]["layer"]
     assert report[0]["badge_from"] == 2
-    assert parts[0].overlays[1].f1 == 2  # no completed measurement before it completed
+    assert parts[0].overlays[0].f1 == 2  # no completed measurement before it completed
 
 
 def test_spark_badge_requires_logged_model_identity_and_measured_turns():
@@ -277,13 +277,34 @@ def test_empty_turns_and_no_steps_do_not_prove_a_local_answer():
 
 def test_missing_fight_gets_a_visible_placeholder_not_a_silent_omission():
     parts, _, _ = _plan(_events())
-    assert any(p.id == "missing-fight" and p.kind == "slate" for p in parts)
-    assert "placeholder: missing-fight" in mv.final_refusals(parts, [])
+    assert any(p.id == "cold-missing" and p.kind == "slate" for p in parts)
+    assert "placeholder: cold-missing" in mv.final_refusals(parts, [])
 
 
-def test_why_transcript_survives_replacing_the_silent_vo_stand_in():
-    parts, _, _ = mv.make_plan({"take-A": _take(_events())}, {}, set(), mv.DRAFT_RATES,
-                               {"why": "vo-why.wav"}, {"why": 8}, {})
-    why = next(p for p in parts if p.id == "why")
-    assert any("Games hide their choices" in o.text for o in why.overlays)
-    assert all(o.text != mv.VO_LABEL for o in why.overlays)
+def test_cold_open_keeps_time_continuous_and_unsped_through_reveal():
+    es=[{"t":1,"kind":"heard","text":"What are we fighting?","typed":True},
+        _spoken("Three imps.",2,4),
+        {"t":6,"kind":"heard","text":"Win this fight for me.","typed":True},
+        _spoken("Okay, I'll take this fight.",6.1,8),
+        _spoken("Won.",24,25), {"t":25,"kind":"agent","seconds":19,"turns":[],"steps":[]}]
+    take=_take(es,"take-B",30,True)
+    parts,warnings=mv.cold_open(take)
+    assert not warnings and parts[0].speed==1 and parts[0].out_s==15
+    assert parts[0].black_for==13
+    assert all(abs(a.b-b.a)<0.001 for a,b in itertools.pairwise(parts))
+    mv.evidence_overlays(parts,{"take-B":take})
+    words=" ".join(o.text for p in parts for o in p.overlays)
+    assert "What are we fighting?" in words and "Win this fight for me." in words
+
+
+def test_sam_overlay_requires_actual_sam_box_not_a_centre_or_fallback():
+    es=[{"t":2,"kind":"where","via":"muse-spark","boxes":[[.1,.2,.3,.4]]},
+        {"t":3,"kind":"where","via":"sam-3.1","points":[[.5,.5]]}]
+    take=_take(es)
+    p=mv.Piece("p","ct",take="take-A",a=0,b=5)
+    mv.sam_boxes([p],{"take-A":take})
+    assert p.overlays==[]
+    take.events.append({"t":4,"kind":"where","via":"sam-3.1","boxes":[[.1,.2,.3,.4]]})
+    mv.sam_boxes([p],{"take-A":take})
+    assert len(p.overlays)==1 and p.overlays[0].where=="box"
+    assert p.overlays[0].f0==4
