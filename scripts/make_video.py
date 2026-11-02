@@ -399,7 +399,7 @@ def cut_line(line: str, take: Take, pick: int | None, max_talk: float | None) ->
     left = 0.0
     if max_talk is not None:
         own, left = talk_cut(own, max_talk)
-    end = (own[-1][1] if own else heard_t + 3.0) + 0.5
+    end = (own[-1][1] if own else heard_t + 3.0) + (0 if left else 0.5)
     if done is not None and left == 0:
         end = max(end, done + 1.2)  # let the completed action's real timing remain readable
     start = heard_t - _lead(take, heard_t, event)
@@ -1571,7 +1571,8 @@ def normalize_mix(joined: Path, out: Path, work: Path) -> None:
     af = ("loudnorm=I=-14:TP=-4:LRA=9:linear=true:"
           f"measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:"
           f"measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}:"
-          f"offset={stats['target_offset']}")
+          f"offset={stats['target_offset']},aresample=192000,"
+          "alimiter=limit=0.707945784:level=false:attack=5:release=50:latency=true,aresample=48000")
     _ff("-i", str(joined), "-c:v", "copy", "-af", af, "-ar", "48000", "-c:a", "aac",
         "-b:a", "192k", "-movflags", "+faststart", str(out))
 

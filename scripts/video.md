@@ -178,3 +178,9 @@ files are unchanged. Review the new plan and frames after rebuilding; do not reu
 If the recorder's excerpt omitted the model identity, `--session-log ORIGINAL_EVENTS` prepends the
 last actual `ready` record before recording into a derived sidecar. Original event bytes and source
 files remain unchanged. No model identity is inferred from the wording of a request.
+
+After loudness normalization the master passes a 192kHz oversampled lookahead limiter, with
+automatic makeup gain disabled, before returning to48kHz/AAC. This catches transient overshoots
+seen on new recordings. Always measure the decoded file; neither the loudnorm target nor an
+intermediate PCM ceiling is proof of the encoded peak. Shortened descriptions end on the last
+complete caption boundary, without carrying a half-second of the omitted next sentence.

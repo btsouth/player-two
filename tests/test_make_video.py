@@ -566,3 +566,11 @@ def test_fair_description_keeps_its_real_reply_after_a_two_second_location_pause
                 _spoken("Striped stalls with fruit.",7.1,10)],"take-A",20)
     cut=mv.cut_line("A3b",take,None,12)
     assert cut.b==10.5
+
+
+def test_shortened_description_ends_before_the_next_spoken_sentence():
+    take=_take([{"kind":"heard","t":1,"text":"What does it look like?","typed":True},
+                _spoken("Leene Square.",2,3),_spoken("Striped stalls and fruit.",5.1,8),
+                _spoken("An omitted character description.",8,18)],"take-A",25)
+    cut=mv.cut_line("A3b",take,None,7)
+    assert cut.left_out>0 and cut.b==8
