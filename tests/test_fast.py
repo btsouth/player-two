@@ -256,3 +256,27 @@ def test_a_night_at_the_inn_in_a_line():
         "Crono 70/70 HP, 8/8 MP; Marle 65/65 HP, 12/12 MP (everyone full).") == (
         "Rested for 10 gold, 390 left. Everyone's at full health.")
     assert fast.rested_line("Stayed the night. Now: HP not read.") == ""
+
+
+def test_observed_voice_actor_and_use_homophones():
+    for words in ("Chrono, use Cyclone.", "Chrono Cyclone.", "Crono, you Cyclone.",
+                  "Chrono, you Cyclone."):
+        assert fast.battle_request(words) == Intent("Crono", "tech", "Cyclone", "")
+    # No fuzzy enemy, target or ability guessing; unknown requests stay with Muse.
+    for words in ("crown use cyclone", "Crono you unknown", "Crono you Cyclone and attack",
+                  "Chrono you Cyclone on the middle one", "you Cyclone", "Chrono Trigger"):
+        assert fast.battle_request(words) is None
+
+
+def test_ct_transcription_bias_is_game_scoped():
+    from playertwo.app import game_keywords
+    assert game_keywords("Chrono Trigger") == [
+        "Chrono", "Trigger", "Crono", "Cyclone", "Leene", "Potions"]
+    assert game_keywords("Monster Hunter Stories 3") == ["Monster", "Hunter", "Stories"]
+
+
+def test_repeated_spoken_goodbye_only_quits_for_the_whole_request():
+    from playertwo.app import local_action
+    assert local_action("goodbye. goodbye.") == "quit"
+    assert local_action("goodbye, don't quit") is None
+    assert local_action("say goodbye goodbye") is None

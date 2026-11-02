@@ -10,17 +10,14 @@ MON=${1:-DP-2}
 OUT=${2:-$HOME/Videos/player-two/take-$(date +%Y%m%d-%H%M%S).mp4}
 mkdir -p "$(dirname "$OUT")"
 P2_APP=$(gpu-screen-recorder --list-application-audio 2>/dev/null | grep -m1 -i -E 'python|player' || true)
-MIX="default_output"
-GAME="default_output"
-VOICE="default_input"
-if [ -n "$P2_APP" ]; then
-  GAME="app-inverse:$P2_APP"
-  VOICE="app:$P2_APP"
-  [ "${DEMO_MIC:-1}" = 0 ] || VOICE="$VOICE|default_input"
-elif [ "${DEMO_MIC:-1}" = 0 ]; then
-  echo "Player Two isn't making sound yet, so its voice can't get its own track" >&2
-  VOICE=""
+if [ -z "$P2_APP" ]; then
+  echo "Player Two's audio stream wasn't found. Start it, let it speak, and retry." >&2
+  exit 1
 fi
+MIX="default_output"
+GAME="app-inverse:$P2_APP"
+VOICE="app:$P2_APP"
+[ "${DEMO_MIC:-1}" = 0 ] || VOICE="$VOICE|default_input"
 [ "${DEMO_MIC:-1}" = 0 ] || MIX="default_output|default_input"
 # The captions line up with the video from this moment (the recorder starts within ~0.3 s).
 date +%s.%N > "$OUT.start"

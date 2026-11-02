@@ -24,7 +24,16 @@ from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
-from .prompts import BATTLE_START, PLACE_FEEL, PLACE_SAID, VOICE_NOW, VOICE_SPACED, VOICED_GAME
+from .prompts import (
+    BATTLE_START,
+    JUST_HAPPENED,
+    PLACE_FEEL,
+    PLACE_SAID,
+    VOICE_NOW,
+    VOICE_SPACED,
+    VOICED_GAME,
+    WHO_TALKS,
+)
 from .screen import (
     Capture,
     CaptureError,
@@ -62,6 +71,11 @@ LOCAL = [
       r"|(tell me )?what it looks like( (here|now|in here))?"
       r"|paint (me |us )?(a|the) picture( (of (it|this|this place|the scene|where (i|we) am"
       r"|where (we|i) are)))?|set the scene"), "atmosphere"),
+    # From the last few looks at the game, not just this one.
+    ((r"what (just )?happened( (just now|there|then))?|what did (i|we) (just )?miss"),
+     "just_happened"),
+    ((r"who'?s (talking|speaking)( (now|right now))?|who is (talking|speaking)( (now|right now))?"
+      r"|who said that"), "who_talks"),
     # Inside a place the room survey knows: who and what is round the player, from the
     # survey (no model); elsewhere, the screen described.
     ((r"who'?s (here|in here|around( here| me| us)?|nearby|near me|close by|close)"
@@ -94,7 +108,7 @@ LOCAL = [
     (r"stop narrating|pause (the )?narration|pause narrating|stop describing", "pause"),
     (r"start narrating|keep narrating|resume (the )?narration|resume narrating", "resume"),
     (r"(show|open) (the |your )?(player two )?window", "show"),
-    ((r"good ?bye|bye( bye)?|(quit|exit|close|turn off|shut down)"
+    ((r"good ?bye(?: good ?bye)?|bye( bye)?|(quit|exit|close|turn off|shut down)"
       r" (player two|yourself)|turn yourself off|that'?s all for (now|today)"), "quit"),
 ]
 LOCAL_RE = [(re.compile(p), action) for p, action in LOCAL]
@@ -229,7 +243,10 @@ def trouble_words(exc: BaseException) -> tuple[str, str]:
 
 def game_keywords(name: str) -> list[str]:
     """Words from the game's name that help speech recognition ("Persona", "Golden")."""
-    return [w for w in re.findall(r"[A-Za-z][\w']+", name) if len(w) > 2][:8]
+    words = [w for w in re.findall(r"[A-Za-z][\w']+", name) if len(w) > 2][:8]
+    if "chrono trigger" in name.lower():
+        words += ["Crono", "Cyclone", "Leene", "Potions"]
+    return words
 
 
 HUD_WORDS = {"low": "{name} low.", "critical": "{name} critical!",
@@ -346,6 +363,8 @@ class Session:
         self._hints: dict[str, str] = {}
         # When Player Two was speaking lately, as [start, end] times.
         self.spans: deque[list[float]] = deque(maxlen=64)
+        # The last few looks at the game, some seconds apart (see _keep_look).
+        self.looks: deque[Frame] = deque(maxlen=4)
         # The speech (by when it began) and how many "Player Two, stop"s in it were acted on.
         self.stop_seen: tuple[float, int] = (0.0, 0)
         self.hands_lock = asyncio.Lock()
@@ -850,6 +869,9 @@ class Session:
             return  # never over the player; the newest screen waits until they're done
         if time.monotonic() < self.error_until:
             return
+        if self.describing is not None and self.narrating is self.describing \
+                and not self.voice.idle():
+            return  # the player asked: they hear the answer out, even over a new scene
         frame, change = self.pending
         if self._reads(frame):
             if self.read_t < frame.t - self.watcher.settle_s:
@@ -1084,19 +1106,40 @@ class Session:
         async for d in self.narrator.describe(frame, place):
             yield d
 
+    LOOK_EVERY_S = 5.0
+
+    def _keep_look(self, frame: Frame) -> None:
+        """What was on screen lately, for "what just happened?"."""
+        if not self.looks or frame.t - self.looks[-1].t >= self.LOOK_EVERY_S:
+            self.looks.append(frame)
+
+    async def _answer_gap(self) -> bool:
+        """Before each sentence of an answer: a gap in the game's speech, if one comes soon.
+        The player asked, so it's said either way."""
+        end = time.monotonic() + self.GAP_MAX_S
+        while self._ears_on() and self.ears.speaking() and time.monotonic() < end:
+            await asyncio.sleep(0.05)
+        return True
+
     def _start_narration(self, frame: Frame, describe: bool = False,
-                         atmosphere: bool = False) -> None:
+                         atmosphere: bool = False, ask: str = "") -> None:
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
-        if describe or atmosphere:
-            source = "atmosphere" if atmosphere else "describe"
+        if describe or atmosphere or ask:
+            source = "looks" if ask else "atmosphere" if atmosphere else "describe"
+
+            def answer():
+                if ask:
+                    n = 2 if ask == WHO_TALKS else 4
+                    last = [f for f in self.looks if frame.t - f.t > 1.0][-(n - 1):]
+                    return self.narrator.from_looks([*last, frame], ask)
+                return self._atmosphere(frame) if atmosphere else self._describe(frame)
 
             async def run():
                 self.voice.stop()
                 t = time.monotonic()
                 try:
-                    text = await self.voice.say_stream(
-                        self._atmosphere(frame) if atmosphere else self._describe(frame))
+                    text = await self.voice.say_stream(answer(), gate=self._answer_gap)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
@@ -1114,6 +1157,7 @@ class Session:
             t = time.monotonic()
             try:
                 frame = await self.grab_now()
+                self._keep_look(frame)
             except GameHidden:
                 self.update_game()  # still open: no "the game closed"
                 await asyncio.sleep(1.0)
@@ -2027,14 +2071,15 @@ class Session:
                 await self.announce(text, interrupt=True)
                 return
             await self._local("describe")
-        elif action in ("describe", "atmosphere"):
+        elif action in ("describe", "atmosphere", "just_happened", "who_talks"):
             try:
                 frame = await self.grab_now()
             except Exception as exc:  # noqa: BLE001
                 self.trouble(exc, action, answer=True)
                 return
+            ask = {"just_happened": JUST_HAPPENED, "who_talks": WHO_TALKS}.get(action, "")
             self._start_narration(frame, describe=action == "describe",
-                                  atmosphere=action == "atmosphere")
+                                  atmosphere=action == "atmosphere", ask=ask)
         elif action == "check":
             await self.announce(self.self_check())
         elif action == "help":
