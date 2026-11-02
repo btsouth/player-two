@@ -12,4 +12,4 @@ These are wall-clock stream measurements, not server compute time or last-word-t
 
 A corresponding `model_stage` event identifies Muse Voice Transcribe explicitly. The video pipeline displays its measured duration as `Stream … s`. Older logs without a stage do not acquire an inferred transcription badge.
 
-An urgent named stop can execute from a partial transcript before the stream finishes. That early `heard` event has no invented completed duration; the completed stage follows when the final transcript arrives. Typed requests carry no transcription duration.
+An urgent named stop can execute from a partial transcript before the stream finishes. That early `heard` event retains its measured audio start but has no invented completed duration; the completed stage follows when the final transcript arrives. Typed requests carry no transcription duration.

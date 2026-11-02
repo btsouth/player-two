@@ -329,6 +329,7 @@ async def test_partial_stop_does_not_invent_a_completed_asr_time(monkeypatch):
     await asyncio.sleep(0)
     first = next(e for e in s.events.recent if e["kind"] == "heard")
     assert "transcribe_s" not in first
+    assert "utterance_started_at" in first
     timing = {"transcribe_s": 1.5, "transcribe_finalize_s": 0.1, "transcribe_audio_s": 1.4}
     stages = []
     emit = s.events.emit

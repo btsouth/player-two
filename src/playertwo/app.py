@@ -1526,6 +1526,9 @@ class Session:
             return False
         self.stop_seen = (started, len(found))
         self.voice.cue("heard")
+        if timing is None:
+            # The audio start is known even when an urgent partial acts before final ASR.
+            timing = {"utterance_started_at": round(started + time.time() - time.monotonic(), 4)}
         self._heard("stop", timing, raw=text)
         return True
 
