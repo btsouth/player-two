@@ -1603,9 +1603,10 @@ class Session:
             if said is not None and echo_possible and self.echo(text, named=True):
                 said = None
             elif (said is None and text and not (echo_possible and self.echo(text))
-                  and self.open_ear(started) and local_action(text) != "stop"):
-                # A game's bare "stop" is indistinguishable from the player's:
-                # cancellation always needs the name, even during a question.
+                  and self.open_ear(started)
+                  and (local_action(text) != "stop" or started < self.follow_until)):
+                # Cancellation needs an explicit wake, not merely a busy action or
+                # an answer window. A name-only call invites the next request too.
                 said = text  # an answer or an explicitly invited follow-up
                 # Heard without its name: over speakers that could be the game.
                 self.unnamed_answer = self.answer is not None and not self.answer.done()

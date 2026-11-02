@@ -398,3 +398,11 @@ async def test_a_bare_answer_keeps_its_unaddressed_warning_for_the_agent(monkeyp
     assert answer.startswith("Three.")
     assert 'heard hands-free without "Player Two"' in answer
     assert "for anything hard to undo, ask again" in answer
+
+
+async def test_stop_after_an_explicit_name_only_call_is_still_addressed(monkeypatch):
+    s = session(monkeypatch)
+    await heard(s, "Player Two.")
+    assert s.follow_until > time.monotonic()
+    await heard(s, "Stop.")
+    assert s.handled == ["Stop."]
