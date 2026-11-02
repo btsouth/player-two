@@ -342,6 +342,35 @@ async def test_finds_nobody_when_the_d_pad_moves_nothing(lag):
     assert await find_me(slow(world, lag), world.steer) is None
 
 
+async def test_pacing_at_slow_capture_is_not_player_motion(monkeypatch):
+    """Sparse samples can alias independent motion to the held direction. Exercise
+    capture rates and initial phases without relying on CI runner scheduling."""
+    from types import SimpleNamespace
+
+    from playertwo import explore
+
+    clock = [0.0]
+
+    async def yield_only(_seconds):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(explore, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(explore, "asyncio", SimpleNamespace(sleep=yield_only))
+    for capture_seconds in (0.16, 0.31, 0.08):
+        for phase in range(20):
+            world = Crowd()
+            world.text_box = True
+            world.t = phase
+            clock[0] = 0.0
+
+            async def grab():
+                clock[0] += capture_seconds
+                return await world.grab()
+
+            assert await find_me(grab, world.steer) is None, (capture_seconds, phase)
+            assert world.stick is None
+
+
 async def test_the_agent_remembers_what_it_learned_about_a_game(tmp_path):
     import json
     from types import SimpleNamespace

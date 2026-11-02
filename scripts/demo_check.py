@@ -976,8 +976,9 @@ def cmd_run(a: argparse.Namespace) -> int:
         ok = ok and all(r.ok for r in results)
         all_results = latest_takes(store, take, results)
     write_report(all_results, report, "Rehearsal of the Chrono Trigger takes", extra)
+    stamp = time.localtime()
     write_rates(all_results, report.with_name("check-rates.txt"),
-                f"Measured on live Steam, {time.strftime('%b %-d')}:")
+                f"Measured on live Steam, {time.strftime('%b', stamp)} {stamp.tm_mday}:")
     print(f"\n{summary(all_results)}\n\n{report}")
     for line in extra:
         print(line)

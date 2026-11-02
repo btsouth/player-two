@@ -270,7 +270,14 @@ async def find_me(grab: Callable[[], Awaitable[Image.Image]],
             scrolled += (sx, sy)
             frames += 1
             prev = g
-        return total / max(frames, 1), scrolled
+        if frames < 2:
+            # One difference image cannot establish that motion starts/stops with
+            # input. At slow capture it can alias an independently pacing person.
+            # Abstain rather than hold a direction longer to collect more frames.
+            if log is not None:
+                log("find_me: too few captured frames to verify controlled motion")
+            raise _Stopped
+        return total / frames, scrolled
 
     async def taps(there: float, back: float) -> dict:
         """Tap there, rest, tap back, rest: what moved each way, and how the view went."""

@@ -73,3 +73,12 @@ Python interpreter, preserving the subprocess integration test and all order/res
 
 These repairs need exact-candidate Linux/Windows CI and repeated devbox suite results. They do
 not establish live Steam acceptance of the changed walker; that remains a separate check.
+
+At the first repair checkpoint (d1163ef), the full devbox suite passed 602 tests with 23 skipped;
+GitHub Linux also passed, and the Windows room tests passed. Windows exposed two further issues:
+the demo-check report used Unix-only `strftime('%-d')`, and a sparse-capture player-finding probe
+could mistake a pacing NPC for the player. Date formatting now uses the numeric day directly.
+The player finder now abstains if a probe segment has fewer than two difference frames, rather
+than inferring controlled motion from one sample or extending the held input. A virtual-clock
+regression reproduced the false identification at a specific pacing phase before that repair;
+it sweeps three capture rates and twenty initial phases. Existing real-time lag tests remain.

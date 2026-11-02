@@ -225,7 +225,15 @@ def test_report_keeps_the_latest_of_each_take(tmp_path):
                                               "“What are we fighting?” 1/1"]
 
 
-def test_a_live_run_sends_every_line_in_order_and_judges_them(tmp_path):
+def test_a_live_run_sends_every_line_in_order_and_judges_them(tmp_path, monkeypatch):
+    strftime = dc.time.strftime
+
+    def portable_date(fmt, *args):
+        if "%-" in fmt:
+            raise ValueError("Unix-only date format")
+        return strftime(fmt, *args)
+
+    monkeypatch.setattr(dc.time, "strftime", portable_date)
     log = tmp_path / "events.jsonl"
     log.touch()
     sent = tmp_path / "sent.txt"
