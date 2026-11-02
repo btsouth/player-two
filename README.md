@@ -67,8 +67,8 @@ back through the title and loaded the last save without being asked. One more ru
 because the launch script failed before the fight started. Completed tasks can still fail the
 narration timing checks: all six purchase runs did. These counts measure completion, not speech
 quality. Just before these runs, on a slightly older build, a purchase wandered for 65 s by the
-seller and said nothing, so the walker was changed to give up sooner. This is a small sample on one save, not a general success rate. Earlier
-builds lost 3/3 boss attempts.
+seller and said nothing, so the walker was changed to give up sooner. This is a small sample on
+one save, not a general success rate. Earlier builds lost 3/3 boss attempts.
 
 ## Try it
 
@@ -254,12 +254,12 @@ these commands, with behavior dependent on the game:
 | Say | What happens |
 |---|---|
 | a question or request about the game | Player Two attempts to answer or act using the available tools |
-| "Player Two, ..." (hands-free) | the same, with no key |
+| "Player Two, ..." (hands-free) | the same without pressing the talk key; an API key is still needed |
 | "what's on the screen?" / "look around" | a spoken tour: what it's like, who and what is around you, the ways out |
 | "what does it look like?" / "what's the mood?" | a few sentences on the setting, light, colours and mood |
 | "where is the door?" | where it is from your character, with a short sound from that side |
-| "take me to the stairs" / "go talk to her" | walks your character there (2D games) |
-| "next" | presses A and reads the next line, without waiting for the model |
+| "take me to the stairs" / "go talk to her" | attempts to walk there in supported 2D scenes |
+| "next" | presses A and reads the next line; the Chrono Trigger reader can do this locally, other screens need the model |
 | "repeat" | says the last line again |
 | "stop" / "cancel that" | stops talking, and stops a running command |
 | "slower" / "faster" | its speaking speed |
