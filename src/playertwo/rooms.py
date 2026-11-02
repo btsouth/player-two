@@ -1840,7 +1840,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     f"{path[1]} ({stalls}){f' by {blocker.name}' if blocker else ''}")
                 await step_aside(rooms, room, here, a, stalls, goals, steer)
                 best = (here.loc, 10**6, now_t)
-                if stalls > 12:
+                # Beside what it came for, more tries are only silence: tell the player
+                # (live, Nov 2: 65 s wandering by the fair's seller, nothing said).
+                if stalls > (4 if by_spot else 12):
                     return (f"blocked: can't get through to {toward} from "
                             f"{tile} in {rooms.name(here.loc)}")
                 continue
@@ -1870,7 +1872,9 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                 await step_aside(rooms, room, here, a, stalls, goals, steer)
                 stuck_t = now_t
                 trail.clear()
-                if stalls > 12:
+                # Beside what it came for, more tries are only silence: tell the player
+                # (live, Nov 2: 65 s wandering by the fair's seller, nothing said).
+                if stalls > (4 if by_spot else 12):
                     return (f"blocked: can't get through to {toward} from "
                             f"{tile} in {rooms.name(here.loc)}")
             await asyncio.sleep(0.02)
