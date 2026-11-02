@@ -163,3 +163,14 @@ still fails final validation. Measure the Cyclone reveal against the retake's ow
 refer to the same video and aligned epoch, the closing interval stays continuous from the earned
 win through the level-up and farewell. The goodbye request and both spoken replies are still
 validated before merging that interval. The end card follows the last actual reply.
+
+To select a reviewed A recorder folder in one command:
+
+```sh
+python3 scripts/select_video_take.py TAKES take-A REVIEWED_FOLDER \
+  --delay MEASURED_SECONDS --shop-menu SOURCE_START SOURCE_END
+```
+
+It requires video/start/events/both stems, records the measured clock/menu values in takes.json,
+and makes a relative source alias so the existing dereferencing rsync remains portable. Original
+files are unchanged. Review the new plan and frames after rebuilding; do not reuse old source times.
