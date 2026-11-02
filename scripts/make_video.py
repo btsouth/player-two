@@ -541,6 +541,11 @@ def make_plan(takes: dict[str, Take], picks: dict[str, int], no_code: set[str],
              Piece("c-rates", "outro", "rates", "card", secs=8.0, blocks=rates_blocks(rates))]
     if "how" not in vo:
         outro[0].overlays.append(Overlay(VO_LABEL, 26, "tl", 0, how_s))
+    missing_fight = None if "take-B" in takes else Piece(
+        "missing-fight", "ct", "fight", "slate", secs=50.0, blocks=[
+            ("PLACEHOLDER: Chrono Trigger fight", 64, True),
+            ("Fresh take required / older health narration is incorrect", 40, False)])
+    ct_extra = fight_card.out_s + (missing_fight.out_s if missing_fight else 0)
     fixed = sum(p.out_s for p in [*hook, why, *games, *outro]) + END_S
     # The budget, in the plan's order.
     drop = set(force_drop)
@@ -549,12 +554,12 @@ def make_plan(takes: dict[str, Take], picks: dict[str, int], no_code: set[str],
         warned: list[str] = []
         lines = ct_pieces(takes, picks, drop, max_talk, warned)
         secs = {k: sum(p.out_s for p in v) for k, v in lines.items()}
-        more = fit_budget(secs, fight_card.out_s, fixed)
+        more = fit_budget(secs, ct_extra, fixed)
         if more:
             drop |= set(more)
             lines = ct_pieces(takes, picks, drop, max_talk, warned)
             secs = {k: sum(p.out_s for p in v) for k, v in lines.items()}
-        ct = fight_card.out_s + sum(secs.values())
+        ct = ct_extra + sum(secs.values())
         if ct <= CT_LIMIT and ct + fixed <= TOTAL_LIMIT:
             break
     warnings += warned
@@ -562,6 +567,8 @@ def make_plan(takes: dict[str, Take], picks: dict[str, int], no_code: set[str],
     for line in LINES:
         if line == "B1":
             ct_parts.append(fight_card)
+            if missing_fight:
+                ct_parts.append(missing_fight)
         ct_parts += lines.get(line, [])
     parts = [*hook, why, *ct_parts, *games, *outro]
     parts.append(end_card(takes, parts))
@@ -843,7 +850,7 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     if stems:
         # Voice stem contains Player Two + the microphone; the game stem contains only game.
         a = (f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}asplit[voice][side];"
-             f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}"
+             f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}anull"
              "[game];[game][side]sidechaincompress=threshold=0.025:ratio=8:"
              "attack=15:release=220[duck];[duck][voice]amix=inputs=2:normalize=0:"
              f"duration=first,volume={gain}")
@@ -1030,7 +1037,7 @@ def load_take(folder: Path, name: str, top: bool) -> Take | None:
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     config = manifest.get(name, {})
     video = folder / config.get("video", f"{name}.mp4")
-    if not video.exists():
+    if config.get("reject") or not video.exists():
         return None
     duration = probe_s(video)
     stems = [video.with_suffix(x) for x in (".game.wav", ".voice.wav")]

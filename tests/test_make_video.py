@@ -273,3 +273,9 @@ def test_empty_turns_and_no_steps_do_not_prove_a_local_answer():
     result = mv.evidence_overlays([mv.Piece("p", "ct", take="take-A", a=0,b=5)],
                                   {"take-A": _take(es)})
     assert result[0]["layer"] == "Player Two"
+
+
+def test_missing_fight_gets_a_visible_placeholder_not_a_silent_omission():
+    parts, _, _ = _plan(_events())
+    assert any(p.id == "missing-fight" and p.kind == "slate" for p in parts)
+    assert "placeholder: missing-fight" in mv.final_refusals(parts, [])

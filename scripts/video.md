@@ -59,3 +59,7 @@ speed-ups, stale health facts, sped-up speech and a duration above three minutes
 encoding). The deprecated `--accept-captions` cannot bypass stale facts or sped-up speech.
 A final render still needs human viewing and listening. Check the contact sheet, every caption
 state, every model badge and final loudness; a passing script cannot certify the video.
+
+A manifest entry with `"reject": "reason"` explicitly excludes that take. A missing/rejected
+fight becomes a visible placeholder, never a silent omission. Remove `reject` only when the video,
+log and start timestamp have all been replaced with an accepted run.
