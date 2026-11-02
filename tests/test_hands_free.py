@@ -422,3 +422,75 @@ async def test_an_obviously_truncated_action_is_not_sent_to_the_agent(monkeypatc
     await heard(s, "Player Two, attack the one on the left.")
     await heard(s, "Player Two, attack A.")
     assert s.handled == ["attack the one on the left", "attack A"]
+
+
+def test_damaged_names_need_a_command_at_the_start():
+    from playertwo.listen import wake_match
+    for name in ('Two', 'Too', '2', 'There too', 'Layer two', 'Prayer two', 'Play two', 'Player,'):
+        match = wake_match(f'{name} read this menu.')
+        assert match and match[0] == 'read this menu' and match[2]
+    assert addressed('two paused the game.') == 'paused the game'
+    for text in ('Two shadows block the gate', 'Two of them left', 'There too', 'Two',
+                 'The game says two read this menu', 'A prayer two read this menu',
+                 'Player read this menu', 'There too, shadows wait'):
+        assert addressed(text) is None, text
+
+
+async def test_damaged_names_are_logged_and_still_subject_to_echo(monkeypatch):
+    s = session(monkeypatch)
+    await heard(s, 'Two, read this menu.')
+    event = next(e for e in s.events.recent if e['kind'] == 'heard')
+    assert s.handled == ['read this menu']
+    assert event['wake_form'] == 'Two' and event['wake_damaged'] is True
+    s.handled.clear()
+    s.events.emit('say', text='Two, read this menu.', source='narrator')
+    spoke(s, ago=2, length=2)
+    await heard(s, 'Two, read this menu.', ago=1.5, length=1)
+    assert s.handled == []
+    s.events.emit('say', text='Two, stop.', source='narrator')
+    await heard(s, 'Two, stop.', ago=1.5, length=1)
+    assert s.handled == []
+
+
+def test_soft_onset_keeps_twelve_frames_without_moving_vad_onset(monkeypatch):
+    from playertwo import listen
+    clock = [10.0]
+    monkeypatch.setattr(listen.time, 'monotonic', lambda: clock[0])
+    class Buffered:
+        def __init__(self, *args, **kwargs):
+            self.frames = []
+        def start(self):
+            pass
+        def feed(self, frame):
+            self.frames.append(frame)
+    monkeypatch.setattr(listen, 'Utterance', Buffered)
+    h = listen.HandsFree.__new__(listen.HandsFree)
+    h.paused = lambda: False
+    h.segmenter = Segmenter()
+    h.utt = None
+    h.keywords = list
+    h.on_partial = lambda *args: None
+    probabilities = iter([0.1] * 18 + [0.9, 0.9])
+    h.detector = lambda frame: next(probabilities)
+    for i in range(20):
+        clock[0] = 10.0 + (i + 1) * Segmenter.FRAME_S
+        h.feed(bytes([i]) * FRAME * 2)
+    assert len(h.utt.frames) == 12
+    assert h.utt.frames[0][0] == 8
+    assert h.started == clock[0] - 0.16
+    assert h.audio_started == clock[0] - 0.96
+    assert sum(map(len, h.utt.frames)) == 46_080
+
+
+async def test_preroll_tail_does_not_steal_a_new_named_request(monkeypatch):
+    s = session(monkeypatch)
+    now = time.monotonic()
+    s.spans.append([now - 3, now - 2])
+    s.events.emit('say', text='Player Two, open the menu.', source='hello')
+    timing = {'utterance_audio_started_at': time.time() - 3}
+    await s.hands_heard('Player Two, open the menu. Player Two, read this menu.', None,
+                        now - 2, now, timing)
+    assert s.handled == ['read this menu']
+    s.handled.clear()
+    await s.hands_heard('Player Two, open the menu.', None, now - 2, now, timing)
+    assert s.handled == []

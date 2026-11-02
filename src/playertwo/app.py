@@ -21,7 +21,7 @@ from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
 from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
-from .listen import HandsFree, Mic, Utterance, addressed
+from .listen import HandsFree, Mic, Utterance, addressed, wake_match
 from .muse import Muse
 from .narrator import Narrator
 from .prompts import (
@@ -1452,8 +1452,10 @@ class Session:
                              seconds=timing["transcribe_s"], timing="stream", **timing)
 
     def _heard(self, text: str, timing: dict | None = None, raw: str | None = None) -> None:
+        match = wake_match(raw) if raw is not None else None
         self.events.emit("heard", text=text, **(timing or {}),
-                         **({"raw_transcript": raw} if raw is not None else {}))
+                         **({"raw_transcript": raw} if raw is not None else {}),
+                         **({"wake_form": match[1], "wake_damaged": match[2]} if match else {}))
         self._asr_stage(timing)
 
     # Hands-free
@@ -1483,10 +1485,14 @@ class Session:
         said = self.said_lately()
         heard = words(addressed(text) if named else text)
         if named:
-            said = [line for line in said if addressed(line) is not None]
+            match = wake_match(text)
+            damaged = match is not None and match[2]
+            # A shortened name is weaker evidence. Compare it with all our speech,
+            # including a narrator line whose beginning was lost in capture.
+            said = said if damaged else [line for line in said if addressed(line) is not None]
             if not heard:
                 return bool(said)  # just the name, while it said its own name lately
-            if len(heard) == 1:
+            if len(heard) == 1 and not damaged:
                 return False
         elif not heard:
             return True
@@ -1528,7 +1534,11 @@ class Session:
         self.voice.cue("heard")
         if timing is None:
             # The audio start is known even when an urgent partial acts before final ASR.
-            timing = {"utterance_started_at": round(started + time.time() - time.monotonic(), 4)}
+            offset = time.time() - time.monotonic()
+            timing = {"utterance_started_at": round(started + offset, 4)}
+            audio_start = getattr(self.hands, "audio_started", 0.0)
+            if audio_start:
+                timing["utterance_audio_started_at"] = round(audio_start + offset, 4)
         self._heard("stop", timing, raw=text)
         return True
 
@@ -1609,6 +1619,11 @@ class Session:
                 if not addressed(text):
                     return
             echo_possible = self.maybe_echo(started, ended)
+            audio_start = (timing or {}).get("utterance_audio_started_at")
+            if isinstance(audio_start, (int, float)):
+                audio_start -= time.time() - time.monotonic()
+                if audio_start < started:
+                    echo_possible |= self.maybe_echo(audio_start, started)
             said = addressed(text)
             if said is not None and echo_possible and self.echo(text, named=True):
                 said = None

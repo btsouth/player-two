@@ -247,9 +247,28 @@ VAD_CONTEXT = 64  # samples of the previous chunk it sees too
 
 # "Player Two", however speech recognition spells it ("PlayerPlayer Two" when it stutters).
 # "Player to" only counts on its own: "pass it to the player to the left" isn't a call.
-WAKE = re.compile(r"(?:\b(?:hey|ok|okay)[\s,]+)?(?:player|layer|play a)s?[\s,-]*"
+WAKE = re.compile(r"(?:\b(?:hey|ok|okay)[\s,]+)?(?:player|play a)s?[\s,-]*"
                   r"(?:(?:two|2|ii)\b|(?:to|too)(?=[\s]*[,.!?]|\s*$))[\s,.!?:-]*",
                   re.IGNORECASE)
+
+COMMAND_START = (r"(?:what|where|who|how|when|why|can|could|please|read|open|opened|close|"
+                 r"pause|paused|resume|stop|cancel|take|win|attack|heal|run|buy|use|set|keep|"
+                 r"describe|repeat|help|goodbye|go|look)\b")
+DAMAGED_WAKE = re.compile(
+    r"^\s*(?P<form>(?:two|too|2)|there\s+too|layer\s+two|prayer\s+two|play\s+two|player(?=\s*,))"
+    r"[\s,.!?:-]+(?=" + COMMAND_START + r")", re.IGNORECASE)
+
+
+def wake_match(text: str) -> tuple[str, str, bool] | None:
+    """Body, matched name and whether it was damaged. Short names count only up front."""
+    found = list(WAKE.finditer(text))
+    if found:
+        m = found[-1]
+        return text[m.end():].strip(" ,.!?"), m.group(0).strip(" ,.!?:-"), False
+    m = DAMAGED_WAKE.match(text)
+    if m:
+        return text[m.end():].strip(" ,.!?"), m.group("form"), True
+    return None
 
 
 def addressed(text: str) -> str | None:
@@ -259,10 +278,8 @@ def addressed(text: str) -> str | None:
     narrator's own voice picked up before the player spoke) is just "stop". Only the
     name, nothing after it, is "".
     """
-    found = list(WAKE.finditer(text))
-    if not found:
-        return None
-    return text[found[-1].end():].strip(" ,.!?")
+    match = wake_match(text)
+    return match[0] if match else None
 
 
 def ensure_vad() -> Path:
@@ -331,7 +348,7 @@ class Segmenter:
 
     ON, OFF = 0.5, 0.35
     START_FRAMES = 2
-    PREROLL = 5
+    PREROLL = 12  # 0.96 s: soft first syllables can precede Silero's threshold by 0.5 s
     FRAME_S = FRAME / RATE
     END_S = 0.8
     MAX_S = 15.0
@@ -399,6 +416,7 @@ class HandsFree:
         self.tasks: set[asyncio.Task] = set()
         self.heard_at = time.monotonic()  # the last frame from the microphone
         self.started = 0.0  # when the stretch being heard began
+        self.audio_started = 0.0  # retained PCM can begin before the VAD onset
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -441,7 +459,9 @@ class HandsFree:
             return
         what, frames = self.segmenter.push(frame, self.detector(frame))
         if what == "start":
-            started = self.started = time.monotonic() - len(frames) * Segmenter.FRAME_S
+            now = time.monotonic()
+            self.audio_started = now - len(frames) * Segmenter.FRAME_S
+            started = self.started = now - Segmenter.START_FRAMES * Segmenter.FRAME_S
             self.utt = Utterance(self.keywords(),
                                  on_partial=lambda text: self.on_partial(text, started))
             self.utt.start()
@@ -455,6 +475,7 @@ class HandsFree:
         """Finish the stretch being heard: transcribe it, or with `cancel` drop it."""
         utt, self.utt = self.utt, None
         started = self.started
+        audio_started = self.audio_started
         # The speech itself ended before the quiet that ended the stretch.
         ended = time.monotonic() - self.segmenter.quiet * Segmenter.FRAME_S
         if cancel:
@@ -479,6 +500,7 @@ class HandsFree:
             timing = utt.timing()
             clock_offset = time.time() - time.monotonic()
             timing.update(utterance_started_at=round(started + clock_offset, 4),
+                          utterance_audio_started_at=round(audio_started + clock_offset, 4),
                           utterance_ended_at=round(ended + clock_offset, 4))
             await self.on_text(text, None, started, ended, timing)
 

@@ -384,7 +384,7 @@ def _lead(take: Take, heard_t: float, event: dict) -> float:
     status is set only after the wake name has already been spoken."""
     if event.get("typed") or take.start is None:
         return 0.4
-    started = event.get("utterance_started_at")
+    started = event.get("utterance_audio_started_at", event.get("utterance_started_at"))
     if isinstance(started, (int, float)) and heard_t - 20 <= started - take.start <= heard_t:
         return min(heard_t - (started - take.start) + 0.3, 20.0)
     listen = [e["t"] - take.start for e in take.events
