@@ -1603,10 +1603,10 @@ class Session:
             if said is not None and echo_possible and self.echo(text, named=True):
                 said = None
             elif said is None and text and not (echo_possible and self.echo(text)):
-                busy = (self.agent_task is not None and not self.agent_task.done()) or (
-                    not self.voice.idle())
-                if self.open_ear(started) or (busy and local_action(text) == "stop"):
-                    said = text  # an answer, a follow-up, or "stop" while it's busy
+                # A game's bare "stop" is indistinguishable from the player's.
+                # Require the wake name for cancellation, including during a question.
+                if self.open_ear(started) and local_action(text) != "stop":
+                    said = text  # an answer or an explicitly invited follow-up
                     # Heard without its name: over speakers that could be the game.
                     self.unnamed_answer = self.answer is not None and not self.answer.done()
             if said is None:

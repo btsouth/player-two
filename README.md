@@ -113,7 +113,7 @@ without a key; Player Two's AI does not. Automated trials are in `scripts/arena_
 
 Start your game, run `player-two`, hold F8 and speak. Setup binds the talk key on Hyprland and
 Windows; elsewhere bind `player-two ctl talk` (toggle) or use hands-free. A headset reduces echo.
-Say “stop” to cancel. Back up saves before allowing actions. Screen-reader output supports Orca,
+With the talk key, say “stop” to cancel. Hands-free, say “Player Two, stop” so a game voice cannot cancel for you. Back up saves before allowing actions. Screen-reader output supports Orca,
 speech-dispatcher and NVDA; JAWS is implemented but untested.
 
 ## How Meta models are used
@@ -204,7 +204,7 @@ these commands, with behavior dependent on the game:
 | "take me to the stairs" / "go talk to her" | walks your character there (2D games) |
 | "next" | presses A and reads the next line, without waiting for the model |
 | "repeat" | says the last line again |
-| "stop" / "cancel that" | stops talking, and stops a running command |
+| "stop" / "cancel that" (hands-free: start with "Player Two") | stops talking, and stops a running command |
 | "slower" / "faster" | its speaking speed |
 | "terse" / "more detail" / "back to normal" | how much it says |
 | "team up" | leaves menus to the game's own narrator, for games that have one |

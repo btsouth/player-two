@@ -169,13 +169,18 @@ async def test_answers_need_no_name_but_its_own_question_is_not_one(monkeypatch)
     assert s.handled == ["Go."]
 
 
-async def test_stop_needs_no_name_while_it_is_busy(monkeypatch):
+async def test_game_speech_cannot_cancel_with_a_bare_stop(monkeypatch):
     s = session(monkeypatch)
     await heard(s, "Stop.")
     assert s.handled == []  # nothing to stop: someone else in the room
     s.voice.speaking = True
     await heard(s, "Stop.")
-    assert s.handled == ["Stop."]
+    assert s.handled == []
+    s.answer = asyncio.get_running_loop().create_future()
+    await heard(s, "Stop.")
+    assert s.handled == []
+    await heard(s, "Player Two, stop.")
+    assert s.handled == ["local:stop"]
 
 
 async def test_its_name_stops_its_voice_and_holds_an_action_until_it_hears_why(monkeypatch):
