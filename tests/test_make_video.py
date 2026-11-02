@@ -468,3 +468,19 @@ def test_goodbye_slot_requires_real_ordered_request_and_spoken_exchange():
 def test_red_dead_no_code_claim_requires_a_verified_manifest_flag():
     view,_=mv.rdr_pieces(_take([],"rdr-look",50),_take([],"rdr-dialogue",100))
     assert mv.NO_CODE not in [o.text for o in view.overlays]
+
+
+def test_a_short_four_times_gap_encodes_with_a_real_silent_audio_track(tmp_path):
+    import subprocess
+    source=tmp_path/"source.mp4"
+    subprocess.run(["ffmpeg","-v","error","-f","lavfi","-i","color=s=64x64:r=60:d=1",
+                    "-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-t","1",
+                    "-c:v","libx264","-c:a","aac",str(source)],check=True)
+    take=mv.Take("t",source,0,1,[],[])
+    p=mv.Piece("gap","hook",take="t",a=.2,b=.8,speed=4,captions=False)
+    mv.encode_clip(p,{"t":take},{},tmp_path,tmp_path/"gap.mp4","libx264")
+    import json
+    streams=json.loads(subprocess.check_output(["ffprobe","-v","error","-show_streams",
+                                               "-of","json",str(tmp_path/"gap.mp4")]))["streams"]
+    assert any(s["codec_type"]=="audio" and int(s["nb_frames"])>0 for s in streams)
+    assert abs(mv.probe_s(tmp_path/"gap.mp4")-.15)<.06

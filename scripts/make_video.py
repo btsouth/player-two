@@ -1360,7 +1360,7 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         n += 2
     ov_inputs, chain, last = _overlays_chain(p, work, n)
     v = f"[0:v]scale={GAME_W}:{GAME_H}:flags=lanczos,fps={FPS},setpts=PTS-STARTPTS"
-    if p.black_for:
+    if p.black_for or (p.line=="cold" and p.layout=="black"):
         v += f",fade=t=in:st={p.black_for}:d={p.reveal_s}"
     if p.sharp_at is not None:
         if p.sharp_at >= p.b:
@@ -1380,7 +1380,11 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     dur = p.out_s
     # Accelerated gaps are silent: no sped-up voices or frantic game music.
     gain = 0 if p.speed > 1 else p.vol
-    if stems and p.duck:
+    if p.speed>1:
+        # Very short accelerated gaps can exhaust atempo before AAC receives a frame.
+        # They are silent by design, so generate exact-length silence without time-stretching.
+        a=f"anullsrc=r=48000:cl=stereo,atrim=duration={dur},asetpts=PTS-STARTPTS"
+    elif stems and p.duck:
         # Voice stem contains Player Two + the microphone; the game stem contains only game.
         a = (f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}asplit[voice][side];"
              f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}anull"
