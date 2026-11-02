@@ -27,6 +27,7 @@ import argparse
 import dataclasses
 import hashlib
 import io
+import itertools
 import json
 import math
 import re
@@ -668,6 +669,29 @@ def reserve_win_line(opening: list[Piece], take: Take | None) -> tuple[list[Piec
     return kept,[ending]
 
 
+def shop_scene_layouts(pieces: list[Piece], take: Take | None) -> list[Piece]:
+    """Change only chip placement; keep source video and audio completely continuous."""
+    menu=take.edit.get("shop_menu") if take else None
+    if not menu:
+        return pieces
+    lo,hi=map(float,menu)
+    for p in pieces:
+        if p.kind!="clip" or p.line!="A4":
+            continue
+        a,b=(lo-p.a)/p.speed,(hi-p.a)/p.speed
+        placed=[]
+        for o in p.overlays:
+            if o.where!="trace":
+                placed.append(o)
+                continue
+            bounds=[o.f0]+[t for t in (a,b) if o.f0<t<o.f1]+[o.f1]
+            for x,y in itertools.pairwise(bounds):
+                where="trace-shop-menu" if a<=(x+y)/2<b else "trace-shop"
+                placed.append(dataclasses.replace(o,f0=x,f1=y,where=where))
+        p.overlays=placed
+    return pieces
+
+
 def make_plan(
     takes: dict[str, Take],
     picks: dict[str, int],
@@ -983,9 +1007,11 @@ def label_png(path: Path, o: Overlay) -> Path:
         typed = "typed" in lines[0]
         top = o.where in ("trace-fight", "trace-shop", "trace-black")
         x, y = 64, (200 if o.where == "trace-black" else 60 if top else 700)
+        if o.where=="trace-shop-menu":
+            x,y=1000,550
         f = _font(True, 42)
         text = ("You (typed): " if typed else "You: ") + req
-        wrapped = _wrap(d, text, f, 1450)
+        wrapped = _wrap(d, text, f, 1000 if o.where=="trace-shop-menu" else 1450)
         width = int(max(d.textlength(t, font=f) for t in wrapped)) + 108
         height = len(wrapped) * 56 + 32
         d.rounded_rectangle(
@@ -1212,7 +1238,7 @@ def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], 
     inputs: list[str] = []
     chain, last = "", "v0"
     for i, o in enumerate(p.overlays):
-        if p.layout=="shop" and re.fullmatch(r"\d+(?:\.\d+)?x",o.text):
+        if p.layout in ("shop","shop-menu") and re.fullmatch(r"\d+(?:\.\d+)?x",o.text):
             o=dataclasses.replace(o,where="speed-shop")
         if o.where == "trace":
             o = dataclasses.replace(o, where="trace-" + (p.layout or ("fight" if p.take=="take-B" else "map")))
@@ -1630,10 +1656,11 @@ def main() -> None:
     for piece in parts:
         if piece.kind == "clip" and not piece.layout:
             piece.layout = "fight" if takes[piece.take].top else "map"
-        if piece.line=="A4":
+        if piece.line=="A4" and piece.layout not in ("shop","shop-menu"):
             piece.layout="shop"
     evidence = evidence_overlays(parts, takes)
     sam_boxes(parts,takes)
+    parts=shop_scene_layouts(parts,takes.get("take-A"))
     if not a.final:
         for piece in parts:
             piece.overlays.append(Overlay("DRAFT / NOT SUBMISSION FOOTAGE", 20, "draft", 0, piece.out_s))

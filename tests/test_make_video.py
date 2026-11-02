@@ -391,3 +391,16 @@ def test_shop_completion_is_not_cut_before_its_measured_result_can_be_read():
         {"t":6.2,"kind":"agent","request":"Buy three potions.","turns":[],"steps":[],"seconds":5.2}]
     cut=mv.cut_line("A4",_take(es),None,None)
     assert cut.b>=7.4-.001
+
+
+def test_shop_scene_repositioning_preserves_continuous_source_and_speed_labels():
+    take=_take([])
+    take.edit={"shop_menu":[3,7]}
+    p=mv.Piece("shop","ct",line="A4",take="take-A",a=0,b=10,speed=2,
+               overlays=[mv.Overlay("2x",48,"tr",0,5),
+                         mv.Overlay("You: typed\nBuy three potions.",42,"trace",0,5)])
+    result=mv.shop_scene_layouts([p],take)
+    assert len(result)==1 and (p.a,p.b,p.speed)==(0,10,2)
+    assert p.overlays[0].text=="2x" and (p.overlays[0].f0,p.overlays[0].f1)==(0,5)
+    assert [o.where for o in p.overlays[1:]]==["trace-shop","trace-shop-menu","trace-shop"]
+    assert [(o.f0,o.f1) for o in p.overlays[1:]]==[(0,1.5),(1.5,3.5),(3.5,5)]
