@@ -114,7 +114,8 @@ kind of place), the light, the main colours, and what the people or creatures ar
 the time of day or the weather only when the picture clearly shows it (a black backdrop \
 isn't night). Say only what you can plainly see: no guessing how many there are, which way \
 they're heading or what they're up to, and nothing about how it feels, sounds or smells: \
-the player can hear the game themselves. In a fight: the backdrop and what the enemies \
+the player can hear the game themselves. Tell it from where the player stands, not the camera: \
+never "seen from behind" or "on screen". In a fight: the backdrop and what the enemies \
 look like; no HP, menus or turns. With a text box or a menu up: the scene behind it, not \
 the text. A screen that's only a menu, a title or text, with no scene behind it: say what \
 screen it is and what's selected. Nothing about what you can do next or what isn't there. \
@@ -167,8 +168,9 @@ WHO_TALKS = """\
 The player asked who's talking. In one short sentence, from the last picture: who is \
 speaking, by name if the screen shows it or you clearly recognize the character from this \
 game, otherwise by how they look and where they are ("the older man in the brown hat, \
-just ahead of you"). If you can't tell, say so in a few words ("I can't tell, someone off \
-screen"). Never read the subtitle, and no talk of pictures or subtitles."""
+just ahead of you"). The player's own character is "you" ("It's you."). If no one looks \
+to be talking, say "No one right now." If you can't tell, say so in a few words ("I can't \
+tell, someone off screen"). Never read the subtitle, and no talk of pictures or subtitles."""
 
 # The first time Player Two sees a place it has no line ready for (not surveyed).
 PLACE_FEEL = """\
