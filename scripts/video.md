@@ -110,6 +110,6 @@ Completed action windows hold at least 1.2 seconds after the logged result so me
 badges remain readable. Speed labels stay physically clear of request chips; shop speed labels use
 the lower-right open area, away from its quantity/item menus. Recheck placement on new games.
 
-A take can also supply `edit.shop_menu: [83.7, 87.4]` (measured absolute source-video seconds).
+A take can also supply `edit.shop_menu: [83.5, 87.6]` (measured absolute source-video seconds).
 While that menu is open, the request chip uses its empty lower item panel; controls, quantity,
 prices, gold and HP remain visible. Only timed overlays change, never source video/audio boundaries.
