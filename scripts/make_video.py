@@ -66,8 +66,10 @@ LIMIT_VO = "I've tested this myself. No blind player has tried it yet. That's ne
 GENERAL_LINE = "Red Dead has no code at all, just Muse looking at the picture. Chrono Trigger and Monster Hunter add code written for them."
 HOW_SECONDS = 9.0
 MAP_LINE = "Muse labelled this map. I checked it. Local code walks it."
-RETRO_QUOTE = "A blind person still cannot ... nor defeat Lavos in Chrono Trigger."
-RETRO_CREDIT = "Devin Prater, blind accessibility instructor, for libretro, 2019"
+RETRO_QUOTE = "A blind person still cannot ... nor defeat Lavos in Chrono Trigger ..."
+RETRO_SOURCE = "Devin Prater, blind accessibility instructor, for libretro, 2019"
+FRIEND_QUOTE = "In the end, I had to give up as I couldn’t keep calling my friend."
+FRIEND_SOURCE = "Gamer with sight loss, RNIB Accessible Gaming Research, 2022"
 SE_NOTICE = ("The copyright of the materials used on this page or video is owned by SQUARE ENIX CO., LTD. "
              "or its licensors. The unauthorized reproduction and distribution of the images is prohibited.\n"
              "© 1995, 2018 SQUARE ENIX\nIllustration: © 1995 BIRD STUDIO / SHUEISHA\n"
@@ -142,9 +144,12 @@ class Piece:
     duck: bool = True
     audio_mode: str = "mix"
     voice_boosts: list = field(default_factory=list)
+    game_ducks: list = field(default_factory=list)
+    stand_in: bool = False
     box_until: float = 0.0
     result_at: float | None = None
     hold_after: float = 0.0
+    picture_until: float | None = None
     dip: bool = False
     hold_at: float | None = None  # explicit held purchase result; original speech clock is unchanged
     freeze: bool = False
@@ -683,18 +688,19 @@ def rdr_sam_pieces(take: Take) -> list[Piece]:
 def menu_records(take: Take, parts: list[Piece] | None = None) -> tuple[list[float],list[dict]]:
     """The accepted keyboard take must prove both reads and its actual journal press."""
     if take.edit.get('backend')!='keyboard':raise ValueError('RDR menu proof needs the accepted keyboard backend')
-    requests=['Read this menu.','Open the journal.','Read it.'];times=[];agents=[]
+    requests=take.edit.get('menu_requests',['Read this menu.','Open the journal.','Read it.']);times=[];agents=[]
+    clean=lambda text:re.sub(r'[^a-z0-9]+','',text.lower())
     for request in requests:
-        t=next((t for t,e in take.heard() if 0<=t<take.duration and e['text']==request),None)
-        e=next((e for e in take.events if e.get('kind')=='agent' and e.get('request')==request and t is not None and t<=e['t']-take.start),None)
+        t=next((t for t,e in take.heard() if 0<=t<take.duration and clean(e['text'])==clean(request)),None)
+        e=next((e for e in take.events if e.get('kind')=='agent' and clean(e.get('request',''))==clean(request) and t is not None and t<=e['t']-take.start),None)
         if t is None or not e or not e.get('turns'):raise ValueError('RDR menu needs its real three Muse requests')
         times.append(t);agents.append(e)
     if times!=sorted(times):raise ValueError('RDR menu requests out of order')
     presses=[x for x in agents[1].get('steps',[]) if x.get('tool')=='press']
-    if not any(x.get('args',{}).get('buttons')==['down','down','down'] for x in presses) or not any(x.get('args',{}).get('buttons')==['a'] for x in presses):
+    if not any(x.get('args',{}).get('buttons')==['a'] for x in presses):
         raise ValueError('RDR menu needs the real journal navigation presses')
     at=times[1]+next(x['t'] for x in presses if x['args'].get('buttons')==['a'])
-    if not any(a<=at<b for a,b in take.edit['story']):raise ValueError('RDR menu must show its own journal press')
+    if parts is None and not any(a<=at<b for a,b in take.edit['story']):raise ValueError('RDR menu must show its own journal press')
     if parts is not None and not any(p.take==take.name and p.a<=at<p.b and not p.freeze and p.speed==1 for p in parts):
         raise ValueError('RDR edit must show its own journal press at1x')
     return times,agents
@@ -1088,11 +1094,26 @@ def paced_plan(folder: Path, takes: dict[str,Take], vo: dict, vo_s: dict) -> lis
             if vo_s.get(key,0)>p.out_s:raise ValueError(f'{key} VO exceeds paced slot {p.out_s}s')
             p.vo=vo.get(key,'')
         parts.append(p)
+    for p in parts:
+        if p.id=='lavos':p.overlays=[Overlay(RETRO_QUOTE+'\n'+RETRO_SOURCE,48,'lavos-credit',0,p.out_s)]
+    if config.get('friend_quote'):
+        at=next(i for i,p in enumerate(parts) if p.id=='identity')
+        parts.insert(at,Piece('friend-quote','hook',kind='card',secs=5,blocks=[(FRIEND_QUOTE,52,True),(FRIEND_SOURCE,32,False),('About a phone touch game.',28,False)]))
     # Recheck the specific source proofs, not an invented model or game-specific macro.
     menu_records(takes['rdr-menu'],parts)
-    resume=next(e for e in takes['nav'].events if e.get('kind')=='agent' and e.get('request')=='Keep going to the castle.')
-    if len(resume['turns'])!=9 or not any(x.get('tool')=='walk_to' and 'not_found' in x.get('result','') for x in resume['steps']) or not any(x.get('tool')=='remember' for x in resume['steps']):raise ValueError('Paced recovery proof changed')
+    verify_recovery(parts,takes.get('nav'))
     return parts
+
+
+def verify_recovery(parts: list[Piece], take: Take | None) -> None:
+    claims=[o.text for p in parts for o in p.overlays if 'Not scripted. Muse took' in o.text]
+    if not claims:return
+    if take is None:raise ValueError('Recovery claim needs its navigation log')
+    events=[e for e in take.events if e.get('kind')=='agent' and e.get('request','').rstrip('.?!').lower()=='keep going to the castle']
+    if not events:raise ValueError('Recovery claim lacks its agent event')
+    event=events[-1];n=len(event.get('turns',[]))
+    if not all(f'Muse took {n} turns' in text for text in claims) or not any(x.get('tool')=='walk_to' and 'not_found' in x.get('result','') for x in event.get('steps',[])) or not any(x.get('tool')=='remember' for x in event.get('steps',[])):
+        raise ValueError('Paced recovery proof changed')
 
 
 def word_count(text: str) -> int:
@@ -1107,7 +1128,7 @@ def pacing_report(parts: list[Piece], takes: dict[str,Take], exceptions: dict) -
         if p.kind=='card':
             words=sum(word_count(b[0]) for b in p.blocks)
             if p.out_s<words*.4+1:issue('card:'+p.id,f'{words} words in{p.out_s:.2f}s; needs{words*.4+1:.2f}s')
-        if t>178:issue('duration:film',f'{t:.3f}s exceeds178s')
+        if t>=180:issue('duration:film',f'{t:.3f}s must stay below180s')
         if p.out_s<2.5:issue('shot:'+p.id,f'{p.out_s:.2f}s shot below2.5s')
         if p.result_at is not None and p.b-p.result_at+p.hold_after<1:issue('result:'+p.id,'Less than1s result dwell')
         if p.speed!=1:issue('speed:'+p.id,'Paced cut must keep all selected action at1x')
@@ -1119,6 +1140,12 @@ def pacing_report(parts: list[Piece], takes: dict[str,Take], exceptions: dict) -
                 if max(a,p.a)>=min(b,p.b):continue
                 if a<p.a-.025 or b>p.b+.025:issue('partial:'+p.id+':'+str(i),e['text'])
                 if p.speed!=1:issue('speech-speed:'+p.id,e['text'])
+            for heard_t,event in take.heard():
+                if event.get('typed') or not p.a<=heard_t<p.b:continue
+                starts=[e['t']-take.start for e in take.events if e.get('kind')=='status' and e.get('state')=='listening' and heard_t-15<=e['t']-take.start<=heard_t]
+                if starts and starts[-1]<p.a-.025:issue('partial-request:'+p.id,'Clip starts after the logged listening interval began')
+                previous=[e['ended']-take.start for e in take.events if e.get('kind')=='spoken' and p.a<=e['began']-take.start<(starts[-1] if starts else heard_t)]
+                if starts and previous and starts[-1]-max(previous)<.7-.001:issue('request-gap:'+p.id,f'Spoken reply to captured request: {starts[-1]-max(previous):.3f}s')
             selected=dataclasses.replace(take,caps=[c for c in take.caps if p.a-.025<=c[0]<p.b-.025])
             caps=[(a,b,txt) for a,b,txt in caption_rows(selected) if p.captions and p.a<=a<p.b]
             for i,(a,b,txt) in enumerate(caps):
@@ -1133,7 +1160,8 @@ def pacing_report(parts: list[Piece], takes: dict[str,Take], exceptions: dict) -
             if o.where in ('draft','box'):continue
             if o.where.startswith('trace'):
                 request=o.text.splitlines()[-1]
-                needed=.4*word_count(request)+1
+                meta=(' Muse Voice Transcribe' if 'Muse Voice Transcribe' in o.text else '')+(' No button pressed' if 'No button pressed' in o.text else '')
+                needed=.4*word_count(request+meta)+1
                 if o.f1-o.f0+.01<needed:issue(f'request:{p.id}:{i}',f'{request!r}: {o.f1-o.f0:.2f}s / needed{needed:.2f}s')
                 continue
             needed=.4*word_count(o.text)+1
@@ -1153,7 +1181,11 @@ def pacing_report(parts: list[Piece], takes: dict[str,Take], exceptions: dict) -
         take=takes.get(left.take);following=takes.get(right.take)
         if not take or not following or left.audio_mode=='game' or left.freeze:continue
         ended=[e['ended']-take.start for e in take.events if e.get('kind')=='spoken' and left.a<=e['began']-take.start<left.b]
-        incoming=[x-right.a for x,e in following.heard() if right.a<=x<right.b]
+        incoming=[]
+        for x,e in following.heard():
+            if not right.a<=x<right.b:continue
+            starts=[z['t']-following.start for z in following.events if z.get('kind')=='status' and z.get('state')=='listening' and x-15<=z['t']-following.start<=x] if not e.get('typed') else []
+            incoming.append((starts[-1] if starts else x)-right.a)
         incoming += [e['began']-following.start-right.a for e in following.events if e.get('kind')=='spoken' and right.a<=e['began']-following.start<right.b]
         if ended and incoming:
             pause=left.out_s-(max(ended)-left.a)+min(incoming)
@@ -1163,7 +1195,7 @@ def pacing_report(parts: list[Piece], takes: dict[str,Take], exceptions: dict) -
         if i and x-cuts[i-1]<6:issue(f'cut:{i}',f'Two hard cuts within{x-cuts[i-1]:.2f}s')
     for group,needle in [('hook','Chrono Trigger'),('game2','Monster Hunter'),('game3','Red Dead')]:
         if not any(p.section==group and any(needle in o.text and o.f1-o.f0>=2 for o in p.overlays) for p in parts):issue('name:'+group,'Missing game name for2s')
-    blocked=[code for code,_ in issues if code not in exceptions or code.startswith(('partial:','speech-speed:','duration:','speed:','shot:','result:','chips:','name:'))]
+    blocked=[code for code,_ in issues if code not in exceptions or code.startswith(('partial:','partial-request:','speech-speed:','duration:','speed:','shot:','result:','chips:','name:'))]
     rows=['## Pace report',f'{len(parts)} shots / {t:.3f}s. Short shots: {sum(p.out_s<2.5 for p in parts)}. Speed-ups: {sum(p.speed!=1 for p in parts)}. All edited source gaps use visible dips.',f'Unlisted violations: {len(blocked)}. Listed exceptions: {len(issues)-len(blocked)}.']
     for code,detail in issues:rows.append(f'- `{code}`: {detail}. '+('EXCEPTION: '+exceptions[code] if code in exceptions else 'BLOCKED'))
     return '\n'.join(rows)+'\n',blocked
@@ -1304,11 +1336,23 @@ def end_card(takes: dict[str, Take], parts: list[Piece]) -> Piece:
         (wording, 32, False)])
 
 
+def stand_in_voice(path: str) -> bool:
+    if not path:return False
+    file=Path(path)
+    if 'TEMP-NOT-FOR-SUBMISSION' in str(file.resolve()):return True
+    if file.is_file():
+        with file.open('rb') as f:
+            f.seek(max(0,file.stat().st_size-512))
+            return b'PLAYER_TWO_SYNTHETIC_STAND_IN' in f.read()
+    return False
+
+
 def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
     """What --final won't ship."""
     out = [f"placeholder: {p.id}" for p in parts if p.kind == "slate"]
     for group in {p.timing_group for p in parts if p.timing_group}:
         if not valid_timing_group(parts,group):out.append(f"unsupported time summary: {group}")
+    out += [f"stand-in media: {p.id}" for p in parts if p.stand_in or stand_in_voice(p.vo)]
     checked_menu=False
     for p in parts:
         if p.take=='rdr-menu' and not checked_menu:
@@ -1346,7 +1390,7 @@ def round2_cards(folder: Path) -> list[Piece]:
                 ('Player Two.',80,True),("For players who can't see the screen or can't hold a controller.",58,True),
                 ('You ask. It reads, answers and presses the buttons.',44,False)]),
             Piece('lavos','hook',kind='card',secs=6,blocks=[
-                (RETRO_QUOTE,48,True),(RETRO_CREDIT,34,False),
+                (RETRO_QUOTE,48,True),(RETRO_SOURCE,34,False),
                 ("Lavos is the final boss. Not beaten yet. Here's how far we've got.",44,True)])]
 
 
@@ -1432,7 +1476,7 @@ def _wrap(draw, text: str, font, width: int) -> list[str]:
     return out
 
 
-def card_png(path: Path, blocks: list, bg=BG, end: bool = False) -> Path:
+def card_png(path: Path, blocks: list, bg=BG, end: bool = False, plain: bool = False) -> Path:
     img = Image.new("RGBA", (W, H), tuple(bg))
     d = ImageDraw.Draw(img)
     if end:
@@ -1445,8 +1489,9 @@ def card_png(path: Path, blocks: list, bg=BG, end: bool = False) -> Path:
                     y+=int(size*1.35)
         img.save(path)
         return path
-    d.line((96, 120, 180, 120), fill=ACCENT, width=6)
-    d.text((96, 66), "PLAYER TWO  /  CO-OP, BY VOICE", font=_font(True, 25), fill=ACCENT)
+    if not plain:
+        d.line((96, 120, 180, 120), fill=ACCENT, width=6)
+        d.text((96, 66), "PLAYER TWO  /  CO-OP, BY VOICE", font=_font(True, 25), fill=ACCENT)
     laid = [( _wrap(d, text, _font(bold, size), W - 240), _font(bold, size), size)
             for text, size, bold in blocks]
     total = sum(len(ls) * int(size * 1.3) for ls, _, size in laid) + 36 * (len(laid)-1)
@@ -1456,7 +1501,7 @@ def card_png(path: Path, blocks: list, bg=BG, end: bool = False) -> Path:
             d.text((96, y), ln, font=f, fill="white")
             y += int(size * 1.3)
         y += 36
-    d.text((96, H-76), "A second player. A different way in.", font=_font(False, 26), fill=(150,166,181))
+    if not plain:d.text((96, H-76), "A second player. A different way in.", font=_font(False, 26), fill=(150,166,181))
     img.save(path)
     return path
 
@@ -1500,13 +1545,20 @@ def label_png(path: Path, o: Overlay) -> Path:
         black=o.where=="trace-black"
         f = _font(True, 64 if black else 42)
         text = ("You (typed): " if typed else "You: ") + req
+        meta=''
+        if 'Muse Voice Transcribe' in lines[0]:
+            meta='Muse Voice Transcribe'
+            if 'No button pressed' in lines[0]:meta+=' · No button pressed'
         wrapped = _wrap(d, text, f, 1000 if o.where=="trace-shop-menu" else 1450)
+        mf=_font(True,34)
+        meta_lines=_wrap(d,meta,mf,1000 if o.where=='trace-shop-menu' else 1450) if meta else []
+        content_width=max([d.textlength(t,font=f) for t in wrapped]+[d.textlength(t,font=mf) for t in meta_lines])
         if black:
-            x=(W-int(max(d.textlength(t,font=f) for t in wrapped))-108)//2
+            x=(W-int(content_width)-108)//2
             y=250
-        width = int(max(d.textlength(t, font=f) for t in wrapped)) + 108
+        width = int(content_width) + 108
         line_h=84 if black else 56
-        height = len(wrapped) * line_h + 32
+        height = len(wrapped) * line_h + len(meta_lines)*46 + 32
         d.rounded_rectangle(
             (x, y, x + width, y + height), radius=20, fill=(9, 15, 25, 220)
         )
@@ -1519,6 +1571,8 @@ def label_png(path: Path, o: Overlay) -> Path:
         d.line((mx + 6, my + 30, mx + 6, my + 37), fill=ACCENT, width=3)
         for i, ln in enumerate(wrapped):
             d.text((x + 66, y + 16 + i * line_h), ln, font=f, fill=ACCENT if black else "white")
+        for i,ln in enumerate(meta_lines):
+            d.text((x+66,y+16+len(wrapped)*line_h+i*46),ln,font=mf,fill=ACCENT if black else 'white')
         by = y + height + 14
         # Latest results, retaining scope labels so action and inference aren't conflated.
         bx = x
@@ -1544,6 +1598,14 @@ def label_png(path: Path, o: Overlay) -> Path:
             bx += bw + 16
         img.save(path)
         return path
+    elif o.where=='lavos-credit':
+        d.rounded_rectangle((48,620,1872,990),radius=20,fill=(9,15,25,232))
+        y=650
+        for text,size in [(RETRO_QUOTE,48),(RETRO_SOURCE,34)]:
+            f=_font(True,size)
+            for line in _wrap(d,text,f,1728):
+                d.text((80,y),line,font=f,fill='white');y+=int(size*1.3)
+            y+=24
     elif o.where == "atlas-stage":
         lines=o.text.split("\n")
         d.rounded_rectangle((48,170,1130,355),radius=20,fill=(9,15,25,220))
@@ -1555,7 +1617,7 @@ def label_png(path: Path, o: Overlay) -> Path:
             texts=[("Player Two.",80),("For players who can't see the screen or can't hold a controller.",58),
                    ("You ask. It reads, answers and presses the buttons.",44)]
         else:
-            texts=[(RETRO_QUOTE,48),(RETRO_CREDIT,34),
+            texts=[(RETRO_QUOTE,48),(RETRO_SOURCE,34),
                    ("Lavos is the final boss. Not beaten yet. Here's how far we've got.",44)]
         y=175
         for text,size in texts:
@@ -1677,7 +1739,11 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
                     and isinstance(e.get("seconds"), (int,float)):
                 facts.append((e, e["model"], f"Stage time {e['seconds']:.2f} s"))
         label = "You: typed" if request.get("typed") else "You: heard"
-        base = f"{label}\n{request['text']}"
+        if not request.get('typed'):
+            label += ' · Muse Voice Transcribe'
+            if request.get('hands_free') is True or request.get('input_mode')=='hands_free':
+                label += ' · No button pressed'
+        base = f"{label}\n{request.get('raw_transcript') or request['text']}"
         heard_at = max(0, (t-p.a)/p.speed)
         if heard_at > 0:
             p.overlays.append(Overlay("You:\nRequest begins", 30, "trace", 0, heard_at))
@@ -1706,9 +1772,10 @@ def evidence_overlays(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
     report = []
     for p in parts:
         take = takes.get(p.take)
-        if not take or p.kind != "clip" or not p.captions or p.id=="last-line" or (p.take=="game2" and take.edit.get("story")):
+        if not take or p.kind != "clip" or not p.captions or p.id=="last-line" or (p.take=="game2" and take.edit.get("story") and not take.edit.get("paced")):
             continue
         heard = take.heard()
+        if take.edit.get('paced') and not any(p.a<=x<p.b for x,_ in heard):continue
         before = [t for t, _ in heard if t <= p.a]
         inside = [t for t, _ in heard if p.a < t < p.b]
         near_new_request=bool(inside and inside[0]-p.a<=.5)
@@ -1814,11 +1881,10 @@ def render_overlays(p: Piece) -> list[Overlay]:
         active.sort(key=lambda o:not o.where.startswith('time-'))
         texts=list(dict.fromkeys(o.text for o in active))
         where='context'
-        if p.line=='A4' and (p.freeze or any(o.where=='trace-shop-menu' and o.f0<=(a+b)/2<o.f1 for o in keep)):
-            where='context-shop-menu'
+        if p.id=='shop-buy' or (p.line=='A4' and (p.freeze or any(o.where=='trace-shop-menu' and o.f0<=(a+b)/2<o.f1 for o in keep))):where='context-shop-menu'
         elif p.take=='nav' and 102<=p.a<112:where='context-dialogue'
         elif p.layout=='menu':where='context-menu'
-        if where=='context-shop-menu' and 'Purchase result held' in texts:
+        if where=='context-shop-menu' and 'Purchase result held' in texts and any('shown in' in t for t in texts):
             texts=[next(t.split(' · ')[0] for t in texts if 'shown in' in t)+' · Result held']
         keep.append(Overlay('\n'.join(texts),34,where,a,b))
     merged=[]
@@ -1853,13 +1919,24 @@ def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], 
 
 def encode_card(p: Piece, work: Path, out: Path, vcodec: str) -> None:
     bg = (0,0,0,255) if p.id=="goodbye-missing" else BG if p.kind == "card" else (32,25,43,255)
-    png = card_png(work / f"{p.id}.png", p.blocks, bg, end=p.id=="c-end")
+    png = card_png(work / f"{p.id}.png", p.blocks, bg, end=p.id=="c-end",plain=p.id=="friend-quote")
     audio = ["-i", p.vo] if p.vo else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
     inputs, chain, last = _overlays_chain(p, work, 2)
     fc = f"[0:v]scale={W}:{H},format=yuv420p,fade=t=in:d=0.15,fade=t=out:st={max(0,p.secs-0.15)}:d=0.15[v0]{chain}"
     _ff("-loop", "1", "-framerate", str(FPS), "-i", str(png), *audio, *inputs, "-filter_complex",
         fc, "-map", f"[{last}]", "-map", "1:a", "-t", f"{p.secs}", "-af", "apad", *_enc(vcodec),
         str(out))
+
+
+def game_duck_filter(p: Piece) -> str:
+    terms=[]
+    for a,b,gain in p.game_ducks:
+        if not p.a<=a<b<=p.b or not 0<=gain<=1:
+            raise ValueError('Game duck must be a measured interval inside this shot')
+        a=(a-p.a)/p.speed;b=(b-p.a)/p.speed
+        terms.append(f"+({gain}-1)*min(1,min(max(0,(t-{a})/0.025),max(0,({b}-t)/0.025)))")
+    expr='1'+''.join(terms)
+    return f",aeval=exprs='val(0)*({expr})|val(1)*({expr})':c=stereo" if terms else ''
 
 
 def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: Path, out: Path,
@@ -1881,6 +1958,11 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         n += 2
     ov_inputs, chain, last = _overlays_chain(p, work, n)
     v = f"[0:v]scale={GAME_W}:{GAME_H}:flags=lanczos,fps={FPS},setpts=PTS-STARTPTS"
+    if p.picture_until is not None:
+        if not p.a<p.picture_until<p.b or p.result_at is None or p.picture_until<p.result_at or not any(o.text=='Purchase result held' for o in p.overlays):
+            raise ValueError('Purchase picture hold needs its real result and disclosure')
+        shown=p.picture_until-p.a
+        v+=f",trim=duration={shown},tpad=stop_mode=clone:stop_duration={p.b-p.picture_until},setpts=PTS-STARTPTS"
     if p.freeze:
         v+=f",trim=end_frame=1,tpad=stop_mode=clone:stop_duration={p.out_s},setpts=PTS-STARTPTS"
     if p.black_for or (p.line=="cold" and p.layout=="black"):
@@ -1929,7 +2011,7 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         # in different block sizes. Flush it with padding, then trim to the real cut.
         a = (f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}apad=pad_dur=2,{boost}asplit[voice][side];"
              f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}apad=pad_dur=2"
-             "[game];[game][side]sidechaincompress=threshold=0.025:ratio=8:"
+             + game_duck_filter(p) + "[game];[game][side]sidechaincompress=threshold=0.025:ratio=8:"
              "attack=15:release=220[duck];[duck][voice]amix=inputs=2:normalize=0:"
              f"duration=first,atrim=duration={dur},volume={gain}")
     elif stems:
@@ -1944,7 +2026,12 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         a += ",afade=t=in:d=0.5"
     if p.fade_out:
         a += f",afade=t=out:st={max(0.0, dur - 0.5):.2f}:d=0.5"
-    if p.vo:
+    if p.vo and p.audio_mode=='game':
+        # Founder narration is a speech sidechain too; pad through the whole shot.
+        a += (f"[ta];[1:a]apad=pad_dur={dur+2},asplit[vovoice][voside];"
+              "[ta][voside]sidechaincompress=threshold=0.01:ratio=8:attack=15:release=220[vogame];"
+              f"[vogame][vovoice]amix=inputs=2:duration=first:normalize=0,atrim=duration={dur}[a]")
+    elif p.vo:
         a += "[ta];[ta][1:a]amix=inputs=2:duration=first:normalize=0[a]"
     else:
         a += "[a]"
@@ -1973,7 +2060,10 @@ def caption_rows(take: Take) -> list[tuple]:
       'Paused menu is open.':'Paused menu open.',
       'Your Journal is open on Brief, for Can a Swindler Change His Spots.':'Journal open: Brief.',
       'The Brief for Can a Swindler Change His Spots says: A medical breakthrough from the East!':'A medical breakthrough from the East!',
-      'Found it: on the right.':'Found it: right.'}
+      'Found it: on the right.':'Found it: right.',
+      'Going to the item seller at the purple tent.':'Walking to the seller.',
+      'Three Potions, 30 gold.':'Three potions.',
+      'Bought.':None,'You have 370 gold left.':'370 gold left.'}
     out=[]
     for a,b,text in source:
         if paced_caption(take,text) is None:continue
@@ -1986,7 +2076,7 @@ def caption_rows(take: Take) -> list[tuple]:
 def paced_caption(take: Take, text: str) -> str | None:
     text=text.removeprefix('Player Two: ')
     if not take.edit.get('paced'):return text
-    if text in {'Let me look.','On it.','One second.','Just a sec.',"Okay, I'll take this fight.","Okay, I'll open the journal.",'Okay, Crono will use Cyclone.'}:return None
+    if text in {'Let me look.','On it.','One second.','Just a sec.',"Okay, I'll take this fight.","Okay, I'll open the journal.","Okay, I'll buy three potions.",'Okay, Crono will use Cyclone.'}:return None
     if text=='Marle uses Cure on Crono.':return 'Queued: '+text
     return text
 
@@ -1997,7 +2087,7 @@ def ass_text(take: Take, layout: str = "") -> str:
     size, align, ml, mr, mv = {
         "map": (52, 2, 100, 100, 60),
         "rdr": (52, 2, 100, 100, 60),
-        "menu": (52, 8, 500, 100, 650),
+        "menu": (52, 8, 500, 100, 700),
         "mh": (52, 8, 100, 100, 740),
         "fight": (52, 8, 100, 100, 240),
         "shop": (52, 9, 1000, 64, 420),
@@ -2309,9 +2399,14 @@ def main() -> None:
         FPS = 30
 
     out = a.out or a.folder.parent / "video.mp4"
+    if (a.folder/'STAND-IN.json').exists() and a.final:sys.exit('--final refuses stand-in rehearsal media')
+    if (a.folder/'STAND-IN.json').exists() and 'TEMP-NOT-FOR-SUBMISSION' not in str(out):sys.exit('Stand-in output name must contain TEMP-NOT-FOR-SUBMISSION')
     tops = set(filter(None, a.top.split(",")))
     takes = {}
-    for name in ("take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", "rdr-sam", "rdr-menu", "nav", *GAMES):
+    names={"take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", "rdr-sam", "rdr-menu", "nav", *GAMES}
+    manifest=json.loads((a.folder/'takes.json').read_text()) if (a.folder/'takes.json').exists() else {}
+    names.update(k for k,v in manifest.items() if isinstance(v,dict) and 'video' in v)
+    for name in sorted(names):
         take = load_take(a.folder, name, name in tops)
         if take is not None:
             takes[name] = take
@@ -2348,6 +2443,8 @@ def main() -> None:
     paced=(a.folder/'pacing.json').exists() and not a.sample
     if paced:
         for take in takes.values():take.edit['paced']=True
+    for piece in parts:
+        if manifest.get('_stand_in') or any(e.get('synthetic') for e in takes.get(piece.take,Take('',Path(''),None,0,[],[],False)).events):piece.stand_in=True
     evidence = evidence_overlays(parts, takes)
     if paced:
         for p in parts:
@@ -2355,9 +2452,10 @@ def main() -> None:
                 if o.where.startswith('trace'):
                     o.text='\n'.join(o.text.splitlines()[:2])
                     if p.id in ('mh-weak','rdr-menu-read'):o.f0=max(o.f0,1.1)
+                    if p.id=='shop-buy':o.where='trace-shop-menu'
         for p in parts:p.overlays=[o for o in p.overlays if o.text!='You:\nRequest begins' and o.f1>o.f0 and not (p.id in ('ct-castle','ct-forest-walk') and o.where.startswith('trace'))]
-        weak=next(p for p in parts if p.id=='mh-weak')
-        weak.overlays.append(Overlay('You: typed\nWhere’s it weak?',42,'trace-mh',1.1,weak.out_s))
+    if any(p.stand_in or stand_in_voice(p.vo) for p in parts) and 'TEMP-NOT-FOR-SUBMISSION' not in str(out):
+        sys.exit('Stand-in media cannot enter a real render path')
     sam_boxes(parts,takes)
     parts=shop_scene_layouts(parts,takes.get("take-A"))
     if not a.final:

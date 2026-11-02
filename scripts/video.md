@@ -181,7 +181,7 @@ Before encoding, pacing_report checks duration, shot length, hard-cut density, s
 source speech, reply gaps, text reading time, text onsets, result dwell, chip count and game names.
 It writes pace-report.md and appends the report to QC.md. An unlisted issue blocks both proxy
 and final renders. Exceptions are exact issue IDs with reasons. Partial source speech, sped
-speech, unsupported result dwell, short shots and an over178s paced film cannot be waived.
+speech, unsupported result dwell, short shots and a180s-or-longer paced film cannot be waived.
 The current exceptions retain native continuous utterance cadence, one opening text onset,
 and the required publisher small print. They do not excuse jump-cut chains or faster footage.
 
@@ -190,3 +190,41 @@ acknowledgements remain audible but are not captioned; some adjacent utterance c
 one caption. Meaning and game facts must be checked against source frames and model results.
 Per-shot ASS excludes unselected speech, so a held final frame cannot reveal a later line.
 The original event log and audio are never rewritten. Missing founder audio still blocks final.
+
+## Reviewed take import and voice rehearsal
+
+Run `python3 scripts/video_tonight.py INCOMING MAP.json NEW-PROXY.mp4` on the workstation.
+It copies only mapped files, creates isolated staging on devbox and returns the proxy, contact
+sheet and pacing report. Existing outputs are refused. The map has takes (video/start/events/edit),
+shots (reviewed source a/b/overlays) and optional voiceovers (intro/how/limit). Every shot of a
+changed take needs new windows; byte-identical media alone may reuse unchanged_windows.
+Old source duck/boost/result/held-frame timestamps are cleared on replacement. A new opening
+needs its reviewed reveal point. Recorder offsets and game facts still require frame/waveform
+review. This command stages and renders; it does not operate a game or validate a live microphone.
+
+`video_dropin.py` is the corresponding devbox staging command. Recorded heard events drive
+request chips, preferring raw_transcript. Timing fields are optional. Only explicit hands_free:true
+or input_mode: hands_free earns No button pressed; the global setting is insufficient. Known
+listening starts are checked for clipped requests and reply-to-request gaps. Old requests are
+not repeated over later footage. Menu wording may be configured with edit.menu_requests;
+its actual activation press must remain visible. Recovery claims use the source's real turn count.
+
+`video_mix_check.py VIDEO CUT.json TAKES --out AUDIT --report REPORT.md` checks every selected
+spoken chunk with real Muse Voice Transcribe, isolated stems and a whole-film -14LUFS/2kHz copy.
+It caches raw results, reports per-line RMS and candidate mismatches, and fails on API errors.
+This is machine transcription, not human listening or proof of laptop-speaker intelligibility.
+Use game_ducks source intervals for local game-only attenuation; the renderer applies25ms ramps.
+
+`video_rehearse.py` creates internal Kokoro male requests and normal/slower founder reads in an
+explicit TEMP-NOT-FOR-SUBMISSION folder. Generated requests go through real file transcription
+with the app's keyword helper. The internal proxy importer exposes overlength instead of hiding
+it by speeding speech. It is a separate, watermarked rehearsal path and cannot render a final.
+Stand-in folders, exported provenance flags, resolved temporary voice paths and an embedded WAV
+marker are refused by final mode, including renamed links/copies. Never strip provenance or put
+these WAVs in real takes. The real workstation importer refuses a stand-in source folder.
+
+The paced hard budget is now strictly below180s, matching the requested three-minute alternates.
+Partial speech, clipped known request capture, speed-ups and unsupported results remain blocked.
+The optional friend_quote switch inserts a silent, plain5s RNIB card immediately before identity,
+with explicit phone-game context. Source quotes retain their full attribution; their requested
+short durations must be listed as reading-time exceptions, not called a readability pass.
