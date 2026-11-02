@@ -173,8 +173,8 @@ class Settings:
                 s._take(f.name, data[f.name], problems)
             env = os.environ.get(f"PLAYER_TWO_{f.name.upper()}")
             if env is not None:
-                s._take(f.name, env == "1" if isinstance(getattr(s, f.name), bool) else env,
-                        problems)
+                on = env.strip().lower() in ("1", "true", "yes", "on")
+                s._take(f.name, on if isinstance(getattr(s, f.name), bool) else env, problems)
         s.problems = problems
         return s
 

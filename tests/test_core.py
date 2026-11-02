@@ -196,6 +196,25 @@ class TestAgent:
             "or repeat something they've already heard, say it again in full.")
         assert said == ["The brief says go."] and result.outcome == "The brief says go."
 
+    def test_talk_about_its_own_steps_is_never_said_even_when_asked_to_read(self):
+        """Live: "Read it." got "No final response yet; gathering information or acting."
+        said aloud."""
+        from playertwo.ontopic import about_itself
+
+        assert about_itself("No final response yet; gathering information or acting.")
+        assert about_itself("No tool calls needed.")
+        assert not about_itself("The final battle is at Fort Mercer.")
+        replies = ["No final response yet; gathering information or acting.",
+                   "The brief says go."]
+        agent, _, said, _, muse = self.make([])
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            return SimpleNamespace(content=replies.pop(0), tool_calls=[])
+
+        muse.tools = words
+        result = run(agent.run("Read it."))
+        assert said == ["The brief says go."] and result.outcome == "The brief says go."
+
     def test_a_page_read_out_is_never_held_as_off_the_point(self, monkeypatch):
         """Live: "Read it." on a quack doctor's advert: the second look called the words
         unrelated, twice, so the player got an apology, not the page."""
