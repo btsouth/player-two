@@ -130,7 +130,8 @@ async def muse(d: Path) -> int:
     t = time.monotonic()
     sheet = full(ui / "wheel3.jpg")
     reply = await client.json([{"role": "user", "content": [
-        image_part(sheet, 2400), {"type": "text", "text": m.READ_WHEEL}]}],
+        image_part(sheet, m.WHEEL_PX), {"type": "text", "text": m.READ_WHEEL.format(
+            weapons="hammer (blunt), sword (slash), harp (pierce)")}]}],
         effort="minimal", max_tokens=1500)
     print("wheel", round(time.monotonic() - t, 2), json.dumps(reply))
     for name in ("rt", "rt2", "m3"):
@@ -139,7 +140,7 @@ async def muse(d: Path) -> int:
         crop = img.crop((940 * w // 1280, 70 * h // 720, w, 365 * h // 720))
         t = time.monotonic()
         reply = await client.json([{"role": "user", "content": [
-            image_part(crop, 1000), {"type": "text", "text": m.READ_STATUS.format(
+            image_part(crop, m.STATUS_PX), {"type": "text", "text": m.READ_STATUS.format(
                 elements="Cluster Hammer: none, Frozen Speartuna: ice, Seahorse Harp: water")}]}],
             effort="minimal", max_tokens=800)
         print(name, round(time.monotonic() - t, 2), json.dumps(reply))

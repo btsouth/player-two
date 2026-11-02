@@ -13,7 +13,8 @@ The game's rules, checked against saved frames and the published guides:
 - Power beats Technical beats Speed beats Power (the triangle on the Skills screen).
 - The arc says who's targeted and whether it can be countered, not the monster's type. Yellow:
   a typed attack at the rider. Blue: a typed attack at an ally. Red: an untyped hit on one. No
-  arc: a hit on the whole party. The arc's colour doesn't change with the type Zerk has picked.
+  arc: usually a hit on the whole party, says the guide, but not always (turn 1 of take 2 had no
+  arc and only Chirpy was hit), so nothing's claimed. The colour doesn't change with Zerk's type.
 - The monster's type shows on its ribbon as a move plays, and changes with its phase. Allies
   usually pick the type that wins, which is a hint, not a fact.
 - Each part takes one damage type (crossed-out diamonds on the wheel). Weapon swaps are free.
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import re
 import time
@@ -40,6 +42,9 @@ from PIL import Image
 from .muse import image_part
 
 GAME = "monster hunter stories 3"
+GEAR_FILE = Path.home() / ".cache/player-two/mhs3-gear.json"
+WHEEL_PX = int(os.environ.get("PLAYER_TWO_MH_WHEEL_PX", "1800"))
+STATUS_PX = int(os.environ.get("PLAYER_TWO_MH_STATUS_PX", "800"))
 TYPES = ("Power", "Speed", "Technical")  # the order the left stick steps through them
 ANSWER = {"Speed": "Technical", "Technical": "Power", "Power": "Speed"}  # what beats each
 ALLIES = ("Canyne", "Zerk", "Ogden", "Chirpy")
@@ -366,11 +371,12 @@ Inside are three diamonds, always in this order: left Slash (a sword), middle Pi
 right Blunt (a hammer block). A diamond crossed out with a red line doesn't work on this part. \
 "Break Bonus" and the coloured words under it say what breaking the part does. At the bottom is a \
 blue gauge (how much is left before it breaks) or the word Broken.
-Then say where to hit it, for a friend on the couch who can't see the screen: one or two short \
-plain sentences naming each unbroken part and what it takes, no game jargon, nothing the picture \
-doesn't show.
-JSON: {"parts": [{"name": "...", "works": ["slash"|"pierce"|"blunt"], "broken": true|false, \
-"bonus": "words under Break Bonus, or empty"}], "say": "..."}"""
+The player carries: {weapons}.
+Then tell them where to hit it, the way a friend on the couch would who can see the screen and they \
+can't: one short plain sentence, naming each unbroken part and which of those weapons fits it. No \
+jargon, nothing the picture doesn't show.
+JSON: {{"parts": [{{"name": "...", "works": ["slash"|"pierce"|"blunt"], "broken": true|false, \
+"bonus": "words under Break Bonus, or empty"}}], "say": "..."}}"""
 
 READ_STATUS = """\
 The Status screen of a Monster Hunter Stories 3 fight. The panel at the top right has the monster's \
@@ -378,8 +384,9 @@ name, level, its State, and under Elem Res a row of six element icons, in this o
 water, thunder, ice, dragon. Under each is a mark: red down arrows mean it's weak to that element \
 (two arrows, very weak), blue up arrows mean it resists (two, strongly), a dash means neither. The \
 weapons Zerk carries have these elements: {elements}.
-Then say what they're up against, for a friend on the couch who can't see the screen: one short \
-plain sentence with its name and level and the most useful thing about its elements.
+Then tell them what they're up against, the way a friend on the couch would who can see the screen \
+and they can't: one short plain sentence with its name and level and the most useful thing about \
+its elements for those weapons. No dashes.
 JSON: {{"name": "...", "level": 0, "state": "...", "weak": ["..."], "very_weak": ["..."], \
 "resists": ["..."], "say": "..."}}"""
 
@@ -599,9 +606,9 @@ class Lines:
             return self.pick(f"Big one coming at {name}, and you can't counter it. Just hitting hard.",
                              f"It's winding up on {name}. No counter for that one.",
                              "Another hit we can't counter.")
-        return self.pick("No target line, so that's coming at everybody.",
-                         "It's about to hit the whole party.",
-                         "Whole party's getting hit this time.")
+        return self.pick("No target line this turn, so I'll just go for damage.",
+                         "Can't tell who's next. Going for damage.",
+                         "No line again, so more damage.")
 
     def choice(self, view: View, plan: Plan, swapped: bool) -> str:
         """What's being done, said only once the screen shows it selected."""
@@ -673,12 +680,14 @@ class Fight:
         self.what_line = ""
         self.target = ""
         self.seen_type = ""
-        self.health_was = 1.0
         self.ended = ""
         self.lines = Lines()
         self.talking: asyncio.Task | None = None
         self.last_said = 0.0
         self.asides: set[asyncio.Future] = set()  # Muse looks that don't hold up the turn
+        self.pending: list[asyncio.Future] = []  # Muse readings of what's left the screen
+        self.muse_seconds: dict[str, float] = {}  # model time per kind of reading, for the logs
+        self.turns = 0
         self.note: Callable[[str, dict], None] = (
             lambda name, args: agent.on_action and agent.on_action(name, args))
 
@@ -748,12 +757,13 @@ class Fight:
             try:
                 reply = await asyncio.wait_for(self.a.muse.json(
                     msgs, effort="minimal", max_tokens=tokens), most)
-                self.note("mh_muse", {"kind": kind, "seconds": round(time.monotonic() - t, 2),
-                                      "reply": reply})
+                seconds = round(time.monotonic() - t, 2)
+                self.muse_seconds[kind] = seconds
+                self.note("mh_muse", {"read": kind, "seconds": seconds, "reply": reply})
                 return reply
             except (ValueError, TimeoutError) as exc:
                 last = exc
-        self.note("mh_muse", {"kind": kind, "seconds": round(time.monotonic() - t, 2),
+        self.note("mh_muse", {"read": kind, "seconds": round(time.monotonic() - t, 2),
                               "failed": str(last)})
         raise ValueError(f"no reading: {last}")
 
@@ -829,30 +839,46 @@ class Fight:
 
     # Once a fight: Muse studies the monster
 
-    async def read_status(self) -> None:
-        """Open Status, let Muse read it, close it."""
+    def weapon_words(self) -> str:
+        if not self.weapons:
+            return "a hammer (blunt), a sword (slash), a harp (pierce)"
+        return ", ".join(f"{short(w.name)[4:]} ({w.damage})" for w in self.weapons)
+
+    async def read_status(self, hold: bool = False) -> None:
+        """Open Status, let Muse read it, close it. With hold the panel stays up while Muse
+        reads (it's on camera, and it's what's being read); otherwise it closes right away and
+        the reading finishes behind the next thing, through self.pending."""
         await self._press("rt")
         img = await self.until(status_open, 1.0)
         if img is None:
             self.note("mh_note", {"text": "status didn't open"})
-            await self.until(menu_up, 0.5)
+            await self.back_out()
             return
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.12)
         img = await self._shot()
         w, h = img.size
-        crop = img.crop((940 * w // 1280, 70 * h // 720, 1280 * w // 1280, 365 * h // 720))
+        crop = img.crop((940 * w // 1280, 70 * h // 720, w, 365 * h // 720))
+        elements = ", ".join(f"{x.name}: {x.element or 'none'}" for x in self.weapons) or "unknown"
+
+        async def reading() -> None:
+            self.status = await self.ask("status", [image_part(crop, STATUS_PX)],
+                                         READ_STATUS.format(elements=elements), 800)
+            self.what_line = str(self.status.get("say") or "")
+
+        job = asyncio.ensure_future(reading())
+        if hold:
+            with contextlib.suppress(Exception):
+                await job
+        else:
+            self.pending.append(job)
         await self._press("rt", 0.15)
         if not menu_up(await self._shot()):
             await self._press("b", 0.2)
-        elements = ", ".join(f"{x.name}: {x.element or 'none'}" for x in self.weapons) or "unknown"
-        d = await self.ask("status", [image_part(crop, 1000)],
-                           READ_STATUS.format(elements=elements), 800)
-        self.status = d
-        self.what_line = str(d.get("say") or "")
 
-    async def read_wheel(self) -> None:
+    async def read_wheel(self, hold: bool = False) -> None:
         """Round the wheel once with the camera watching, then one look by Muse at all of it.
-        Pixels check what Muse says the diamonds show. A small monster has no wheel."""
+        Pixels check what Muse says the diamonds show. A small monster has no wheel. hold as
+        for read_status."""
         await self._press("a")
         img = await self.until(wheel_open, 1.2)
         if img is None or not wheel_has_parts(img):
@@ -872,32 +898,48 @@ class Fight:
                          img.crop((980 * w // 2560, 170 * h // 1440,
                                    1680 * w // 2560, 770 * h // 1440))))
             await self._press("rb", 0.2)
-        await self._press("b", 0.25)
+        # What the pixels say is good to go on right away; Muse adds the names and the words.
+        self.parts = [Part(f"part {i + 1}", works, broken, gauge, "", mask)
+                      for i, (mask, works, broken, gauge, _) in enumerate(seen)]
         sheet = Image.new("RGB", (len(seen) * 600, 514))
         for i, entry in enumerate(seen):
             sheet.paste(entry[4].resize((600, 514)), (i * 600, 0))
-        d = await self.ask("wheel", [image_part(sheet, 2400)], READ_WHEEL, 1500)
-        said = d.get("parts") or []
-        parts: list[Part] = []
-        for i, (mask, works, broken, gauge, _) in enumerate(seen):
-            read = said[i] if i < len(said) else {}
-            read_works = [str(x).lower() for x in read.get("works") or []]
-            if read_works != works:  # the diamonds are plain pixels: they win
-                self.note("mh_note", {"text": f"wheel: Muse {read_works} pixels {works}"})
-            parts.append(Part(str(read.get("name") or f"part {i + 1}"), works or read_works,
-                              broken, gauge, str(read.get("bonus") or ""), mask))
-        self.parts = parts
-        self.weak_line = str(d.get("say") or "")
-        self.note("mh_parts", {"parts": [(p.name, p.works, p.broken, round(p.gauge, 2), p.bonus)
-                                         for p in parts], "said": self.weak_line})
+
+        async def reading() -> None:
+            d = await self.ask("wheel", [image_part(sheet, WHEEL_PX)],
+                               READ_WHEEL.format(weapons=self.weapon_words()), 1500)
+            said = d.get("parts") or []
+            for i, part in enumerate(self.parts):
+                read = said[i] if i < len(said) else {}
+                works = [str(x).lower() for x in read.get("works") or []]
+                if works != part.works:  # the diamonds are plain pixels: they win
+                    self.note("mh_note", {"text": f"wheel: Muse {works} pixels {part.works}"})
+                part.name = str(read.get("name") or part.name)
+                part.works = part.works or works
+                part.bonus = str(read.get("bonus") or "")
+            self.weak_line = str(d.get("say") or "")
+            self.note("mh_parts", {"parts": [(p.name, p.works, p.broken, round(p.gauge, 2), p.bonus)
+                                             for p in self.parts], "said": self.weak_line})
+
+        job = asyncio.ensure_future(reading())
+        if hold:
+            with contextlib.suppress(Exception):
+                await job
+        else:
+            self.pending.append(job)
+        await self._press("b", 0.25)
 
     def where_weak(self) -> str:
-        """Muse's words, if they name each unbroken part with what it really takes; otherwise
+        """Muse's words, if they name each unbroken part with something that fits it; otherwise
         plain ones built from the wheel."""
         left = [p for p in self.parts if not p.broken]
         low = self.weak_line.lower()
-        if self.weak_line and len(self.weak_line) < 170 and all(
-                p.name.lower() in low and all(w in low for w in p.works) for p in left):
+        fits = {"slash": ("slash", "sword", "blade"), "pierce": ("pierce", "harp", "arrow", "stab"),
+                "blunt": ("blunt", "hammer", "smash")}
+        wrong = {w for p in left for w in fits.get(p.works[0] if p.works else "", ())}
+        if self.weak_line and len(self.weak_line) < 170 and left and all(
+                p.name.lower() in low and any(word in low for w in p.works
+                                              for word in fits.get(w, ())) for p in left) and wrong:
             return self.weak_line
         if not left:
             return "Everything on it is broken already. Just hit it." if self.parts else \
@@ -906,22 +948,48 @@ class Fight:
                          f"{' or '.join(p.works)}" for p in left)
         return said[0].upper() + said[1:] + "."
 
-    async def study(self) -> None:
-        """What Muse learns once a fight. Each part of it is logged; the whole takes a few
-        seconds, and something true is said before it."""
+    async def settle_reads(self) -> None:
+        jobs, self.pending = self.pending, []
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)
+
+    async def study(self, say_weak: bool = False) -> None:
+        """What Muse learns once a fight: the wheel, then Status, read at the same time once
+        both have been on screen. Each is logged with its model time; the camera sees what's
+        being read; something true is said before the wait."""
         t = time.monotonic()
         self.say(self.lines.pick("Let me get a look at it.", "Checking it out."))
         if not self.weapons:
-            await self.read_gear()
-        else:
-            await self.sync_weapon()
+            await self.load_gear()
+        await self.sync_weapon()
         await self.read_wheel()
         await self.until(menu_up, 1.0)
         await self.read_status()
         await self.until(menu_up, 1.0)
+        await self.settle_reads()
         self.studied = True
         self.note("mh_study", {"seconds": round(time.monotonic() - t, 2),
-                               "monster": self.status.get("name")})
+                               "monster": self.status.get("name"),
+                               "parts": [p.name for p in self.parts]})
+        if say_weak:
+            self.say(self.where_weak())
+
+    # Gear stays between takes: a walk through three pages of skills is not for the camera, and
+    # it only changes when the player changes it. Muse read it, once; `read_gear` refreshes it.
+
+    async def load_gear(self) -> None:
+        with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+            data = json.loads(GEAR_FILE.read_text())
+            self.weapons = [Weapon(w["name"], w["damage"], w.get("element", ""),
+                                   [Skill(**x) for x in w["skills"]]) for w in data]
+            self.note("mh_gear", {"from": str(GEAR_FILE), "weapons": data})
+            return
+        await self.read_gear()
+        with contextlib.suppress(OSError):
+            GEAR_FILE.parent.mkdir(parents=True, exist_ok=True)
+            GEAR_FILE.write_text(json.dumps(
+                [{"name": w.name, "damage": w.damage, "element": w.element,
+                  "skills": [vars(x) for x in w.skills]} for w in self.weapons], indent=1))
 
     # One turn
 
@@ -931,8 +999,8 @@ class Fight:
         self.status = {}
         self.weak_line = self.what_line = ""
         self.target = self.seen_type = self.ended = ""
-        self.health_was = 1.0
         self.lines = Lines()
+        self.turns = 0
 
     def view(self, img: Image.Image, wheel: Image.Image, kind_now: str) -> View:
         hint, hint_from = "", ""
@@ -1089,7 +1157,7 @@ class Fight:
         on a menu."""
         t0 = time.monotonic()
         hits, named, read_toast = 0, False, False
-        last_screen, over = t0 + 9.0, 0
+        last_screen, over, nudge = t0 + 9.0, 0, t0 + 14.0
         while time.monotonic() - t0 < 70 and not self.a.cancelled:
             img = await self._shot()
             if menu_up(img):
@@ -1102,6 +1170,9 @@ class Fight:
             if now - t0 > 1.2 and (wheel_open(img) or skills_tab(img) is not None):
                 await self._press("b", 0.3)
                 continue
+            if now >= nudge:  # this long with no menu: one that no check knows may be open
+                nudge = now + 10.0
+                await self._press("b", 0.2)
             kind = monster_ribbon(img)
             if kind:
                 if kind in ANSWER and kind != self.seen_type:
@@ -1154,9 +1225,17 @@ class Fight:
             return "fight"
         return str(d.get("screen") or "fight")
 
-    async def take_turn(self, img: Image.Image, request: str) -> Plan | None:
-        """Look, say why, select, say what, confirm. No model call in here."""
+    async def take_turn(self, img: Image.Image, request: str, heal: bool = False) -> Plan | None:
+        """Look, say why, select, say what, confirm. No model call in here: Muse's reading of the
+        monster was done once, in study."""
         t = time.monotonic()
+        self.turns += 1
+        if self.turns % 6 == 0:
+            self.lines.used.clear()  # a long fight: words can come round again
+        said = request.lower()
+        for p in self.parts:
+            if p.name.lower() in said:
+                self.target = p.name
         kind_now = menu_type(img)
         await self._press("a")
         wheel = await self.until(wheel_open, 1.2)
@@ -1164,8 +1243,11 @@ class Fight:
             await self.back_out()
             self.note("mh_note", {"text": "wheel didn't open"})
             return None
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.15)
         wheel = await self._shot()
+        if arc_seen(wheel)[0] == "none":  # just opened: give the streak a moment
+            await asyncio.sleep(0.3)
+            wheel = await self._shot()
         if os.environ.get("PLAYER_TWO_FRAMES"):  # what each turn was picked from (debugging)
             with contextlib.suppress(OSError):
                 wheel.convert("RGB").save(Path(os.environ["PLAYER_TWO_FRAMES"]).expanduser()
@@ -1178,9 +1260,13 @@ class Fight:
             if broken and not on.broken and on.name == self.target:
                 just_broke = on.name
             on.broken, on.gauge = broken, wheel_gauge(wheel)
-        view = self.view(img, wheel, kind_now)
+        view = await asyncio.to_thread(self.view, img, wheel, kind_now)
         low = monster_health(wheel)
         plan = choose(view)
+        if heal and plan.do != "item":
+            worst = min(ALLIES, key=lambda who: view.hp.get(who, 1.0) or 1.0)
+            plan = Plan("item", item="Potion", on=worst if view.hp.get(worst, 1.0) < 0.9 else "Zerk",
+                        type=view.menu_type, weapon=view.in_hand)
         t_read = time.monotonic() - t
         # Said now, while the presses go on: all true of this moment.
         reaction = self.lines.broke(just_broke) if just_broke else self.lines.monster_low(low)
@@ -1213,8 +1299,10 @@ class Fight:
             "hp": {k: round(v, 2) for k, v in view.hp.items()}, "gauge": view.gauge,
             "monster_health": round(low, 2), "seen_type": view.monster_type,
             "hint": view.hint_type, "canyne": view.canyne_type,
-            "muse_informed": {"part_damage": "wheel" if plan.part else "",
-                              "skill_details": "skill" if plan.skill else ""}})
+            # What Muse read that this turn's choice rests on, and how long each reading took.
+            "muse_informed": {k: self.muse_seconds.get(k) for k in (
+                ["wheel"] if plan.part else []) + (["skill"] if plan.skill else [])
+                + (["status"] if self.status else [])}})
         return plan
 
     async def run(self, request: str, mode: str, deadline: float = 240.0) -> str:
@@ -1231,16 +1319,25 @@ class Fight:
             self.reset_fight()
         if mode == "health":
             return self.lines.health({who: bar_share(img, who) for who in ALLIES})
-        if not self.studied:
-            await self.study()
-            img = await self.until(menu_up, 3.0) or img
         if mode == "what":
+            if not self.status:
+                if not self.weapons:
+                    await self.load_gear()
+                await self.read_status(hold=True)
             return self.what_line or f"It's a {self.status.get('name') or 'monster'}."
         if mode == "weak":
+            if not self.parts:
+                if not self.weapons:
+                    await self.load_gear()
+                await self.read_wheel(hold=True)
             return self.where_weak()
+        if not self.parts or not self.status:
+            await self.study(say_weak=mode == "fight" and not self.parts)
+            img = await self.until(menu_up, 3.0) or img
+        self.studied = True
         t0 = time.monotonic()
         while not self.a.cancelled and time.monotonic() - t0 < deadline:
-            await self.take_turn(img, request)
+            await self.take_turn(img, request, heal=mode == "heal")
             if mode in ("turn", "heal"):
                 await self.said()
                 return ""
