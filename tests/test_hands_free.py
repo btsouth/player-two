@@ -406,3 +406,18 @@ async def test_stop_after_an_explicit_name_only_call_is_still_addressed(monkeypa
     assert s.follow_until > time.monotonic()
     await heard(s, "Stop.")
     assert s.handled == ["Stop."]
+
+
+async def test_an_obviously_truncated_action_is_not_sent_to_the_agent(monkeypatch):
+    s = session(monkeypatch)
+    replies = []
+    async def announce(text, **kwargs):
+        replies.append(text)
+    s.announce = announce
+    await heard(s, "Player Two, attack the.")
+    assert s.handled == []
+    assert replies and "whole request" in replies[0]
+    # A concrete target is not a grammatical truncation, including enemy A.
+    await heard(s, "Player Two, attack the one on the left.")
+    await heard(s, "Player Two, attack A.")
+    assert s.handled == ["attack the one on the left", "attack A"]

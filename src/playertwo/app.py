@@ -127,6 +127,13 @@ def local_action(text: str) -> str | None:
     return None
 
 
+# VAD can end a thought during a long pause. Do not let a missing object become
+# the model's guess at a target; the player repeats the complete request.
+INCOMPLETE_ACTION = re.compile(
+    r"^(?:(?:please|can you|could you) )?(?:\w+,? )?"
+    r"(?:attack|hit|strike|open|close|read|use|cast|buy|sell|heal|take) the$", re.IGNORECASE)
+
+
 HELP = ("{talk} and ask me anything about the game, or tell me what to do, like: "
         "open the menu, or: use a potion on Yosuke. You can also say: next, to press A and "
         "hear the next line, describe, what does it look like, who's here, repeat, stop, "
@@ -1626,6 +1633,10 @@ class Session:
                 self.voice.stop()
             self.voice.cue("heard")
             self._heard(said, timing, raw=text)
+            if INCOMPLETE_ACTION.fullmatch(said):
+                await self.announce("I missed the end. Say the whole request with my name.",
+                                    interrupt=True, status=True)
+                return
             await self.handle(said)
         finally:
             if woke and self.utt is None:
