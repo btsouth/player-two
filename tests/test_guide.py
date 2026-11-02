@@ -64,10 +64,9 @@ def test_a_line_not_really_said_is_offered_again():
 
 
 def test_pitch_and_beeps_rise_with_the_box():
-    guide = g.Guide(0.0)
-    far = guide.look([m(0.5, 0.002)], 1.0)
-    mid = guide.look([m(0.5, 0.012)], 2.0)
-    near = guide.look([m(0.5, 0.045)], 3.0)
+    far = g.Guide(0.0).look([m(0.5, 0.002)], 1.0)
+    mid = g.Guide(0.0).look([m(0.5, 0.012)], 1.0)
+    near = g.Guide(0.0).look([m(0.5, 0.045)], 1.0)
     assert far.hz == pytest.approx(660.0) and far.hz < mid.hz < near.hz
     assert (far.beeps, mid.beeps, near.beeps) == (1, 2, 3)
     assert far.wait_s > mid.wait_s > near.wait_s
@@ -75,7 +74,7 @@ def test_pitch_and_beeps_rise_with_the_box():
 
 def test_getting_close_once():
     guide = g.Guide(0.0)
-    guide.said(guide.look([m(0.5, 0.01)], 1.0).say, 1.0)
+    guide.said(guide.look([m(0.5, 0.015)], 1.0).say, 1.0)
     step = guide.look([m(0.5, 0.03)], 2.0)
     assert step.say == "Getting close."
     guide.said(step.say, 2.0)
@@ -84,10 +83,10 @@ def test_getting_close_once():
 
 def test_arrival_needs_two_looks_in_a_row():
     guide = g.Guide(0.0)
-    assert guide.look([m(0.5, 0.09)], 1.0).end == ""
-    assert guide.look([m(0.5, 0.01)], 2.0).end == ""  # one big box was a fluke
-    assert guide.look([m(0.5, 0.09)], 3.0).end == ""
-    step = guide.look([m(0.5, 0.09)], 4.0)
+    assert guide.look([m(0.5, 0.06)], 1.0).end == ""
+    assert guide.look([m(0.5, 0.04)], 2.0).end == ""  # one big box was a fluke
+    assert guide.look([m(0.5, 0.06)], 3.0).end == ""
+    step = guide.look([m(0.5, 0.06)], 4.0)
     assert step.end == "there" and step.say == "You're there."
 
 
@@ -187,15 +186,15 @@ def _done(_value):
 @pytest.mark.asyncio
 async def test_a_walk_to_arrival_logs_every_look(monkeypatch):
     s, said, cues, emitted = session(monkeypatch, [
-        [m(0.2, 0.01)], [m(0.5, 0.09)], [m(0.5, 0.09)]])
+        [m(0.2, 0.03)], [m(0.25, 0.06)], [m(0.25, 0.06)]])
     await s.guide("horse")
     await asyncio.sleep(0)
     assert said == ["Okay. Listen for the ping.", "Left.", "Getting close.", "You're there."]
     looks = [d for k, d in emitted if k == "guide"]
     assert [d["cycle"] for d in looks] == [1, 2, 3]
     assert looks[0]["pan"] == -0.6 and looks[0]["box"] == pytest.approx(
-        list(m(0.2, 0.01).box)) and looks[0]["seconds"] == 0.5 and looks[0]["said"] == "Left."
-    assert looks[0]["boxes"] == [pytest.approx(list(m(0.2, 0.01).box))]
+        list(m(0.2, 0.03).box)) and looks[0]["seconds"] == 0.5 and looks[0]["said"] == "Left."
+    assert looks[0]["boxes"] == [pytest.approx(list(m(0.2, 0.03).box))]
     assert cues[0] == -0.6
     assert emitted[-1][0] == "guide_end" and emitted[-1][1]["reason"] == "there"
 
@@ -269,3 +268,54 @@ def test_the_driver_goes_around_when_the_box_stops_growing():
     steady = g.Step(m(0.5, 0.01), 0.0, 900.0, 1, 1.0, "", g.AHEAD)
     moves = [d.after(steady) for _ in range(5)]
     assert not moves[3].around and moves[4].around
+
+
+def test_a_box_bigger_in_one_look_waits_for_the_next_to_agree():
+    guide = g.Guide(0.0)
+    guide.look([m(0.5, 0.008)], 1.0)
+    # Live: a box on the player's own character, for one look, over a far horse.
+    step = guide.look([m(0.47, 0.03, cy=0.7)], 2.0)
+    assert step.pan is None and step.say == "" and step.beeps == 0
+    step = guide.look([m(0.5, 0.01)], 3.0)
+    assert step.target.area == 0.01
+    guide.look([m(0.5, 0.04)], 4.0)
+    assert guide.look([m(0.5, 0.04)], 5.0).target.area == 0.04  # it was real: now believed
+
+
+def test_a_box_the_camera_carries_is_dropped():
+    guide = g.Guide(0.0)
+    john = m(0.5, 0.05, cy=0.7)
+    horse = m(0.2, 0.01, cy=0.4)
+    assert guide.look([john, horse], 1.0, 0.1).target is john  # it can't tell yet
+    guide.look([john, horse], 2.0, 0.1)
+    step = guide.look([john, horse], 3.0, 0.1)  # 3 looks in one spot as the view moved
+    assert step.target is not john
+    assert guide.look([john], 4.0, 0.1).target is None
+
+
+def test_a_still_view_keeps_a_still_box():
+    guide = g.Guide(0.0)
+    still = m(0.5, 0.01)
+    for i in range(6):
+        assert guide.look([still], float(i + 1), 0.0).target is still
+
+
+def test_it_says_when_there_are_several_and_when_it_may_have_switched():
+    guide = g.Guide(0.0)
+    step = guide.look([m(0.2, 0.01), m(0.8, 0.002)], 1.0)
+    assert step.say == "I see more than one. Going to the biggest." and step.target.cx == 0.2
+    guide.said(step.say, 1.0)
+    # Locked: a bigger one elsewhere doesn't take over, the one nearest the last does.
+    assert guide.look([m(0.8, 0.02), m(0.22, 0.01)], 2.0).target.cx == 0.22
+    # The one followed is gone and only the far one is left: one look, then honest.
+    assert guide.look([m(0.95, 0.002)], 3.0).pan is None
+    step = guide.look([m(0.95, 0.002)], 4.0)
+    assert step.say == "Not sure that's the same one." and step.target.cx == 0.95
+
+
+def test_picture_change():
+    import numpy as np
+
+    a = np.zeros((4, 4), dtype=np.uint8)
+    assert g.picture_change(None, a) == 0.0 and g.picture_change(a, a) == 0.0
+    assert g.picture_change(a, a + 255) == 1.0

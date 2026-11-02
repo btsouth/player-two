@@ -36,12 +36,13 @@ function Install-PlayerTwo {
     # window, in the middle of the install; step 3 installs the driver quietly instead.
     $env:VGAMEPAD_SKIP_VIGEMBUS_INSTALL = "true"
     $log = Join-Path $env:TEMP "player-two-install.log"
-    & uv tool install --force --python 3.12 "player-two[windows] @ $source" *> $log
+    & uv tool install --force --python 3.12 "player-two[windows] @ $source" 2>&1 |
+        ForEach-Object { $_.ToString() } | Set-Content -Path $log
     if ($LASTEXITCODE -ne 0) {
         Say "Installing Player Two failed. The details are in $log. Run this again, or report it at github.com/btsouth/player-two/issues."
         return
     }
-    & uv tool update-shell *> $null
+    & uv tool update-shell 2>&1 | ForEach-Object { $_.ToString() } | Out-Null
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 
     # Step 3: what needs administrator rights, behind a single Windows permission prompt.

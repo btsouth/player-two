@@ -169,13 +169,18 @@ async def test_answers_need_no_name_but_its_own_question_is_not_one(monkeypatch)
     assert s.handled == ["Go."]
 
 
-async def test_stop_needs_no_name_while_it_is_busy(monkeypatch):
+async def test_game_speech_cannot_cancel_with_a_bare_stop(monkeypatch):
     s = session(monkeypatch)
     await heard(s, "Stop.")
     assert s.handled == []  # nothing to stop: someone else in the room
     s.voice.speaking = True
     await heard(s, "Stop.")
-    assert s.handled == ["Stop."]
+    assert s.handled == []
+    s.answer = asyncio.get_running_loop().create_future()
+    await heard(s, "Stop.")
+    assert s.handled == []
+    await heard(s, "Player Two, stop.")
+    assert s.handled == ["local:stop"]
 
 
 async def test_its_name_stops_its_voice_and_holds_an_action_until_it_hears_why(monkeypatch):
@@ -303,3 +308,273 @@ async def test_okay_stopped_is_not_cut_off_by_the_rest_of_the_same_stop(monkeypa
     s.hands_partial("Player Two stop. Um", started)
     await asyncio.sleep(0)
     assert s.handled == ["local:stop"] and s.voice.stopped == 0 and not s.hands_active
+
+
+async def test_completed_transcription_timing_is_logged_without_guessing(monkeypatch):
+    s = session(monkeypatch)
+    timing = {"transcribe_s": 2.34, "transcribe_finalize_s": 0.12, "transcribe_audio_s": 2.08}
+    now = time.monotonic()
+    await s.hands_heard("Player Two, open the menu", None, now - 2, now, timing)
+    event = next(e for e in s.events.recent if e["kind"] == "heard")
+    assert event["text"] == "open the menu"
+    assert event["raw_transcript"] == "Player Two, open the menu"
+    assert {k: event[k] for k in timing} == timing
+
+
+async def test_partial_stop_does_not_invent_a_completed_asr_time(monkeypatch):
+    s = session(monkeypatch)
+    now = time.monotonic()
+    s.hands.started = now
+    s.hands_partial("Player Two, stop.", now)
+    await asyncio.sleep(0)
+    first = next(e for e in s.events.recent if e["kind"] == "heard")
+    assert "transcribe_s" not in first
+    assert "utterance_started_at" in first
+    timing = {"transcribe_s": 1.5, "transcribe_finalize_s": 0.1, "transcribe_audio_s": 1.4}
+    stages = []
+    emit = s.events.emit
+    def capture(kind, **data):
+        if kind == "model_stage":
+            stages.append(data)
+        emit(kind, **data)
+    s.events.emit = capture
+    await s.hands_heard("Player Two, stop.", None, now, now + 1, timing)
+    assert len(stages) == 1 and stages[0]["seconds"] == 1.5
+    assert s.handled.count("local:stop") == 1
+
+
+async def test_utterance_timing_measures_stream_not_text(monkeypatch):
+    from playertwo.listen import RATE, Utterance
+    clock = [10.0]
+    monkeypatch.setattr("playertwo.listen.time.monotonic", lambda: clock[0])
+    u = Utterance()
+    async def session():
+        clock[0] = 12.6
+        return "Open the menu."
+    monkeypatch.setattr(u, "_session", session)
+    u.start()
+    u.feed(b"\0\0" * RATE)
+    clock[0] = 12.5
+    u.finish()
+    assert u.timing() == {}
+    assert await u.text() == "Open the menu."
+    assert u.timing() == {"transcribe_s": 2.6, "transcribe_finalize_s": 0.1,
+                          "transcribe_audio_s": 1.0}
+
+
+async def test_a_different_target_is_not_its_own_greeting_echo(monkeypatch):
+    s = session(monkeypatch)
+    s.events.emit("say", text="I'm Player Two. Start with my name, like Player Two, open the menu.")
+    spoke(s, ago=2, length=3)
+    s.voice.speaking = True
+    await heard(s, "Player Two, open the journal.", ago=1.5, length=1)
+    assert s.handled == ["open the journal"]
+    assert s.voice.stopped == 1  # final genuine request cuts off its greeting
+
+
+async def test_its_actual_named_greeting_echo_still_does_not_act(monkeypatch):
+    s = session(monkeypatch)
+    s.events.emit("say", text="I'm Player Two. Start with my name, like Player Two, open the menu.")
+    spoke(s, ago=2, length=3)
+    s.voice.speaking = True
+    await heard(s, "Player Two, open the menu.", ago=1.5, length=1)
+    assert s.handled == []
+
+
+async def test_a_bare_answer_keeps_its_unaddressed_warning_for_the_agent(monkeypatch):
+    s = session(monkeypatch)
+    s.paused = False
+    s.agent.cancelled = False
+    s.handle = Session.handle.__get__(s, Session)
+    async def say(*args, **kwargs):
+        return None
+    async def wait_idle(*args, **kwargs):
+        return None
+    s.voice.say = say
+    s.voice.wait_idle = wait_idle
+    ask = asyncio.create_task(s.agent_ask("How many?", timeout=1))
+    await asyncio.sleep(0)
+    await heard(s, "Three.")
+    answer = await ask
+    assert answer.startswith("Three.")
+    assert 'heard hands-free without "Player Two"' in answer
+    assert "for anything hard to undo, ask again" in answer
+
+
+async def test_stop_after_an_explicit_name_only_call_is_still_addressed(monkeypatch):
+    s = session(monkeypatch)
+    await heard(s, "Player Two.")
+    assert s.follow_until > time.monotonic()
+    await heard(s, "Stop.")
+    assert s.handled == ["Stop."]
+
+
+async def test_an_obviously_truncated_action_is_not_sent_to_the_agent(monkeypatch):
+    s = session(monkeypatch)
+    replies = []
+    async def announce(text, **kwargs):
+        replies.append(text)
+    s.announce = announce
+    await heard(s, "Player Two, attack the.")
+    assert s.handled == []
+    assert replies and "whole request" in replies[0]
+    # A concrete target is not a grammatical truncation, including enemy A.
+    await heard(s, "Player Two, attack the one on the left.")
+    await heard(s, "Player Two, attack A.")
+    assert s.handled == ["attack the one on the left", "attack A"]
+
+
+def test_damaged_names_need_a_command_at_the_start():
+    from playertwo.listen import wake_match
+    for name in ('Two', 'Too', '2', 'There too', 'There two', 'There 2', 'Layer two', 'Prayer two', 'Play two', 'Player,'):
+        match = wake_match(f'{name} read this menu.')
+        assert match and match[0] == 'read this menu' and match[2]
+    assert addressed('two paused the game.') == 'paused the game'
+    for text in ('Two shadows block the gate', 'Two of them left', 'There too', 'Two',
+                 'The game says two read this menu', 'A prayer two read this menu',
+                 'Player read this menu', 'There too, shadows wait'):
+        assert addressed(text) is None, text
+
+
+async def test_damaged_names_are_logged_and_still_subject_to_echo(monkeypatch):
+    s = session(monkeypatch)
+    await heard(s, 'Two, read this menu.')
+    event = next(e for e in s.events.recent if e['kind'] == 'heard')
+    assert s.handled == ['read this menu']
+    assert event['wake_form'] == 'Two' and event['wake_damaged'] is True
+    assert event['hands_free'] is True  # the film's "No button pressed" tag needs this
+    s.handled.clear()
+    s.events.emit('say', text='Two, read this menu.', source='narrator')
+    spoke(s, ago=2, length=2)
+    await heard(s, 'Two, read this menu.', ago=1.5, length=1)
+    assert s.handled == []
+    s.events.emit('say', text='Two, stop.', source='narrator')
+    await heard(s, 'Two, stop.', ago=1.5, length=1)
+    assert s.handled == []
+
+
+def test_soft_onset_keeps_twelve_frames_without_moving_vad_onset(monkeypatch):
+    from playertwo import listen
+    clock = [10.0]
+    monkeypatch.setattr(listen.time, 'monotonic', lambda: clock[0])
+    class Buffered:
+        def __init__(self, *args, **kwargs):
+            self.frames = []
+        def start(self):
+            pass
+        def feed(self, frame):
+            self.frames.append(frame)
+    monkeypatch.setattr(listen, 'Utterance', Buffered)
+    h = listen.HandsFree.__new__(listen.HandsFree)
+    h.paused = lambda: False
+    h.segmenter = Segmenter()
+    h.utt = None
+    h.keywords = list
+    h.on_partial = lambda *args: None
+    probabilities = iter([0.1] * 18 + [0.9, 0.9])
+    h.detector = lambda frame: next(probabilities)
+    for i in range(20):
+        clock[0] = 10.0 + (i + 1) * Segmenter.FRAME_S
+        h.feed(bytes([i]) * FRAME * 2)
+    assert len(h.utt.frames) == 12
+    assert h.utt.frames[0][0] == 8
+    assert h.started == clock[0] - 0.16
+    assert h.audio_started == clock[0] - 0.96
+    assert sum(map(len, h.utt.frames)) == 46_080
+
+
+async def test_preroll_tail_does_not_steal_a_new_named_request(monkeypatch):
+    s = session(monkeypatch)
+    now = time.monotonic()
+    s.spans.append([now - 3, now - 2])
+    s.events.emit('say', text='Player Two, open the menu.', source='hello')
+    timing = {'utterance_audio_started_at': time.time() - 3}
+    await s.hands_heard('Player Two, open the menu. Player Two, read this menu.', None,
+                        now - 2, now, timing)
+    assert s.handled == ['read this menu']
+    s.handled.clear()
+    await s.hands_heard('Player Two, open the menu.', None, now - 2, now, timing)
+    assert s.handled == []
+
+
+async def test_talk_key_audio_waits_in_order_while_the_socket_connects(monkeypatch):
+    import json
+
+    from playertwo import listen
+    sent = []
+    connected = asyncio.Event()
+    ended = asyncio.Event()
+    class Socket:
+        async def send(self, data):
+            sent.append(data)
+            if isinstance(data, str) and json.loads(data).get('type') == 'endStream':
+                ended.set()
+        async def recv(self):
+            return '{"sessionId":"test"}'
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            await ended.wait()
+            raise StopAsyncIteration
+    class Connection:
+        async def __aenter__(self):
+            await connected.wait()
+            return Socket()
+        async def __aexit__(self, *args):
+            return None
+    monkeypatch.setattr(listen.websockets, 'connect', lambda *args, **kwargs: Connection())
+    monkeypatch.setattr(listen, 'api_key', lambda: 'test')
+    u = listen.Utterance()
+    u.start()
+    u.feed(b'first word')
+    await asyncio.sleep(0)
+    u.feed(b'rest of request')
+    u.finish()
+    assert not sent
+    connected.set()
+    assert await u.text() == ''
+    assert sent[1:3] == [b'first word', b'rest of request']
+
+
+async def test_a_damaged_named_stop_uses_the_real_local_cancel_route(monkeypatch):
+    s = session(monkeypatch)
+    s.handle = Session.handle.__get__(s, Session)
+    await heard(s, 'Two, stop.')
+    assert s.handled == ['local:stop']
+    event = next(e for e in s.events.recent if e['kind'] == 'heard')
+    assert event['wake_form'] == 'Two' and event['wake_damaged'] is True
+
+
+def test_talk_key_ready_cue_waits_for_the_microphone(monkeypatch):
+    from playertwo import app
+    s = session(monkeypatch)
+    calls = []
+    class Mic:
+        def start(self):
+            calls.append('capture open')
+    class Utterance:
+        def __init__(self, *args, **kwargs):
+            pass
+        def start(self):
+            calls.append('socket task queued')
+    monkeypatch.setattr(app, 'Mic', Mic)
+    monkeypatch.setattr(app, 'Utterance', Utterance)
+    s.voice.cue = calls.append
+    s.keywords = []
+    s.spawn = lambda coro: coro.close()
+    s.talk_start()
+    assert calls == ['capture open', 'listening', 'socket task queued']
+
+
+async def test_its_own_quoted_named_stop_is_not_a_fresh_request(monkeypatch):
+    s = session(monkeypatch)
+    s.events.emit('say', text='You can say Player Two, stop.', source='narrator')
+    spoke(s, ago=2, length=2)
+    await heard(s, 'Player Two, stop.', ago=1.5, length=1)
+    assert s.handled == []
+    # Once the old line is over, the player's identical cancellation still works.
+    s.spans.clear()
+    s.spoke_at = 0
+    s.handle = Session.handle.__get__(s, Session)
+    await heard(s, 'Player Two, stop.')
+    assert s.handled == ['local:stop']

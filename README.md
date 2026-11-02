@@ -5,18 +5,52 @@ answers questions and presses the buttons when you ask.
 
 > **VIDEO PLACEHOLDER: final 3 minute demo goes here before submission.**
 
-For players who need a sighted friend to read a menu, find a doorway or take a turn.
-Say “take me to the fair”, “buy three potions” or “Crono, use Cyclone”. Player Two narrates,
-acts through a virtual controller, checks the result and tells you what happened.
+For players who want help reading a menu, finding a doorway or taking a turn in a
+commercial game. Ask a question or delegate an action; Player Two reads the game window,
+answers aloud, sends controller or keyboard input, and checks what changed.
+Chrono Trigger has the deepest support. Monster Hunter Stories 3 uses a game-specific
+battle routine. Red Dead Redemption demonstrates reading, answering and keyboard input.
 
 **No blind player has tested it yet.**
+
+## How it works
+
+```mermaid
+flowchart LR
+    mic[Microphone] --> stt[Muse Voice Transcribe]
+    stt --> router[Local command router]
+    typed[Typed request] --> router
+    router --> fast[Local fast path]
+    router --> muse[Muse Spark tool loop]
+    fast --> exec[Local executors and pathfinding]
+    muse -->|Tool request| exec
+    exec -->|Observed result| muse
+    exec --> input[Virtual controller or keyboard]
+    input --> game[Game on the player's PC]
+    game --> capture[Screen capture]
+    capture --> reader[Local pixel reader]
+    capture --> muse
+    capture --> sam[SAM 3.1 finding]
+    sam --> exec
+    reader --> exec
+    reader --> voice[Kokoro voice or screen reader]
+    muse --> voice
+```
+
+**Muse picks the tool. Code finds the path and plays the turns.** Supported Chrono Trigger
+commands can also go straight from the local router to an executor. Its default fight routine
+chooses attacks, healing and revives with local rules; Muse does not choose those turns.
+Kokoro runs locally. The Meta models use hosted APIs. Details and limits are below.
 
 ## Live results
 
 Chrono Trigger on Steam, Nov 2, build `9c7c6f3`, Battle Mode set to Wait. Each run restarted the game
 and loaded the same save. Requests were typed into the running app. The voice path has its own
-tests: 63 of 63 synthetic spoken lines routed correctly, and real microphone runs come next. "Done" means the task finished correctly,
-checked against the game's screen.
+tests: 63 of 63 synthetic spoken lines matched the typed command parser's decisions and arguments
+in the same game/screen context. That checks transcription and routing, not completed actions or a
+real microphone. "Done" means the task finished correctly, checked against the game's screen.
+Action times end at logged task completion; the final spoken result can continue afterwards.
+Local-answer times include the spoken answer. First words can include an acknowledgement.
 
 | Request | Done | Whole task |
 |---|---:|---|
@@ -25,15 +59,16 @@ checked against the game's screen.
 | Take me to the fair | 6/6 | 3.8 to 4.3 s, a door press from the world map |
 | Buy three potions | 6/6 | 17.3 to 20.4 s |
 | Take me back outside | 6/6 | 8.5 to 14.9 s |
-| Crono, use Cyclone | 4/5 | 6.1 to 8.5 s when he was ready |
+| Crono, use Cyclone | 4/5 | 6.1 to 8.5 s across all attempts, including the failure |
 | Win this fight for me, after a combo took two or three of the party to 1 HP | 4/5 | Wins 42 to 53 s |
 
 In the one lost fight the party was wiped out right after Cyclone was picked. Player Two then went
 back through the title and loaded the last save without being asked. One more run didn't count
-because my launch script failed before the fight started. Just before these runs, on a slightly
-older build, a purchase wandered for 65 s by the seller and said nothing, so I made the walker give
-up sooner. This is a small sample on one save, not a general success rate. Earlier
-builds lost 3/3 boss attempts.
+because the launch script failed before the fight started. Completed tasks can still fail the
+narration timing checks: all six purchase runs did. These counts measure completion, not speech
+quality. Just before these runs, on a slightly older build, a purchase wandered for 65 s by the
+seller and said nothing, so the walker was changed to give up sooner. This is a small sample on
+one save, not a general success rate. Earlier builds lost 3/3 boss attempts.
 
 ## Try it
 
@@ -47,11 +82,23 @@ A fresh install includes the generic narrator and agent, plus the Chrono Trigger
 - A supported capture session: Windows windowed/borderless, Linux Hyprland, or X11.
   GNOME/KDE Wayland capture is unsupported. X11 captures the first screen, not just the game.
 - Microphone for voice commands, audio output or a supported screen reader. GPU optional.
-- Linux: git, [uv](https://docs.astral.sh/uv/), C compiler and Linux kernel headers (evdev),
-  PortAudio and gdbus. Ubuntu: `sudo apt install git build-essential linux-headers-generic libportaudio2 libglib2.0-bin`.
-  Add `curl` if installing uv with its shell installer.
+- Linux: git, [uv](https://docs.astral.sh/uv/), C compiler, Linux kernel headers (evdev),
+  PortAudio and gdbus. The Ubuntu commands below install them.
+- Windows: PowerShell and internet access. Git is needed only for the source-clone/offline
+  checks below, not for the installer or saved-frame narration.
 
 ### Linux
+
+On Ubuntu, install the prerequisites and uv first:
+
+```bash
+sudo apt update
+sudo apt install git build-essential linux-headers-generic libportaudio2 libglib2.0-bin curl
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then install Player Two:
 
 ```bash
 git clone https://github.com/btsouth/player-two && cd player-two
@@ -64,7 +111,7 @@ player-two setup
 Setup asks for the key, speech output, microphone, controller, hands-free/talk key and launcher.
 It can explain missing devices on a headless machine, but a complete live session needs a desktop.
 The controller permission step may request sudo; logging out and back in may be needed.
-With NVIDIA, use `".[cuda]"` instead of `.` (roughly 2 GB extra dependencies).
+With NVIDIA, use `".[cuda]"` instead of `.` to install the additional GPU dependencies.
 
 ### Windows
 
@@ -78,12 +125,21 @@ The script installs uv, Python 3.12, the Windows extras, the Visual C++ runtime 
 ViGEmBus with one elevation prompt, then starts setup. It downloads **main**, so branch-only
 fixes are not installed until merged. ViGEmBus is retired; if unavailable, keyboard control
 is the fallback. ARM uses keyboard control. Use a windowed or borderless game.
-Earlier Windows 11 VM testing covered installation and input; the deep Chrono Trigger path
-has only been measured on Linux. This is not a fresh Windows acceptance result for every commit.
+After setup, `player-two --help` lists the commands. A fresh application install on a Windows 11
+laptop from public main `259ca29` completed, including setup, help, an offline check and a real
+saved-frame Muse response on Nov 2. This was an existing Windows installation, not a clean OS.
+The deep Chrono Trigger path has only been measured on Linux.
+
+If a valid key/model returns HTTP 404 on a cloud network, see the
+[IPv4/IPv6 validation caveat](docs/validation.md#a-real-call-without-a-game). The tested Ubuntu
+VM needed an IPv4-only connection for Muse; the Windows laptop did not. Installation and offline
+checks do not detect that API routing problem.
 
 ### No key or no desktop? Run the offline checks
 
-After the Linux tool install, from the clone:
+From the Linux clone used above, run the command below. On Windows, the installer does not
+include a source checkout: install [Git](https://git-scm.com/downloads/win), open a new PowerShell,
+and first run `git clone https://github.com/btsouth/player-two; cd player-two`.
 
 ```bash
 uv run --python 3.12 python scripts/self_check.py
@@ -93,27 +149,50 @@ This loads the packaged reader assets, processes a blank frame, and routes aroun
 with the real A* planner. No network calls, audio, controller or desktop are opened. It is
 an install smoke check, **not an AI gameplay demo**. The first `uv run` may install the project dependencies; the check itself makes no network calls.
 
-For a no-commercial-game demo on a supported desktop, open `tests/arena/index.html` in a browser
-from this clone. It is a small local test battle: up/down choose, Enter confirms, Escape cancels.
-With a key, run:
+### No game installed? Describe a practice frame
+
+With a Meta key saved by `player-two setup`, this makes one real Muse Spark request and prints
+the answer. It needs no game, microphone, controller, voice playback or desktop. The image is
+an original static practice screen, not gameplay. It checks vision narration, not the tool loop
+or button presses.
+
+From the Linux source clone:
+
+```bash
+player-two narrate --brain meta --game "Player Two practice arena" tests/arena/sample.png
+```
+
+On Windows, from any writable folder in PowerShell:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/btsouth/player-two/main/tests/arena/sample.png -OutFile sample.png -UseBasicParsing
+player-two narrate --brain meta --game "Player Two practice arena" sample.png
+```
+
+Expect a short description mentioning your turn and Attack being selected; wording varies.
+The command prints measured request time and an estimated API cost. It is a paid API call.
+Without a key, use the offline check above; there is no no-key AI demo.
+
+For interactive synthetic scenes on a supported desktop, open `tests/arena/index.html` or
+`tests/town/index.html` from a source clone in a browser. They can be played manually without a
+key. The arena uses up/down, Enter and Escape. To try Player Two with a key, launch:
 
 ```bash
 player-two run --controls keyboard --window Arena --game "a small JRPG test scene" --companion off
-# In another terminal, while the Arena window is focused:
-player-two ctl do "Read the dialogue"
 ```
 
-Then try “attack the left enemy”. A Chromium browser on Hyprland can receive keyboard input;
-other browser/session combinations are not guaranteed. `tests/town/index.html` supplies a
-walking scene. These synthetic fixtures contain no commercial game footage. They work manually
-without a key; Player Two's AI does not. Automated trials are in `scripts/arena_trials.sh` and
-`scripts/town_trials.sh` and require an isolated desktop, credentials and extra tools.
+Focus the browser, then use the configured talk key or hands-free mode to ask it to read the
+screen or attack. Browser capture, focus and keyboard delivery still depend on the desktop;
+these scenes are development fixtures, not a cross-platform acceptance test. Automated trials
+in `scripts/arena_trials.sh` and `scripts/town_trials.sh` need an isolated desktop and extra tools.
 
 ### Play
 
 Start your game, run `player-two`, hold F8 and speak. Setup binds the talk key on Hyprland and
 Windows; elsewhere bind `player-two ctl talk` (toggle) or use hands-free. A headset reduces echo.
-Say “stop” to cancel. Back up saves before allowing actions. Screen-reader output supports Orca,
+With the talk key, say “stop” to cancel. Hands-free, say “Player Two, stop”. An unaddressed
+“stop” is ignored to avoid cancellations from game speech. Back up saves before allowing actions.
+Screen-reader output supports Orca,
 speech-dispatcher and NVDA; JAWS is implemented but untested.
 
 ## How Meta models are used
@@ -132,27 +211,7 @@ $1.25/M input, $0.15/M cached input and $4.25/M output tokens
 2,401 input and 294 output tokens, approximately $0.0043 before credits. This is an estimate,
 not an invoice. A shorter 400-token JSON probe exhausted its budget and returned no usable content.
 
-## Architecture
-
-```mermaid
-flowchart LR
-    player[Player request] --> stt[Muse Voice Transcribe]
-    stt --> route[Local command router]
-    route --> spark[Muse Spark or Spark Open]
-    game[Game window] --> capture[Capture and change detection]
-    capture --> reader[Pixel reader]
-    capture --> spark
-    spark --> tools[Executors and navigation]
-    route --> tools
-    sam[SAM 3.1 boxes] --> tools
-    reader --> tools
-    tools --> pad[Virtual pad or keyboard]
-    pad --> game
-    game --> capture
-    reader --> speech[Kokoro or screen reader]
-    spark --> speech
-    audio[Game speech detector] --> speech
-```
+## Interesting engineering
 
 - **Pixel reader:** Chrono Trigger's font, cursor, turn and HP are read locally (`glyphread.py`,
   `ctsteam.py`, `ctscreen.py`). Ambiguous screens go to Spark. It is a per-game reader, not universal OCR.
@@ -175,7 +234,7 @@ flowchart LR
 
 ## Limits and player control
 
-**The recorded navigation/shop configuration cannot currently be reproduced from this repo alone.**
+**The measured navigation/shop configuration cannot currently be reproduced from this repo alone.**
 **It does not include the private maps, room surveys, game packs, walkthroughs or saves used
 for the navigation results above.** You need your own game. See [game data](#game-data).
 
@@ -197,14 +256,14 @@ these commands, with behavior dependent on the game:
 | Say | What happens |
 |---|---|
 | a question or request about the game | Player Two attempts to answer or act using the available tools |
-| "Player Two, ..." (hands-free) | the same, with no key |
+| "Player Two, ..." (hands-free) | the same without pressing the talk key; an API key is still needed |
 | "what's on the screen?" / "look around" | a spoken tour: what it's like, who and what is around you, the ways out |
 | "what does it look like?" / "what's the mood?" | a few sentences on the setting, light, colours and mood |
 | "where is the door?" | where it is from your character, with a short sound from that side |
-| "take me to the stairs" / "go talk to her" | walks your character there (2D games) |
-| "next" | presses A and reads the next line, without waiting for the model |
+| "take me to the stairs" / "go talk to her" | attempts to walk there in supported 2D scenes |
+| "next" | presses A and reads the next line; the Chrono Trigger reader can do this locally, other screens need the model |
 | "repeat" | says the last line again |
-| "stop" / "cancel that" | stops talking, and stops a running command |
+| "stop" / "cancel that" (hands-free: start with "Player Two") | stops talking, and stops a running command |
 | "slower" / "faster" | its speaking speed |
 | "terse" / "more detail" / "back to normal" | how much it says |
 | "team up" | leaves menus to the game's own narrator, for games that have one |
@@ -213,33 +272,38 @@ these commands, with behavior dependent on the game:
 | "what's wrong?" | what it can and can't reach (game, controller, microphone, talk key) and the last problem |
 | "help" / "goodbye" | what you can say / quit |
 
-## Earlier validation and final recording status
+## Recorded demo
 
-Historical live Steam Chrono Trigger checks, Nov 1 afternoon, ending at `3b98a99`.
-Requests were **typed**, not spoken. Times cover the whole task. These are small repeated
-trials on selected saves, with private atlas data and Battle Mode set to Wait, not general
-success rates. Newer code and the final voice recording need their own results.
+The current paced film is a selection of recorded developer trials, not the live-results
+suite above. Its requests are typed. Live microphone requests and the final video URL remain
+**TODO-FINAL** for the final voice recording.
 
-| Request | Passed | Whole task | Limit |
-|---|---:|---|---|
-| Take me to the fair | 11/11 | 3 to 4 s | From the demo world-map position |
-| Buy three potions | 11/11 | 17.6 to 63 s | Final three entrance-to-purchase runs: 18.6, 26.0, 26.7 s after map fixes |
-| What are we fighting? | 3/3 | 1.9 to 3.2 s | Fight-start enemy count had separate errors |
-| Crono, use Cyclone | 2/2 | 9.5 to 12.2 s | Only when Crono was ready |
-| Win this fight for me | 3/4 | Wins 55 to 75 s | Lost when begun with two party members knocked out |
-| Take me to the save point | 2/2 | 12.6 and 18.2 s | Walks there; does not save |
-
-The same development runs lost 3/3 boss attempts, missed moving people and once spoke an
-off-topic model answer. More recent guards have unit tests; that does not establish live reliability.
-
-| Game in the film | What it shows | Result |
+| Game | In this cut | Scope |
 |---|---|---|
-| Chrono Trigger (Steam) | Read, navigate, shop, fight | Table above. One recorded run also walks to Guardia Castle through a forest fight and back to the fair. |
-| Monster Hunter Stories 3 | Read battle choices, take turns with a routine written for this game | Won 8/8 Somnacanth fights in recorded takes on Nov 2. I checked lines against frames: three takes had a false line about the next attack, since fixed, and none was found in the take used in the film. Muse reads the status and the weak points. |
-| Red Dead Redemption | No code for this game, one line of notes. Describes a view, finds things, leaves dialogue alone | SAM 3.1 returned boxes on the requests in the film. A person walks John. Talking over actors on one recorded clip went from 12.7 s to 1.1 s with the speech hold. No Player Two line during 87 s of live cutscene. |
+| Chrono Trigger (Steam) | A low-HP rescue win, then a forest walk and the request “Keep going” to reach Guardia Castle | Local code plays the fight turns. The forest fight is omitted and labelled; castle arrival follows a second request. This cut does not show the shop or the return to the fair. |
+| Monster Hunter Stories 3 | Battle status, weak points and a Somnacanth win | A routine written for this game plays the turns. Source gameplay uses the game's 2x battle setting; the film plays that recording at 1x. No potion use is shown. |
+| Red Dead Redemption | Opens the journal with keyboard input, reads one complete sentence, then finds a horse with SAM 3.1 in a labelled separate take | A person moves John. No autonomous 3D traversal. No Red Dead-specific code was written; its game notes contain one line, `Voiced: all`. |
 
-Final footage must show only behavior verified in that take. No claim of beating Lavos,
-playing arbitrary games, or replacing a game's own accessibility features.
+Separate from this cut: eight recorded Somnacanth takes won eight fights. Frame review found
+false next-attack narration in three earlier takes; none was found in the selected take, t13.
+That is developer review, not a guarantee of correct narration. In the recorded Red Dead SAM
+session, two of six requests returned no boxes; the film selects a successful horse request.
+The Linux game-speech hold reduced overlap on one separate recorded clip from 12.7 s to 1.1 s;
+one separate 87 s live cutscene had no Player Two line. Those benchmarks are not shown in this cut.
+
+Final spoken results for Chrono Trigger, Monster Hunter Stories 3 and Red Dead Redemption,
+the video URL and its exact merged source commit are **TODO-FINAL**. There is no claim of beating
+Lavos, playing arbitrary games or replacing a game's own accessibility features.
+
+## Related work
+
+Player Two joins a growing set of tools for game access, including [RetroArch's AI narrator](https://docs.libretro.com/guides/ai-service/),
+[GamerAstra](https://arxiv.org/abs/2506.22937v2), [AI Content Describer for NVDA](https://github.com/cartertemm/AI-content-describer)
+and [GamePals](https://arxiv.org/html/2601.11218v1). GamerAstra tested with eight blind or
+low-vision users; Player Two has no such user evidence. Our tested focus is mainstream
+commercial games on real hardware, voice input and output, and reading, answering and asked-for
+button presses through a Muse tool loop and local executors. The current film uses typed
+requests; voice routing has separate synthetic-audio tests.
 
 ## Built during the event
 
@@ -268,13 +332,13 @@ Visual walking can attempt a visible target, with no equivalent map coverage or 
 [Game-data requirements and distribution limits](docs/game-data.md) explain what is missing.
 
 **`src/playertwo/data/ct_steam/`** is the one piece of Chrono Trigger data in the repo, about
-100 KB. It's what the pixel reader reads with: 2,544 letter shapes from the game's font, each a
+100 KB. It's what the pixel reader reads with: a library of letter shapes from the game's font, each a
 10 by 14 black and white bitmap stored as numbers with its letter, and two small cursor templates
 (the pointing hand, and the bracket drawn round the fighter whose turn it is). They were cut from
 frames of my own copy by `scripts/ct_glyph_learn.py`, from lines whose text I typed in by hand.
 They're in the repo because the reader can't work without them, and because building them takes
 someone who can see the screen to reach the right menus, fights and dialogue and type in what
-they say. No maps, frames, saves or ROMs are in the repo.
+they say. No commercial game maps, screenshots, saves or ROMs are in the repo. The practice frame is original synthetic art.
 
 ## Settings
 

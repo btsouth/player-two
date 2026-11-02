@@ -51,6 +51,8 @@ LEFT, AHEAD, RIGHT = "Left.", "Straight ahead.", "Right."
 CLOSE = "Getting close."
 THERE = "You're there."
 LOST = "I don't see it. Turn slowly."
+MANY = "I see more than one. Going to the biggest."
+UNSURE = "Not sure that's the same one."
 STOPPED = "Okay, stopped."
 START = "Okay. Listen for the ping."
 TAKING = "Okay, taking you there. Say stop to stop."
@@ -67,6 +69,12 @@ FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.02, 0.05
 THERE_HEIGHT = 0.3  # or this tall: a thing end-on has a narrow box however near
 THERE_LOOKS = 2  # looks in a row at that size, since one box can be a fluke
 SIDE_LOOKS = 2  # looks on a new side before saying so
+# A locked box this much bigger in one look isn't believed until the next look agrees: live,
+# one look's box sat on the player's character and said "Getting close." for nothing.
+JUMP_AREA = 2.5
+# So far off from where it was that it's another one, unless it stays.
+OTHER_DIST = 0.7
+STUCK_SEEN, STUCK_SPOT, STUCK_CHANGE = 3, 0.03, 0.04
 LOST_S = 4.0  # not seen for this long: say so
 LOST_AGAIN_S = 15.0
 TIMEOUT_S = 120.0
@@ -101,8 +109,33 @@ def pick(matches: list[Match], last: Match | None) -> Match | None:
         return None
     if last is None:
         return max(matches, key=lambda m: m.area)
-    return min(matches, key=lambda m: abs(m.cx - last.cx) + abs(m.cy - last.cy)
-               + abs(math.log(max(m.area, 1e-5) / max(last.area, 1e-5))) * 0.1)
+    return min(matches, key=lambda m: distance(m, last))
+
+
+def distance(m: Match, last: Match) -> float:
+    return (abs(m.cx - last.cx) + abs(m.cy - last.cy)
+            + abs(math.log(max(m.area, 1e-5) / max(last.area, 1e-5))) * 0.1)
+
+
+def stuck_to_camera(seen: list[tuple[Match, float]]) -> bool:
+    """A box that stays put on screen while the view changes around it is on something the
+    camera carries, the player's own character or the game's display, not out in the world.
+    `seen`: the looks' boxes in this spot, each with how much the picture changed."""
+    return (len(seen) >= STUCK_SEEN
+            and sum(c for _, c in seen[-STUCK_SEEN:]) / STUCK_SEEN >= STUCK_CHANGE
+            and all(abs(m.cx - seen[-1][0].cx) < STUCK_SPOT
+                    and abs(m.cy - seen[-1][0].cy) < STUCK_SPOT
+                    for m, _ in seen[-STUCK_SEEN:]))
+
+
+def picture_change(a, b) -> float:
+    """How different two small greyscale frames are, 0 to 1."""
+    if a is None or b is None:
+        return 0.0
+    import numpy as np
+
+    return float(np.abs(np.asarray(a, dtype=np.float32) - np.asarray(b, dtype=np.float32)).mean()
+                 / 255.0)
 
 
 class Guide:
@@ -120,6 +153,49 @@ class Guide:
         self.seen_at: float | None = None
         self.lost_said_at: float | None = None
         self.ever_seen = False
+        self.many_said = False
+        self.doubt: Match | None = None  # a box too big or too far to believe yet
+        self.unsure = False
+        self.spots: list[list[tuple[Match, float]]] = []  # boxes staying put on screen
+        self.camera_spots: list[Match] = []  # those that stayed while the view changed
+
+    def _on_camera(self, matches: list[Match], change: float) -> list[Match]:
+        """The matches, less any carried along with the camera (see stuck_to_camera)."""
+        keep = []
+        for m in matches:
+            if any(abs(m.cx - c.cx) < STUCK_SPOT * 2 and abs(m.cy - c.cy) < STUCK_SPOT * 2
+                   for c in self.camera_spots):
+                continue
+            spot = next((s for s in self.spots
+                         if abs(s[-1][0].cx - m.cx) < STUCK_SPOT
+                         and abs(s[-1][0].cy - m.cy) < STUCK_SPOT), None)
+            if spot is None:
+                spot = []
+                self.spots.append(spot)
+            spot.append((m, change))
+            if stuck_to_camera(spot):
+                self.camera_spots.append(m)
+                continue
+            keep.append(m)
+        self.spots = self.spots[-12:]
+        return keep
+
+    def _follow(self, matches: list[Match]) -> tuple[Match | None, str]:
+        """The box to follow this look, and anything to say about which it is."""
+        target = pick(matches, self.target)
+        if target is None or self.target is None:
+            self.doubt = None
+            return target, ""
+        far = distance(target, self.target) > OTHER_DIST
+        big = target.area > self.target.area * JUMP_AREA
+        if not far and not big:
+            self.doubt = None
+            return target, ""
+        if self.doubt is None or distance(target, self.doubt) > OTHER_DIST:
+            self.doubt = target
+            return None, ""  # one look more before believing it
+        self.doubt = None
+        return target, UNSURE if far else ""
 
     def _side(self, pan: float) -> str:
         limit = AHEAD_LEAVE if self.seen_side == AHEAD else AHEAD_PAN
@@ -127,12 +203,18 @@ class Guide:
             return AHEAD
         return LEFT if pan < 0 else RIGHT
 
-    def look(self, matches: list[Match], now: float) -> Step:
-        """One look's matches. `say` isn't taken as said until `said` is called with it."""
+    def look(self, matches: list[Match], now: float, change: float = 0.0) -> Step:
+        """One look's matches, and how much the picture changed since the last look. `say`
+        isn't taken as said until `said` is called with it."""
         if now - self.started >= self.timeout_s:
             line = TIMED_OUT if self.ever_seen else NEVER_SEEN
             return Step(None, None, None, 0, 0.0, line, self.seen_side, end="timeout")
-        target = pick(matches, self.target)
+        matches = self._on_camera(matches, change)
+        had = self.target
+        target, note = self._follow(matches)
+        if target is None and had is not None and self.doubt is not None:
+            # Waiting a look on a box hard to believe: no ping, and it isn't lost yet.
+            return Step(None, None, None, 0, 0.3, "", "")
         if target is None:
             self.there_looks = 0
             self.target = None  # gone: the biggest again when it's back
@@ -157,7 +239,11 @@ class Guide:
         if self.there_looks >= THERE_LOOKS:
             return Step(target, pan, hz, beeps, 0.0, THERE, side, end="there")
         say = ""
-        if side != self.side and (back or not self.side or self.side_looks >= SIDE_LOOKS):
+        if len(matches) > 1 and not self.many_said and had is None:
+            say = MANY
+        elif note:
+            say = note
+        elif side != self.side and (back or not self.side or self.side_looks >= SIDE_LOOKS):
             say = side
         elif not self.close_said and target.area >= CLOSE_AREA:
             say = CLOSE
@@ -165,7 +251,9 @@ class Guide:
 
     def said(self, line: str, now: float) -> None:
         """That line was really said."""
-        if line in (LEFT, RIGHT, AHEAD):
+        if line == MANY:
+            self.many_said = True
+        elif line in (LEFT, RIGHT, AHEAD):
             self.side = line
         elif line == CLOSE:
             self.close_said = True

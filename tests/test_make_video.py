@@ -203,9 +203,32 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
     assert "nor defeat Lavos in Chrono Trigger" in words
     assert "Not beaten yet" in words and "No blind player has tried it yet" in words
     assert mv.GENERAL_LINE in words and mv.RETRO_QUOTE in words
-    assert mv.RETRO_QUOTE == "A blind person still cannot ... nor defeat Lavos in Chrono Trigger."
+    assert mv.RETRO_QUOTE == "A blind person still cannot ... nor defeat Lavos in Chrono Trigger ..."
+    assert mv.RETRO_SOURCE == "Devin Prater, blind accessibility instructor, for libretro, 2019"
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
+
+
+@pytest.mark.parametrize("layout", ["card", "overlay"])
+def test_historical_quote_renders_author_credit_without_clipping(tmp_path, monkeypatch, layout):
+    drawn = []
+    original = mv.ImageDraw.ImageDraw.text
+
+    def record(draw, xy, text, *args, **kwargs):
+        drawn.append((text, draw.textbbox(xy, text, font=kwargs.get("font"))))
+        return original(draw, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(mv.ImageDraw.ImageDraw, "text", record)
+    if layout == "card":
+        lavos = next(p for p in mv.round2_cards(tmp_path) if p.id == "lavos")
+        mv.card_png(tmp_path / "card.png", lavos.blocks)
+    else:
+        mv.label_png(tmp_path / "overlay.png", mv.Overlay("", 34, "lavos", 0, 1))
+
+    assert "Devin Prater, blind accessibility instructor, for libretro, 2019" in " ".join(
+        text for text, _bounds in drawn)
+    assert all(0 <= x0 < x1 <= mv.W and 0 <= y0 < y1 <= mv.H
+               for _text, (x0, y0, x1, y1) in drawn)
 
 
 def test_the_end_card_wording_comes_from_the_shown_requests():
@@ -878,3 +901,149 @@ def test_paced_health_summary_waits_for_both_real_health_facts():
                 _spoken('Crono took 779, down to 1.',3,5)],'t',10)
     take.edit={'paced':True};rows=mv.caption_rows(take)
     assert len(rows)==1 and rows[0][0]==3 and rows[0][2]=='Frog and Crono: 1 HP.'
+
+
+def test_stand_in_is_refused_even_if_the_output_is_renamed():
+    p=mv.Piece('rehearsal','hook',kind='card',secs=5,stand_in=True)
+    assert 'stand-in media: rehearsal' in mv.final_refusals([p],[])
+
+
+def test_handsfree_tag_requires_explicit_event_evidence(tmp_path):
+    for event,expected in [({'typed':True},False),({},False),({'hands_free':True},True)]:
+        es=[{'kind':'heard','t':1,'text':'Open the menu.',**event}]
+        t=_take(es,'t',10);p=mv.Piece('request','ct',take='t',a=0,b=10)
+        mv.evidence_overlays([p],{'t':t})
+        assert any('No button pressed' in o.text for o in p.overlays)==expected
+
+
+def test_per_line_duck_is_bounded_and_does_not_change_voice():
+    p=mv.Piece('p','ct',a=10,b=20,game_ducks=[[12,14,.25]])
+    assert '(t-2.0)' in mv.game_duck_filter(p)
+    p.game_ducks=[[9,14,.25]]
+    with pytest.raises(ValueError,match='measured interval'):mv.game_duck_filter(p)
+
+
+@needs_ffmpeg
+def test_game_duck_filter_runs_and_leaves_other_samples_alone(tmp_path):
+    import subprocess
+
+    import numpy as np
+    p=mv.Piece('p','ct',a=0,b=3,game_ducks=[[1,2,.25]])
+    raw=subprocess.check_output(['ffmpeg','-v','error','-f','lavfi','-i','aevalsrc=0.1|0.1:s=48000:d=3','-af',mv.game_duck_filter(p).lstrip(','),'-f','f32le','-'])
+    audio=np.frombuffer(raw,np.float32).reshape(-1,2)
+    assert audio[24000,0]==pytest.approx(.1)
+    assert audio[72000,0]==pytest.approx(.025)
+    assert audio[120000,0]==pytest.approx(.1)
+
+
+def test_purchase_hold_without_a_time_summary_does_not_crash():
+    p=mv.Piece('shop-buy','ct',overlays=[mv.Overlay('Purchase result held',34,'tl',0,5)])
+    assert mv.render_overlays(p)[0].text=='Purchase result held'
+
+
+def test_renamed_link_to_stand_in_voice_is_refused(tmp_path):
+    f=tmp_path/'TEMP-NOT-FOR-SUBMISSION-voice.wav';f.write_bytes(b'test')
+    link=tmp_path/'vo-intro.wav';link.symlink_to(f)
+    p=mv.Piece('identity','hook',kind='card',secs=12,vo=str(link))
+    assert 'stand-in media: identity' in mv.final_refusals([p],[])
+
+
+def test_stand_in_folder_is_refused_before_any_probe(tmp_path):
+    import subprocess
+    f=tmp_path/'rehearsal';f.mkdir();(f/'STAND-IN.json').write_text('{}')
+    r=subprocess.run([sys.executable,str(_path),str(f),'--final','--dry-run'],capture_output=True,text=True,check=False)
+    assert r.returncode!=0 and '--final refuses stand-in' in r.stderr
+
+
+def test_paced_monster_hunter_uses_the_actual_heard_transcript():
+    e={'kind':'heard','t':1,'text':"Where's it weak?",'raw_transcript':"Player Two, where's it weak?"}
+    take=_take([e],'game2',10);take.edit={'story':{'cuts_only':True},'paced':True}
+    p=mv.Piece('mh-weak','game2',take='game2',a=0,b=10)
+    mv.evidence_overlays([p],{'game2':take})
+    assert any('Muse Voice Transcribe' in o.text and "Player Two, where's it weak?" in o.text for o in p.overlays)
+    assert not any('typed' in o.text for o in p.overlays)
+
+
+def test_paced_request_is_not_repeated_as_a_new_ask_later():
+    take=_take([{'kind':'heard','t':1,'text':'Win.'}],'game2',20);take.edit={'paced':True,'story':{}}
+    p=mv.Piece('later','game2',take='game2',a=10,b=18)
+    mv.evidence_overlays([p],{'game2':take})
+    assert not p.overlays
+
+
+def test_known_spoken_request_capture_cannot_be_cut_off():
+    take=_take([{'kind':'status','state':'listening','t':1},{'kind':'heard','t':3,'text':'Open the journal.'}],'t',10)
+    p=mv.Piece('p','ct',take='t',a=2,b=8)
+    _,blocked=mv.pacing_report([p],{'t':take},{'partial-request:p':'No waiver'})
+    assert 'partial-request:p' in blocked
+
+
+def test_recovery_claim_uses_the_new_takes_real_turn_count():
+    t=_take([{'kind':'agent','t':8,'request':'Keep going to the castle','turns':[{}]*8,'steps':[{'tool':'walk_to','result':'not_found'},{'tool':'remember'}]}],'nav',10)
+    p=mv.Piece('c','ct',overlays=[mv.Overlay('Not scripted. Muse took 8 turns',34,'tl',0,10)])
+    mv.verify_recovery([p],t)
+    p.overlays[0].text='Not scripted. Muse took 9 turns'
+    with pytest.raises(ValueError,match='proof changed'):mv.verify_recovery([p],t)
+
+
+def test_new_menu_transcripts_may_differ_in_case_and_punctuation():
+    es=[{'kind':'heard','t':1,'text':'read this menu'},{'kind':'heard','t':5,'text':'Open the journal?'},{'kind':'heard','t':15,'text':'Read it!'}]
+    for t,request in [(2,'Read this menu.'),(10,'open the journal'),(20,'Read it')]:
+        es.append({'kind':'agent','t':t,'request':request,'turns':[{}],'steps':[{'tool':'press','t':2,'args':{'buttons':['a']}}]})
+    t=_take(es,'rdr-menu',30);t.edit={'backend':'keyboard','story':[[5,12]]}
+    mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=5,b=12)])
+
+
+def test_stand_in_voice_marker_survives_copying_to_a_real_name(tmp_path):
+    wav=tmp_path/'vo-intro.wav';wav.write_bytes(b'RIFF'+b'\0'*32+b'P2STPLAYER_TWO_SYNTHETIC_STAND_IN')
+    p=mv.Piece('identity','hook',kind='card',secs=12,vo=str(wav))
+    assert 'stand-in media: identity' in mv.final_refusals([p],[])
+
+
+def test_pace_uses_listening_start_for_reply_to_request_gap():
+    take=_take([_spoken('Done.',1,2),{'kind':'status','state':'listening','t':2.2},{'kind':'heard','t':4,'text':'Next.'}],'t',10)
+    p=mv.Piece('p','ct',take='t',a=0,b=8)
+    _,blocked=mv.pacing_report([p],{'t':take},{})
+    assert 'request-gap:p' in blocked
+
+
+def test_new_menu_edit_is_checked_instead_of_the_old_story_clock():
+    es=[{'kind':'heard','t':1,'text':'Read this menu.'},{'kind':'heard','t':10,'text':'Open the journal.'},{'kind':'heard','t':25,'text':'Read it.'}]
+    for t,request in [(2,'Read this menu.'),(20,'Open the journal.'),(29,'Read it.')]:
+        es.append({'kind':'agent','t':t,'request':request,'turns':[{}],'steps':[{'tool':'press','t':5,'args':{'buttons':['a']}}]})
+    t=_take(es,'rdr-menu',40);t.edit={'backend':'keyboard','story':[[1,2]]}
+    mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=10,b=22)])
+
+def test_transcribe_badge_uses_only_a_measured_stream_stage():
+    events = [
+        {"t": 2.0, "kind": "heard", "text": "Open the journal", "transcribe_s": 2.34},
+        {"t": 2.01, "kind": "model_stage", "model": "Muse Voice Transcribe",
+         "seconds": 2.34, "timing": "stream"},
+        _spoken("Okay, opening the journal.", 2.2, 3.2),
+    ]
+    take = _take(events, "voice", 5)
+    piece = mv.Piece("voice", "clip", take="voice", a=0, b=5, captions=True)
+    report = mv._evidence_for_window([piece], {"voice": take})
+    assert any(r["layer"] == "Muse Voice Transcribe" for r in report)
+    assert any("Stream 2.34 s" in o.text for o in piece.overlays)
+    assert any("You: Open the journal" in c[3] for c in take.caps)
+    old = _take([events[0], events[2]], "old", 5)
+    old_piece = mv.Piece("old", "clip", take="old", a=0, b=5, captions=True)
+    assert not any(r["layer"] == "Muse Voice Transcribe"
+                   for r in mv._evidence_for_window([old_piece], {"old": old}))
+
+
+def test_hands_free_clip_keeps_the_wake_name_before_listening_status():
+    request = {"t": 5.0, "kind": "heard", "text": "Open the journal",
+               "utterance_started_at": 0.5}
+    take = _take([{"t": 3.0, "kind": "status", "state": "listening"}, request], "voice", 8)
+    # Wake detection can set listening only AFTER the user said Player Two.
+    assert mv._lead(take, 5.0, request) == 4.8
+
+
+def test_retained_audio_can_keep_a_soft_name_without_changing_caption_clock():
+    request = {"t": 5.0, "kind": "heard", "text": "Read this menu", "utterance_started_at": 1.0,
+               "utterance_audio_started_at": 0.2}
+    take = _take([request], "voice", 8)
+    assert mv._lead(take, 5.0, request) == 5.1
+    assert next(c[0] for c in take.caps if c[2] == "You") == 5.0

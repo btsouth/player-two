@@ -14,19 +14,19 @@ See [game data](game-data.md).
 - **Screen watcher** (`screen.py`): samples the game window a few times a second, learns which parts
   are always moving (a flickering TV, rain), and fires once when a new screen has stopped moving.
 - **Reader** (`glyphread.py`, with a game profile in `ctsteam.py` and `ctscreen.py`): reads a
-  game's own pixel font, cursor and HP bars with no model, in about a tenth of a second. Every
+  game's own pixel font, cursor and HP bars locally. Every
   frame is scaled to one canvas, text pixels are found as bright cores inside the font's dark
   outline, cut into glyphs and named by their nearest match in a library learned from real frames
   whose text was labelled by hand (`scripts/ct_glyph_learn.py`; a line is only learned when its
   glyph count matches the label). The cursor is found by template matching. A run of text is only
-  trusted when it reads as words, so a busy background never turns into made-up text. `ctscreen`
+  trusted when it reads as words, to reduce false reads from busy backgrounds. `ctscreen`
   turns frames into what a screen reader would say: whose turn it is, what the cursor is on, a
   Yes/No choice with the highlighted option, dialogue once it has stopped typing out, who is in
   danger, each said once when it changes. Chrono Trigger on Steam is the only profile so far.
 - **Narrator** (`narrator.py`): says what the reader read. Screens the reader can't make sense of,
   and every screen in games without a profile, go to Muse Spark, whose answer streams into the
-  voice sentence by sentence, so speech starts before the model has finished. It stays silent
-  while the agent is acting, so it never talks over what you asked for.
+  voice sentence by sentence, so speech starts before the model has finished. It suppresses
+  automatic narration while the agent is acting.
 - **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two aims not to
   talk over the game's own voices. It listens to the game's own sound stream on PipeWire or
   PulseAudio (found from the game window's process, so Player Two's own voice is never in
@@ -47,11 +47,11 @@ See [game data](game-data.md).
   what it's like, drafted once from the survey's picture of it (`scripts/atmos_rooms.py`).
   Never in terse or quiet mode, and never over a text box, a menu or a fight.
 - **Voice** (`voice.py`, `audio.py`, `screenreader.py`): Kokoro speaks each sentence as it
-  arrives (about 0.1 s a sentence on a GPU, and it runs on the CPU too). With
+  arrives, using a CPU or a supported GPU. With
   `output = "screen-reader"` the words go to Orca, speech-dispatcher, NVDA or JAWS instead.
   Sound cues (low health, the "where is it?" pings) always come from Player Two.
-- **Instant echo** (`ack.py`): says your request back in your own words the moment it arrives,
-  with no model call ("Okay, Crono will use Cyclone"), so a misheard request is caught at once. It
+- **Request acknowledgement** (`ack.py`): says your request back in your own words when it arrives,
+  with no model call ("Okay, Crono will use Cyclone"), so you can notice a misheard request. It
   states what it will try, never a result.
 - **Fast path** (`fast.py`): supported Chrono Trigger commands such as buying, attacking and
   taking a fight are parsed locally and dispatched to the same executors without a planning
@@ -65,7 +65,7 @@ See [game data](game-data.md).
   `field_menu` executors below, and in a fight only `battle`, `fight`, `say`, `ask_player`,
   `remember`, `wait` and `finish`. A rule in code stops any press sequence just
   before an A that follows any other press, so it always looks at the highlight before
-  confirming, and it can't press A twice and skip a line you didn't hear.
+  confirming, reducing the risk of confirming an unseen choice.
 - **Executors** (`battle.py`, `shop.py`, `menu.py`, Chrono Trigger on Steam): the model says what
   to do once, and local code does it. `battle` takes one command ("Crono, Cyclone on the one on the
   left"): it unpauses, picks the fighter's command window, the command, the list entry and the
@@ -85,8 +85,8 @@ See [game data](game-data.md).
   Then one Muse Spark call finds the target and a way around anything in the way. At the same
   time SAM 3.1 looks for the target by name (and as "person", for someone to talk to): Muse
   Spark's boxes are often a sprite off, and the walk stops and faces by them, so when SAM finds
-  the same thing its exact box is used. SAM gets no longer than the model took plus a moment, so
-  it adds no wait, and without a match the model's box stands. Then plain image math takes over: phase correlation follows the
+  the same thing its box is used. SAM gets no longer than the model took plus a moment
+  to bound its added wait; without a match the model's box stands. Then plain image math takes over: phase correlation follows the
   scenery as it scrolls, your character is pinned down by what moves differently from the scenery and then
   followed by its colours (which hold when the sprite turns), and the stick and d-pad steer it in
   eight directions. When the character stops moving against something, it marks that spot on
@@ -104,8 +104,8 @@ See [game data](game-data.md).
   stand ("on the left", "by the bell"). The best fit wins when it's clearly ahead; when two or
   three fit about as well, it asks which one. "Who's here?" is answered the same way, nearest
   first, in steps and d-pad directions.
-- **Where is it?** (`locate.py`, `app.py`): SAM 3.1 finds every match for the thing asked
-  about, exact to the pixel. At the same time Muse Spark looks for it too (SAM doesn't know many
+- **Where is it?** (`locate.py`, `app.py`): SAM 3.1 looks for the thing asked about and returns
+  segmentation masks/boxes; these can be empty or wrong. Muse Spark looks for it too (SAM doesn't know many
   game things, like a pixel-art cat) and for your character. The answer is from your character
   when it's known ("4 steps up and 2 to your left", nearest first), and each match gets a short
   sound panned to its side.
@@ -179,9 +179,7 @@ so they don't run as is elsewhere:
 - `scripts/emu_tasks.py` and `scripts/rooms_bench.py` run the SNES version in RetroArch, give
   Player Two (or just the walker) a task, and judge it by reading the game's memory: where the
   character ended up, whether a fight is still on. `scripts/atlas_walk.py` does the same for the
-  world-map walker alone. On the SNES version, world-map trips passed 144/144 with the walker
-  alone and 48/52 and 50/54 with the agent choosing the place; trips inside towns and buildings
-  95/104 with the walker alone and 22/24 with the agent.
+  world-map walker alone. These emulator benches are distinct from the Steam results in the README.
 - `scripts/narrator_bench.py` narrates labelled Steam frames and scores what had to be said, what
   was made up, and how soon the first word came.
 - `scripts/play_tasks.py` runs tasks on a real Steam copy, with Muse Spark judging the last screen.
