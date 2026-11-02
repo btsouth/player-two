@@ -155,3 +155,23 @@ async def test_the_follower_over_the_player_isnt_taken_for_it(tmp_path):
     here = rooms.locate(Image.fromarray(frame))
     assert here is not None and here.cam == (122, 42)
     assert abs(here.x - 250) <= 3 and abs(here.y - 180) <= 3, (here.x, here.y)
+
+
+def test_stand_probe_sorts_the_tiles():
+    """scripts/survey_stand.py: a tile tried from beside it and never got onto comes off
+    the walkable ones; one never tried (not got near) stays; a way out's tile stays."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+    from survey_stand import Probe
+
+    data = {"loc": 5, "walk": [[1, 1], [1, 2], [1, 3], [2, 1], [5, 5], [1, 4]],
+            "exits": [{"from": [1, 4], "dir": [1, 0], "to": 496}]}
+    p = Probe(None, data, Path("x.state"), print)
+    p.ok = {(1, 1), (1, 2), (2, 1)}
+    p.shut = {((1, 2), (1, 3)), ((2, 1), (1, 1))}
+    res = p.result()
+    assert res["never"] == [(1, 3)]  # the fence's top row: tried, not got onto
+    assert res["unseen"] == [(5, 5)]  # not got near: left as the survey had it
+    assert res["cuts"] == [((2, 1), (1, 1))]  # both stood on, the step between shut
