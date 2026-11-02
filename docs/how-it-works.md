@@ -3,6 +3,14 @@
 The parts, in the order a moment of play goes through them. File names are under
 `src/playertwo/`.
 
+Runtime Steam play reads screen pixels and sends input. Map/room preparation is a separate,
+emulator-memory-assisted process: RAM supplies coordinates, camera position, collision and
+exit ground truth during surveys and benchmarks. Muse labels the resulting pictures; a human
+checks those labels. That preparation is not inferred from live pixels alone. The reference
+pictures, room/player templates and atlas configuration used in the demo are not distributed,
+so the demonstrated configuration cannot currently be reproduced from the repo alone.
+See [game data](game-data.md).
+
 - **Screen watcher** (`screen.py`): samples the game window a few times a second, learns which parts
   are always moving (a flickering TV, rain), and fires once when a new screen has stopped moving.
 - **Reader** (`glyphread.py`, with a game profile in `ctsteam.py` and `ctscreen.py`): reads a
@@ -19,8 +27,8 @@ The parts, in the order a moment of play goes through them. File names are under
   and every screen in games without a profile, go to Muse Spark, whose answer streams into the
   voice sentence by sentence, so speech starts before the model has finished. It stays silent
   while the agent is acting, so it never talks over what you asked for.
-- **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two never
-  talks over the game's own voices. It listens to the game's own sound stream on PipeWire or
+- **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two aims not to
+  talk over the game's own voices. It listens to the game's own sound stream on PipeWire or
   PulseAudio (found from the game window's process, so Player Two's own voice is never in
   it), and the speech detector used for hands-free listening (Silero VAD) tells voices from
   music and effects, frame by frame. Narration waits for a gap in the game's speech, and a
@@ -45,6 +53,9 @@ The parts, in the order a moment of play goes through them. File names are under
 - **Instant echo** (`ack.py`): says your request back in your own words the moment it arrives,
   with no model call ("Okay, Crono will use Cyclone"), so a misheard request is caught at once. It
   states what it will try, never a result.
+- **Fast path** (`fast.py`): supported Chrono Trigger commands such as buying, attacking and
+  taking a fight are parsed locally and dispatched to the same executors without a planning
+  model call. Unmatched requests continue to the agent. Unit coverage does not establish live timing.
 - **Agent** (`agent.py`): Muse Spark in a tool loop. The tools are `press`, `hold`, `walk_to`,
   `talk_to`, `keep_walking`, `travel`, `exits`, `area_map`, `walk_to_map`, `wait`, `say`,
   `ask_player`, `remember` and `finish`, plus `where_am_i`, `go_to_place`, `go_to_exit` and
@@ -61,8 +72,10 @@ The parts, in the order a moment of play goes through them. File names are under
   target, checks each press against the reader, confirms, watches it play out and pauses again,
   then reports what changed (HP and MP before and after, the message bar). Anything unexpected
   (the hand gone, the entry not in the list, the fighter knocked out) stops it, paused, with the
-  reason in words. `fight` with "win" loops over the same steps: attack while everyone is healthy,
-  and on a surprise ask Muse Spark for the next command while the game is paused. "Run" holds the
+  reason in words. `fight` with "win" loops over the same steps with local attack/heal/revive
+  rules. `battle.Tuning.model_decides` defaults to False; `agent.py` passes no model decision
+  callback in that configuration. The optional model-decision path is not the default demo.
+  Clear supported commands can also bypass planning through `fast.py`. "Run" holds the
   two shoulder buttons. `shop` walks to a seller, talks, buys N of an item, and reads the gold
   before and after; it also rests at an inn and reads everyone's HP after. `field_menu` uses a
   tech or an item on someone outside a fight, or changes a battle setting.
@@ -160,8 +173,8 @@ recorded while holding the d-pad, at full and slow capture rates. The recordings
 so they aren't in the repo; the tests skip without them (`P2_RECORDINGS` points at them). Tests
 that need the maps or real Steam frames skip the same way.
 
-The benches need an isolated desktop (omabox) and a copy of the game, so they don't run as is
-elsewhere:
+The benches need an isolated desktop (the external omabox tool) and a copy of the game,
+so they don't run as is elsewhere:
 
 - `scripts/emu_tasks.py` and `scripts/rooms_bench.py` run the SNES version in RetroArch, give
   Player Two (or just the walker) a task, and judge it by reading the game's memory: where the
