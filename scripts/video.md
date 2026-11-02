@@ -249,3 +249,9 @@ Replacing a pending take or founder WAV clears only its own pending marker. Othe
 remain temporary. Original synthetic event/WAV provenance continues to block final submission.
 Request chips show `raw_transcript`, and qualify heard timing as stream or finalize seconds;
 missing timing is omitted. “No button pressed” still requires explicit per-request mode evidence.
+
+Guide sample graphics are an explicit exception to narrative reading and onset checks, like
+boxes: their box, pan and lookup values follow the logged clock. Holding a miss beyond the
+next result would misrepresent the detection. This is not a reading-time pass for every numeric
+update. Stable requests, creator text and cards still use the normal pacing checks. Record this
+telemetry exception in QC and have a person judge the live graphic at real speed.
