@@ -1,0 +1,85 @@
+# Build the Player Two demo
+
+Encode on devbox. Python 3, Pillow and ffmpeg with libass are required. The renderer opens no
+game or desktop. Inter 4.1 and its OFL license are bundled in `assets/video`; libass loads that
+folder directly, so no system font install is needed.
+
+```sh
+python3 scripts/make_video.py takes --out round2-sample.mp4 --sample --sheet --jobs 2
+python3 scripts/make_video.py takes --out draft3b-proxy.mp4 --proxy --sheet --jobs 2
+python3 scripts/make_video.py takes --out draft3b.mp4 --sheet --jobs 2
+python3 scripts/make_video.py takes --out final.mp4 --final --sheet --jobs 2
+```
+
+Full: 1920x1080 at 60 fps, full-bleed Lanczos scaling, 42px request chips, 34px measured badges,
+48px speech captions (64px on black). Proxies: 960x540 at 30 fps. No FPS-counter masking.
+
+## Takes
+
+Use `take-A.mp4`, `take-B.mp4`, `game2.mp4`, `game3.mp4`, optional `sam.mp4` and `ending.mp4`.
+Each has `<name>.mp4.start` (Unix recording start) and `<name>.events.jsonl` (original log).
+For other filenames, `takes.json` maps names to relative `video`, `start` and `events` paths.
+All referenced files must be included when syncing the takes folder. Symlinks may be dereferenced.
+A manifest entry with `"reject": "reason"` excludes a take. Replace all source files before
+removing it. `--sample` alone permits rejected footage for an explicitly marked style test;
+`--sample --final` is forbidden. Never submit private notifications or rejected gameplay.
+
+A and B requests are selected from their actual logs. `--pick A4=1` selects the first matching
+attempt (default last). `--clip game2=12-35` or `--clip sam=2-10` selects a continuous excerpt.
+The cutter cannot judge gameplay, privacy, spoken correctness or whether an action succeeded.
+
+## Cold opening and ending
+
+B must contain “What are we fighting?” then “Win this fight for me”, close together, with no
+other requests between them. The first 15 seconds remain continuous at normal speed. Picture
+is black for 13 seconds, then fades up over one second, without changing audio or source time.
+The rest of that same request runs to its result; later gaps alone may be sped up, visibly labelled.
+The fight requests are not repeated later. Final mode refuses an incomplete pair.
+
+The 45-second sample uses one continuous old Win exchange because the older two questions are
+65 seconds apart. It does not splice a fake paired conversation or dub a typed request. Its old
+source and the missing final take are clearly labelled. The sample is a style test, not the
+complete requested paired exchange.
+
+The full film follows with the product card, four-second RetroArch excerpt, and “Lavos is still
+ahead. Here’s how far we’ve got.” `vo-ahead.wav` optionally voices that line. No glasses story.
+Then map, actual saved map proof, walking/shop, optional SAM, other games, how, last line and
+end card. `ending.mp4` is a short real Player Two utterance with its original audio/log, displayed
+on black. Missing footage is visibly reserved with placeholders. No rates wall.
+`vo-how.wav` voices the how card. `vo-why` is retired. Silent cards retain the words for silent viewing.
+
+## Model evidence and SAM
+
+Only completed, logged measurements get badges. `model_s` is measured model time; local action
+seconds include walking/animation. Local classification requires empty model turns AND a recognized
+local step. Empty turns alone do not prove no model work. Scene narration is separately labelled.
+Typed requests stay visibly typed. Never claim a transcriber latency without a measured event.
+Every badge retains its source event timestamp in the evidence JSON.
+
+SAM requires `where.via == sam-3.1`; the rectangle comes only from that event's normalized `boxes`
+array, never from a centre point or Spark fallback. The app logs returned SAM boxes and queried-frame
+time. Capture a stationary camera/target around the response so a returned box remains valid on the
+recorded frame. The renderer displays it for at most 1.5 seconds after completion. Keep the actual
+stereo ping. A SAM take without real logged boxes is refused by final mode.
+
+`atlas-proof.json` supplies one real `raw_place` from saved label_atlas output, the same-name
+`checked_place` with x/y, and `raw_sha256` / `checked_sha256`. The five-second sequence shows saved
+model JSON, the checked destination, then local-navigation data. It is clearly a saved response,
+not a fabricated live model call; those stages are not represented as latency measurements.
+Do not include fan-made map art or source dumps in the public repo.
+
+## Audio and checks
+
+Optional `<take>.game.wav` and `<take>.voice.wav` replace the mixed recording audio. Both must
+start at video time zero and cover its duration. Voice contains microphone + Player Two; game is
+separate. The game ducks under voice (15ms attack, 220ms release, 8:1). An incomplete pair is an
+error. Premixed takes cannot be independently ducked. No added music. Accelerated gaps are silent;
+all speech stays at normal speed. Cut ramps prevent clicks. Two-pass normalization targets -14 LUFS
+and -2.5 dBTP; measure decoded AAC with ebur128 again.
+
+Cut/evidence JSON, caption warnings and optional sheets accompany the output. `--cut` replays a
+hand-edited cut; rebuild without it to discover new source/VO files. Cache keys include renderer,
+font, source size/mtime, captions and settings. `--final` refuses placeholders, missing how VO,
+incomplete cold opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
+sped-up speech and duration above 3:00, including after encoding. `--accept-captions` cannot bypass
+stale facts or sped-up speech. Human frame and full-speed listening checks remain essential.
