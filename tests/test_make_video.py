@@ -755,6 +755,7 @@ def test_how_bridge_keeps_one_voice_clock_and_requires_real_windows():
         mv.how_bridge(takes,{}, {})
 
 
+@needs_ffmpeg
 def test_bridge_uses_the_later_voice_samples_instead_of_restarting(tmp_path):
     import subprocess
     import wave
