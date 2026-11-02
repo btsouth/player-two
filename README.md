@@ -59,7 +59,7 @@ Local-answer times include the spoken answer. First words can include an acknowl
 | Take me to the fair | 6/6 | 3.8 to 4.3 s, a door press from the world map |
 | Buy three potions | 6/6 | 17.3 to 20.4 s |
 | Take me back outside | 6/6 | 8.5 to 14.9 s |
-| Crono, use Cyclone | 4/5 | 6.1 to 8.5 s when he was ready |
+| Crono, use Cyclone | 4/5 | 6.1 to 8.5 s across all attempts, including the failure |
 | Win this fight for me, after a combo took two or three of the party to 1 HP | 4/5 | Wins 42 to 53 s |
 
 In the one lost fight the party was wiped out right after Cyclone was picked. Player Two then went
@@ -270,11 +270,11 @@ these commands, with behavior dependent on the game:
 | "what's wrong?" | what it can and can't reach (game, controller, microphone, talk key) and the last problem |
 | "help" / "goodbye" | what you can say / quit |
 
-## What draft 3j shows
+## Recorded demo
 
 The current paced film is a selection of recorded developer trials, not the live-results
 suite above. Its requests are typed. Live microphone requests and the final video URL remain
-**TODO-FINAL** for tonight's voice recording.
+**TODO-FINAL** for the final voice recording.
 
 | Game | In this cut | Scope |
 |---|---|---|
