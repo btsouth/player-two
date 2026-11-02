@@ -100,3 +100,11 @@ def test_byte_identical_dry_run_does_not_clear_a_pending_spoken_take(tmp_path):
     (template/'pacing.json').write_text(json.dumps(p));config['unchanged_windows']=['take-B']
     result=m.stage(source,config,tmp_path/'stage')
     assert json.loads((result/'pacing.json').read_text())['shots'][0]['stand_in']
+
+
+def test_tonight_wrapper_preserves_temporary_provenance_in_remote_paths():
+    import runpy
+    script=Path(__file__).parents[1]/'scripts/video_tonight.py'
+    names=runpy.run_path(str(script))['remote_names']
+    assert names(Path('TEMP-NOT-FOR-SUBMISSION-test.mp4'))==('TEMP-NOT-FOR-SUBMISSION-proxy','TEMP-NOT-FOR-SUBMISSION-stage')
+    assert names(Path('genuine.mp4'))==('proxy','stage')
