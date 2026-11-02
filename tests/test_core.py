@@ -66,7 +66,7 @@ class TestSpeechText:
     def test_first_chunk_split_long(self):
         s = "Mr. Morooka says, I'm Kinshiro Morooka, your homeroom teacher from today forward!"
         parts = first_chunk_split(s)
-        assert parts[0] == "Mr. Morooka says,"
+        assert parts == [s]
         assert " ".join(parts) == s
 
     def test_first_chunk_split_short(self):
@@ -602,7 +602,8 @@ async def test_two_lines_at_once_are_said_one_after_the_other():
                              "clear_speech": lambda self: None})()
     await asyncio.gather(v.say("One. Two. Three.", interrupt=False),
                          v.say("Four. Five. Six.", interrupt=False))
-    assert heard == ["One.", "Two.", "Three.", "Four.", "Five.", "Six."], heard
+    assert " ".join(heard) == "One. Two. Three. Four. Five. Six.", heard
+    assert len(heard) == 1  # one prosodic batch, same order and complete words
     # A line still waiting its turn is dropped by a stop.
     heard.clear()
     first = asyncio.create_task(v.say("Seven. Eight.", interrupt=False))

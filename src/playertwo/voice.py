@@ -14,6 +14,7 @@ import numpy as np
 
 from .audio import CUES, Mixer
 from .config import CACHE_DIR, Settings
+from .delivery import companion_line
 
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 MODEL_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
@@ -125,13 +126,32 @@ def gpu_hint(device: str, spoken: bool = False) -> str:
 
 
 def first_chunk_split(sentence: str, limit: int = 60) -> list[str]:
-    """Split a long opening sentence at its first comma so speech starts sooner."""
-    if len(sentence) <= limit:
-        return [sentence]
-    i = sentence.find(", ", 12)
-    if 0 < i < limit:
-        return [sentence[: i + 1], sentence[i + 2 :]]
+    """Keep the sentence's prosody intact, including its commas."""
     return [sentence]
+
+
+def speech_chunks(text: str, limit: int = 240) -> list[str]:
+    """Join adjacent complete sentences when available without waiting for more text."""
+    chunks = []
+    for sentence in split_sentences(text):
+        if chunks and len(chunks[-1]) + len(sentence) + 1 <= limit:
+            chunks[-1] += " " + sentence
+        else:
+            chunks.append(sentence)
+    return chunks
+
+
+def sentence_tail(samples: np.ndarray, rate: int = 24_000) -> np.ndarray:
+    """Keep breaths, with a measured 120ms quiet boundary instead of stacked tails."""
+    if not len(samples):
+        return samples
+    threshold = max(1e-5, float(np.max(np.abs(samples))) * .0005)
+    audible = np.flatnonzero(np.abs(samples) > threshold)
+    if not len(audible):
+        return samples
+    end = int(audible[-1]) + 1
+    return np.pad(samples[:min(len(samples), end + int(rate * .12))],
+                  (0, max(0, end + int(rate * .12) - len(samples))))
 
 
 def tidy(text: str) -> str:
@@ -184,17 +204,36 @@ class Voice:
         samples, _sr = self.kokoro.create(
             sentence, voice=self.voice_name, speed=self.s.speech_rate, lang=self.lang
         )
-        return samples
+        return sentence_tail(samples)
 
     async def say(self, text: str, interrupt: bool = True) -> None:
         """Speak text. With interrupt, anything still playing is cut off first."""
-        text = clean_for_speech(text)
+        text = clean_for_speech(companion_line(text))
         if not text:
             return
         if interrupt:
             self.stop()
         queued = self._gen  # a stop() or a newer line while it waits drops it
-        # One line at a time: two said together would otherwise alternate sentences.
+        if not interrupt:
+            batch = getattr(self, "_batch", None)
+            if batch is not None and batch[0] == queued:
+                batch[1].append(text)
+                await batch[2]
+                return
+            texts = [text]
+
+            async def flush():
+                await asyncio.sleep(.035)  # coalesce simultaneous status events, not future turns
+                if getattr(self, "_batch", None) is not None and self._batch[1] is texts:
+                    self._batch = None
+                async with self._lock:
+                    await self._say(" ".join(texts), queued)
+
+            task = asyncio.create_task(flush())
+            self._batch = (queued, texts, task)
+            await task
+            return
+        # Interrupting requests never join a previous status batch.
         async with self._lock:
             await self._say(text, queued)
 
@@ -205,9 +244,7 @@ class Voice:
         self.last_spoken = text
         t0 = time.monotonic()
         first = True
-        sentences = split_sentences(text)
-        if sentences:
-            sentences = first_chunk_split(sentences[0]) + sentences[1:]
+        sentences = speech_chunks(text)
         for sentence in sentences:
             samples = await asyncio.to_thread(self._synth, sentence)
             if gen != self._gen:
@@ -266,15 +303,15 @@ class Voice:
                     return " ".join(spoken)
                 buf += delta
                 parts = _SENTENCE.split(buf)
-                for done in parts[:-1]:
-                    done = clean_for_speech(done)
+                for done in speech_chunks(" ".join(parts[:-1])):
+                    done = clean_for_speech(companion_line(done))
                     if speakable(done):
-                        chunks = first_chunk_split(done) if not spoken else [done]
+                        chunks = [done]
                         spoken.append(done)
                         for chunk in chunks:
                             queue(chunk)
                 buf = parts[-1]
-            tail = clean_for_speech(buf)
+            tail = clean_for_speech(companion_line(buf))
             if speakable(tail) and gen == self._gen:
                 spoken.append(tail)
                 queue(tail)

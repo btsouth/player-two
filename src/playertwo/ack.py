@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import re
 
-LOOK = "Let me look."
-FIGHT_LINE = "Okay, I'll take this fight."
-RUN_LINE = "Okay, trying to run."
+LOOK = None
+FIGHT_LINE = "I'll take this fight."
+RUN_LINE = "I'll try to get us away."
 
 QUESTION = re.compile(r"^(what|where|who|which|how|why|is|are|am|do (you|we|i|they)|does|did|can you see|"
                       r"read|tell me|describe)\b|\?$")
@@ -48,11 +48,11 @@ def ack(request: str) -> str | None:
     words = POLITE.sub("", text.lower())
     m = VERB.match(words)
     if not m or len(words) > 70:
-        return "On it."
+        return None
     rest = text[len(text) - len(m.group(2)):].strip() if m.group(2) else ""
     for a, b in SWAP:
         rest = re.sub(a, b, rest, flags=re.IGNORECASE)
     action = f"{m.group(1)} {rest}".strip()
     if who:
-        return f"Okay, {who.group(1).capitalize()} will {action}."
-    return f"Okay, I'll {action}."
+        return f"{who.group(1).capitalize()} will {action}."
+    return f"I'll {action}."

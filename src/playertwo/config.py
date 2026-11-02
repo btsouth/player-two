@@ -112,7 +112,7 @@ class Settings:
     open_model: str = "meta-models/muse-spark-open-1026"
     # Kokoro voice. Empty means the default voice for `language`.
     voice: str = ""
-    speech_rate: float = 1.1
+    speech_rate: float = 1.0
     # How chatty narration is: "terse" (bare facts, for fast screen reader users),
     # "quiet" (only dialogue and choices), "normal", "detailed".
     verbosity: str = "normal"

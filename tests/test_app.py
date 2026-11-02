@@ -353,7 +353,7 @@ def test_bad_settings_fall_back_and_are_said(tmp_path):
     p.write_text('watch_fps = 0\nspeech_rate = "fast"\nverbosity = "chatty"\n'
                  'hands_free = "yes"\nlanguage = "Spanish"\n')
     s = Settings.load(p)
-    assert (s.watch_fps, s.speech_rate, s.verbosity, s.hands_free) == (6.0, 1.1, "normal", False)
+    assert (s.watch_fps, s.speech_rate, s.verbosity, s.hands_free) == (6.0, 1.0, "normal", False)
     assert s.language == "Spanish"
     assert len(s.problems) == 4 and any("watch_fps" in p for p in s.problems)
     p.write_text('verbosity = "terse\n')  # a typo in the file itself
@@ -770,7 +770,7 @@ def test_a_true_or_false_setting_from_the_environment_takes_true(tmp_path, monke
         assert Settings.load(p).hands_free is value, word
 
 
-async def test_hands_free_description_acknowledges_before_waiting_for_the_scene():
+async def test_hands_free_description_cancels_old_scene_without_filler():
     from types import SimpleNamespace
 
     from playertwo.app import Events, Session
@@ -802,10 +802,10 @@ async def test_hands_free_description_acknowledges_before_waiting_for_the_scene(
     assert old_scene.cancelling()
     await asyncio.gather(old_scene, return_exceptions=True)
     s.narrating = None
-    assert calls == ["Let me look.", "idle", "frame", "scene"]
+    assert calls == ["frame", "scene"]
     calls.clear()
     await s._local("atmosphere")
-    assert calls == ["One second.", "idle", "frame", "scene"]
+    assert calls == ["frame", "scene"]
     calls.clear()
     s.hands = None
     await s._local("describe")
