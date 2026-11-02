@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -16,6 +17,10 @@ def stage(source: Path, mapping: dict, output: Path):
     template = Path(mapping["template"]).resolve()
     manifest = json.loads((template / "takes.json").read_text())
     pacing = json.loads((template / "pacing.json").read_text())
+    for key in ('guide_mode','opening_quote'):
+        if key in mapping:pacing[key]=mapping[key]
+    if pacing.get('guide_mode','walk') not in ('walk','fallback'):
+        raise ValueError('guide_mode must be walk or fallback')
     synthetic = (source / "STAND-IN.json").exists() or bool(mapping.get("stand_in"))
     if synthetic and "TEMP-NOT-FOR-SUBMISSION" not in str(output):
         raise ValueError("Stand-in staging needs TEMP-NOT-FOR-SUBMISSION in its path")
@@ -26,6 +31,7 @@ def stage(source: Path, mapping: dict, output: Path):
         if f.is_file():
             (output / f.name).symlink_to(f.resolve())
     for name, entry in mapping.get("takes", {}).items():
+        if name=='guide' and pacing.get('guide_mode')=='fallback':continue
         v = (source / entry["video"]).resolve()
         stamp = (source / entry["start"]).resolve()
         events = (source / entry["events"]).resolve()
@@ -50,6 +56,7 @@ def stage(source: Path, mapping: dict, output: Path):
             "events": alias + ".events.jsonl",
             "edit": {**old.get("edit", {}), **entry.get("edit", {})},
         }
+        if not synthetic:manifest[name]['edit'].pop('guide_fixture',None)
         if name in mapping.get("unchanged_windows", []):
             original = template / old.get("video", name + ".mp4")
             if (
@@ -61,8 +68,13 @@ def stage(source: Path, mapping: dict, output: Path):
         else:
             if "recording_delay" not in entry.get("edit", {}):
                 raise ValueError("A changed take needs its measured recording_delay")
+            delay=entry['edit']['recording_delay']
+            if not isinstance(delay,(int,float)) or not math.isfinite(delay):
+                raise ValueError('Recorder delay must be measured numeric seconds')
             if name == "rdr-menu" and entry.get("edit", {}).get("backend") != "keyboard":
                 raise ValueError("New Red Dead menu take needs explicit reviewed keyboard backend")
+            if name=='game2' and pacing.get('require_battle_speed') and 'battle_speed' not in entry.get('edit',{}):
+                raise ValueError('New Monster Hunter take needs its reviewed battle_speed')
             missing = [
                 p["id"]
                 for p in pacing["shots"]
@@ -77,7 +89,10 @@ def stage(source: Path, mapping: dict, output: Path):
     if set(mapping.get("shots", {})) - known:
         raise ValueError("Unknown shot ID in map")
     for p in pacing["shots"]:
+        if p.get('guide') and pacing.get('guide_mode')=='fallback':continue
         patch = mapping.get("shots", {}).get(p["id"], {})
+        if patch and any(not isinstance(patch.get(k), (int,float)) or not math.isfinite(patch[k]) for k in ('a','b') if k in patch):
+            raise ValueError(f"{p['id']}: enter measured numeric a/b before importing")
         if p.get("take") in mapping.get("takes", {}) and p.get("take") not in mapping.get(
             "unchanged_windows", []
         ):
@@ -92,11 +107,21 @@ def stage(source: Path, mapping: dict, output: Path):
             if p.get("black_for") and "black_for" not in patch:
                 raise ValueError("New opening needs its frame-checked reveal point")
         p.update(patch)
+        if p.get('take') in mapping.get('takes',{}) and not synthetic:
+            p['stand_in']=False
+            if p.get('guide') and not mapping['takes'][p['take']].get('edit',{}).get('eyes_covered'):
+                raise ValueError('Real guide needs reviewed eyes_covered evidence')
     for key, name in mapping.get("voiceovers", {}).items():
+        if key==('limit' if pacing.get('guide_mode')=='fallback' else 'limit-fallback'):continue
         f = (source / name).resolve()
         if not f.is_file():
             raise ValueError(f"Missing founder audio: {f}")
-        (output / f"vo-{key}{f.suffix}").symlink_to(f)
+        target=output / f"vo-{key}{f.suffix}"
+        if target.is_symlink():target.unlink()
+        target.symlink_to(f)
+        for p in pacing['shots']:
+            if {'intro':'identity','how':'c-how','limit':'limit','limit-fallback':'limit'}.get(key)==p['id'] and not synthetic:
+                p['stand_in']=False
     if synthetic:
         manifest["_stand_in"] = True
         (output / "STAND-IN.json").write_text(

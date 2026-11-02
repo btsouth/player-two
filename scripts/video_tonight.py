@@ -29,8 +29,10 @@ def main():
     if (args.folder / "STAND-IN.json").exists():
         raise ValueError("Stand-in media cannot enter the real tonight import path")
     mapping = json.loads(args.map.read_text())
-    names = set(mapping.get("voiceovers", {}).values())
-    for e in mapping.get("takes", {}).values():
+    unused_limit='limit' if mapping.get('guide_mode')=='fallback' else 'limit-fallback'
+    names = {v for k,v in mapping.get("voiceovers", {}).items() if k!=unused_limit}
+    for name,e in mapping.get("takes", {}).items():
+        if name=='guide' and mapping.get('guide_mode')=='fallback':continue
         v = Path(e["video"])
         names.update(
             [
