@@ -868,3 +868,10 @@ def test_paced_captions_condense_text_without_modifying_source_speech():
     original=list(take.events);take.edit={'paced':True}
     rows=mv.caption_rows(take)
     assert rows[1][2]=='Checking three parts…' and take.events==original
+
+
+def test_paced_health_summary_waits_for_both_real_health_facts():
+    take=_take([_spoken("Frog's at 1 HP, Crono and Marle are full.",1,3),
+                _spoken('Crono took 779, down to 1.',3,5)],'t',10)
+    take.edit={'paced':True};rows=mv.caption_rows(take)
+    assert len(rows)==1 and rows[0][0]==3 and rows[0][2]=='Frog and Crono: 1 HP.'

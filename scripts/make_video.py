@@ -1953,8 +1953,8 @@ def caption_rows(take: Take) -> list[tuple]:
     source=[(a,b,txt.removeprefix('Player Two: ')) for a,b,who,txt in take.caps if who=='Player Two']
     if not take.edit.get('paced'):return source
     summaries={
-      "Frog's at 1 HP, Crono and Marle are full.":'Frog: 1 HP.',
-      'Crono took 779, down to 1.':'Crono: down to 1.',
+      "Frog's at 1 HP, Crono and Marle are full.":None,
+      'Crono took 779, down to 1.':'Frog and Crono: 1 HP.',
       'Frog uses Heal.':'Queued: Heal.', 'Marle uses Cure on Crono.':'Queued: Cure on Crono.',
       'Going to Guardia Castle, through Guardia Forest.':'Going to Guardia Castle.',
       "We're at Guardia Castle.":'Guardia Castle. Stop right there!', 'Soldier, Stop right there!':None,
@@ -2351,7 +2351,7 @@ def main() -> None:
             for o in p.overlays:
                 if o.where.startswith('trace'):
                     o.text='\n'.join(o.text.splitlines()[:2])
-                    if p.id in ('cold-open','mh-weak','rdr-menu-read'):o.f0=max(o.f0,1.1)
+                    if p.id in ('mh-weak','rdr-menu-read'):o.f0=max(o.f0,1.1)
         for p in parts:p.overlays=[o for o in p.overlays if o.text!='You:\nRequest begins' and o.f1>o.f0 and not (p.id=='ct-castle' and o.where.startswith('trace'))]
         weak=next(p for p in parts if p.id=='mh-weak')
         weak.overlays.append(Overlay('You: typed\nWhere’s it weak?',42,'trace-mh',1.1,weak.out_s))
