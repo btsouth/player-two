@@ -354,3 +354,21 @@ async def test_utterance_timing_measures_stream_not_text(monkeypatch):
     assert await u.text() == "Open the menu."
     assert u.timing() == {"transcribe_s": 2.6, "transcribe_finalize_s": 0.1,
                           "transcribe_audio_s": 1.0}
+
+
+async def test_a_different_target_is_not_its_own_greeting_echo(monkeypatch):
+    s = session(monkeypatch)
+    s.events.emit("say", text="I'm Player Two. Start with my name, like Player Two, open the menu.")
+    spoke(s, ago=2, length=3)
+    s.voice.speaking = True
+    await heard(s, "Player Two, open the journal.", ago=1.5, length=1)
+    assert s.handled == ["open the journal"]
+
+
+async def test_its_actual_named_greeting_echo_still_does_not_act(monkeypatch):
+    s = session(monkeypatch)
+    s.events.emit("say", text="I'm Player Two. Start with my name, like Player Two, open the menu.")
+    spoke(s, ago=2, length=3)
+    s.voice.speaking = True
+    await heard(s, "Player Two, open the menu.", ago=1.5, length=1)
+    assert s.handled == []

@@ -1483,9 +1483,15 @@ class Session:
                 return False
         elif not heard:
             return True
+        # Function words alone must not turn a different target into an echo:
+        # "open the journal" is not the greeting's example "open the menu".
+        filler = {"a", "an", "the", "i", "i'm", "you", "your", "me", "my", "we", "our",
+                  "it", "this", "that", "to", "of", "for", "and", "or", "is", "are",
+                  "be", "can", "with", "in", "on", "at"} if named else set()
+        content = heard - filler
         for line in said:
-            w = words(line)
-            if w and len(heard & w) / len(heard) >= 0.6:
+            w = words(line) - filler
+            if w and content and len(content & w) / len(content) >= 0.6:
                 return True
         return False
 
