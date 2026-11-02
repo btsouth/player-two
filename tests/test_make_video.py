@@ -189,14 +189,14 @@ def test_final_refuses_placeholders_voice_over_labels_and_draft_rates():
     parts, _dropped, warnings = _plan(_events())
     refused = " | ".join(mv.final_refusals(parts, warnings))
     assert "placeholder: game2" in refused and "placeholder: game3" in refused
-    assert "voice-over" in refused and "last-line-missing" in refused
+    assert "voice-over" in refused and "win-missing" in refused and "goodbye-missing" in refused
 
 
 def test_the_quote_and_the_honest_lines_are_on_cards():
     parts, _dropped, _warnings = _plan(_events())
     words = " ".join(str(b[0]) for p in parts for b in p.blocks)
     assert "nor defeat Lavos in Chrono Trigger" in words
-    assert "Lavos is still ahead" in words and "No blind-player testing yet" in words
+    assert "Lavos is still ahead" in words and "No blind player has tried it yet" in words
     assert "Muse understands scenes" in words and "common actions" in words
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
@@ -205,7 +205,7 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
 def test_the_end_card_wording_comes_from_the_shown_requests():
     parts, _dropped, _warnings = _plan(_events())
     assert parts[-1].id == "c-end"
-    assert "typed" in parts[-1].blocks[-1][0]
+    assert any("typed" in b[0] for b in parts[-1].blocks)
 
 
 def test_final_refuses_a_speed_up_without_its_label():
@@ -302,8 +302,10 @@ def test_cold_open_keeps_all_speech_and_time_continuous_through_measured_spin():
     take=_choice_take()
     parts,warnings=mv.cold_open(take)
     assert not warnings and parts[0].speed==1
-    assert parts[0].a==.7 and parts[0].b==13.5
-    assert parts[0].black_for==10.3 and parts[0].reveal_s==.25
+    assert parts[0].a==.7
+    assert any(p.a==11 and p.b==13.5 and p.speed==1 for p in parts)
+    assert all(p.black_for==999 for p in parts if p.b<=11)
+    assert next(p for p in parts if p.a==11).reveal_s==.25
     assert all(abs(a.b-b.a)<.001 for a,b in itertools.pairwise(parts))
     mv.evidence_overlays(parts,{"take-B":take})
     words=" ".join(o.text for p in parts for o in p.overlays)
@@ -404,3 +406,65 @@ def test_shop_scene_repositioning_preserves_continuous_source_and_speed_labels()
     assert p.overlays[0].text=="2x" and (p.overlays[0].f0,p.overlays[0].f1)==(0,5)
     assert [o.where for o in p.overlays[1:]]==["trace-shop","trace-shop-menu","trace-shop"]
     assert [(o.f0,o.f1) for o in p.overlays[1:]]==[(0,1.5),(1.5,3.5),(3.5,5)]
+
+
+def test_tightened_four_times_gaps_never_remove_or_speed_original_speech():
+    take=_choice_take()
+    take.edit.update(gap_speed=4,gap_max_output=.45,min_gap=.7,speech_pad=.12)
+    parts,warnings=mv.cold_open(take)
+    assert not warnings
+    assert any(p.speed==4 for p in parts)
+    assert any(o.text=="Silent gap shortened" for p in parts for o in p.overlays)
+    for e in take.events:
+        if e.get("kind")!="spoken":
+            continue
+        covered=sum(max(0,min(p.b,e["ended"])-max(p.a,e["began"])) for p in parts if p.speed==1)
+        assert abs(covered-(e["ended"]-e["began"]))<.001
+    for p in parts:
+        assert not p.speed>1 or p.out_s<=.45+.001
+    assert all(p.a>=a.b for a,p in itertools.pairwise(parts))
+
+
+def test_red_dead_silent_window_uses_game_audio_without_ducking_or_fake_captions():
+    look=_take([{"kind":"heard","t":19,"text":"What do you see?","typed":True}],"rdr-look",50)
+    look.edit["notes_only_verified"]=True
+    quiet=_take([],"rdr-dialogue",100)
+    view,dialogue=mv.rdr_pieces(look,quiet)
+    assert mv.NO_CODE in [o.text for o in view.overlays]
+    assert dialogue.speed==1 and not dialogue.duck and not dialogue.captions
+    assert dialogue.out_s==11
+    quiet.events.append(_spoken("An interruption.",25,26))
+    import pytest
+    with pytest.raises(ValueError,match="contains logged"):
+        mv.rdr_pieces(look,quiet)
+
+
+def test_end_card_contains_full_notice_and_goodbye_stays_a_placeholder_until_recorded(tmp_path):
+    parts,_,_=mv.make_plan({}, {}, set(), [], {"_folder":str(tmp_path)}, {}, {})
+    assert any(p.id=="limit" and p.blocks[0][0]==mv.LIMIT_LINE for p in parts)
+    assert any(p.id=="goodbye-missing" and p.kind=="slate" for p in parts)
+    end=parts[-1]
+    assert mv.SE_NOTICE in [b[0] for b in end.blocks]
+    assert mv.LEGAL_LINE in [b[0] for b in end.blocks]
+    mv.card_png(tmp_path/"end.png",end.blocks,end=True)
+
+
+def test_black_captions_are_large_and_use_a_distinct_player_two_colour():
+    text=mv.ass_text(_take([_spoken("Fight.",1,2)]),"black")
+    assert "Inter,80" in text and "\\1c&HD7EFFF&" in text
+
+
+def test_goodbye_slot_requires_real_ordered_request_and_spoken_exchange():
+    import pytest
+    take=_take([{"kind":"heard","t":2,"text":"Goodbye.","typed":True},
+                _spoken("Bye for now.",2.1,3),_spoken("Have fun.",3.2,4)],"goodbye",10)
+    p=mv.goodbye_piece(take)
+    assert p.a==1.7 and p.b==4.3 and p.black_for==999
+    take.events=take.events[:-1]
+    with pytest.raises(ValueError,match="spoken records"):
+        mv.goodbye_piece(take)
+
+
+def test_red_dead_no_code_claim_requires_a_verified_manifest_flag():
+    view,_=mv.rdr_pieces(_take([],"rdr-look",50),_take([],"rdr-dialogue",100))
+    assert mv.NO_CODE not in [o.text for o in view.overlays]
