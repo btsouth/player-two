@@ -29,6 +29,8 @@ def test_game_quotation_is_not_rewritten_as_a_status():
 
 def test_internal_action_filler_can_be_silent_but_real_action_and_danger_stay():
     assert companion_line("No target line this turn, so I'll just go for damage.") == ""
+    assert companion_line("Three parts you can break. Let me see what each one takes.") == (
+        "You can break three parts.")
     assert companion_line("Spinning Meteor on the legs.") == "Spinning Meteor on the legs."
     assert companion_line("It's coming at you with speed.") == "It's coming at you with speed."
 
