@@ -54,6 +54,12 @@ def test_a_part_being_worked_on_stays_until_it_breaks():
     assert m.choose(view(parts=parts, target="Tail")).part.name == "Legs"
 
 
+def test_a_part_whose_weapon_it_resists_comes_last():
+    parts = [part("Head", "pierce", gauge=0.2), part("Legs", "blunt", gauge=0.9)]
+    assert m.choose(view(parts=parts, resists=["water"])).part.name == "Legs"
+    assert m.choose(view(parts=parts)).part.name == "Head"
+
+
 def test_the_type_that_beats_the_one_it_has_been_using():
     for seen, want in (("Power", "Speed"), ("Speed", "Technical"), ("Technical", "Power")):
         plan = m.choose(view(arc="yellow", toward="Zerk", monster_type=seen))
@@ -91,7 +97,7 @@ def test_a_double_attack_when_canyne_is_on_the_winning_type():
 def test_the_skill_that_breaks_parts_when_the_gauge_pays_for_it():
     plan = m.choose(view(gauge=60))
     assert plan.do == "skill" and plan.skill.name == "Spinning Meteor"
-    assert m.choose(view(gauge=40)).do == "attack"  # Sweet Spot hits all and doesn't break parts
+    assert m.choose(view(gauge=15)).do == "attack"  # nothing it can pay for
 
 
 def test_healing_comes_first_and_goes_to_who_is_worst_off():
@@ -236,6 +242,7 @@ def game(monkeypatch):
         "bar_share": lambda i, who, y=684: 0.9,
         "monster_health": lambda i: 0.9,
         "monster_ribbon": lambda i: "",
+        "clash_type": lambda i: "",
         "toast_up": lambda i: False,
     }
     for name, fn in patch.items():
