@@ -62,10 +62,11 @@ returns to a checked talking spot if displaced, and distinguishes a routing tile
 a fence edge from an actual place to stand and confirm. Existing one-confirm assertions and
 timeouts remain in force.
 
-The blocked-stand-tile fixture now starts immediately beside the disputed tile so it actually
-exercises learning that blockage rather than depending on its approach trajectory. All its
-existing result/learning/alignment assertions remain, plus a check that no confirm is sent
-from the blocked tile.
+Moving the blocked-stand-tile fixture's start closer did not remove Windows timing variance.
+Its simulator and executor now share explicit game time, with the original long approach
+restored and three capture latencies. Rendering cost and OS sleep granularity no longer change
+the simulated movement. All existing result/learning/alignment assertions and the 25-second
+game-time limit remain, plus a check that no confirm is sent from the blocked tile.
 
 The Windows demo-check failure was a fixture launcher: Windows cannot execute a Python shebang
 file as a native program. A Windows batch launcher now invokes the same fixture through the

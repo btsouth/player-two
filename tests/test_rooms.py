@@ -190,7 +190,10 @@ class Sim:
     block of one colour, its feet at x, y), the d-pad moving it 160 pixels a second
     over the walkable tiles only."""
 
-    def __init__(self, img, walk, x, y):
+    def __init__(self, img, walk, x, y, clock=None):
+        import time
+
+        self.clock = clock or time.monotonic
         self.img, self.walk, self.x, self.y = img, walk, x, y
         self.angle = None
         self.t = None
@@ -198,11 +201,9 @@ class Sim:
         self.facing = None
 
     def update(self):
-        import time
-
         from playertwo.controls import steer_dirs
 
-        now = time.monotonic()
+        now = self.clock()
         dt = 0.0 if self.t is None else min(0.1, now - self.t)
         self.t = now
         ds = steer_dirs(self.angle)
