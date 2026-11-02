@@ -203,7 +203,8 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
     assert "nor defeat Lavos in Chrono Trigger" in words
     assert "Not beaten yet" in words and "No blind player has tried it yet" in words
     assert mv.GENERAL_LINE in words and mv.RETRO_QUOTE in words
-    assert mv.RETRO_QUOTE == "A blind person still cannot ... nor defeat Lavos in Chrono Trigger."
+    assert mv.RETRO_QUOTE == "A blind person still cannot ... nor defeat Lavos in Chrono Trigger ..."
+    assert mv.RETRO_SOURCE == "Devin Prater, blind accessibility instructor, for libretro, 2019"
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
 
@@ -878,3 +879,64 @@ def test_paced_health_summary_waits_for_both_real_health_facts():
                 _spoken('Crono took 779, down to 1.',3,5)],'t',10)
     take.edit={'paced':True};rows=mv.caption_rows(take)
     assert len(rows)==1 and rows[0][0]==3 and rows[0][2]=='Frog and Crono: 1 HP.'
+
+
+def test_stand_in_is_refused_even_if_the_output_is_renamed():
+    p=mv.Piece('rehearsal','hook',kind='card',secs=5,stand_in=True)
+    assert 'stand-in media: rehearsal' in mv.final_refusals([p],[])
+
+
+def test_handsfree_tag_requires_explicit_event_evidence(tmp_path):
+    for event,expected in [({'typed':True},False),({},False),({'hands_free':True},True)]:
+        es=[{'kind':'heard','t':1,'text':'Open the menu.',**event}]
+        t=_take(es,'t',10);p=mv.Piece('request','ct',take='t',a=0,b=10)
+        mv.evidence_overlays([p],{'t':t})
+        assert any('No button pressed' in o.text for o in p.overlays)==expected
+
+
+def test_per_line_duck_is_bounded_and_does_not_change_voice():
+    p=mv.Piece('p','ct',a=10,b=20,game_ducks=[[12,14,.25]])
+    assert '(t-2.0)' in mv.game_duck_filter(p)
+    p.game_ducks=[[9,14,.25]]
+    with pytest.raises(ValueError,match='measured interval'):mv.game_duck_filter(p)
+
+
+@needs_ffmpeg
+def test_game_duck_filter_runs_and_leaves_other_samples_alone(tmp_path):
+    import subprocess
+
+    import numpy as np
+    p=mv.Piece('p','ct',a=0,b=3,game_ducks=[[1,2,.25]])
+    raw=subprocess.check_output(['ffmpeg','-v','error','-f','lavfi','-i','aevalsrc=0.1|0.1:s=48000:d=3','-af',mv.game_duck_filter(p).lstrip(','),'-f','f32le','-'])
+    audio=np.frombuffer(raw,np.float32).reshape(-1,2)
+    assert audio[24000,0]==pytest.approx(.1)
+    assert audio[72000,0]==pytest.approx(.025)
+    assert audio[120000,0]==pytest.approx(.1)
+
+
+def test_purchase_hold_without_a_time_summary_does_not_crash():
+    p=mv.Piece('shop-buy','ct',overlays=[mv.Overlay('Purchase result held',34,'tl',0,5)])
+    assert mv.render_overlays(p)[0].text=='Purchase result held'
+
+
+def test_renamed_link_to_stand_in_voice_is_refused(tmp_path):
+    f=tmp_path/'TEMP-NOT-FOR-SUBMISSION-voice.wav';f.write_bytes(b'test')
+    link=tmp_path/'vo-intro.wav';link.symlink_to(f)
+    p=mv.Piece('identity','hook',kind='card',secs=12,vo=str(link))
+    assert 'stand-in media: identity' in mv.final_refusals([p],[])
+
+
+def test_stand_in_folder_is_refused_before_any_probe(tmp_path):
+    import subprocess
+    f=tmp_path/'rehearsal';f.mkdir();(f/'STAND-IN.json').write_text('{}')
+    r=subprocess.run([sys.executable,str(_path),str(f),'--final','--dry-run'],capture_output=True,text=True,check=False)
+    assert r.returncode!=0 and '--final refuses stand-in' in r.stderr
+
+
+def test_paced_monster_hunter_uses_the_actual_heard_transcript():
+    e={'kind':'heard','t':1,'text':"Where's it weak?",'raw_transcript':"Player Two, where's it weak?"}
+    take=_take([e],'game2',10);take.edit={'story':{'cuts_only':True},'paced':True}
+    p=mv.Piece('mh-weak','game2',take='game2',a=0,b=10)
+    mv.evidence_overlays([p],{'game2':take})
+    assert any('Muse Voice Transcribe' in o.text and "Player Two, where's it weak?" in o.text for o in p.overlays)
+    assert not any('typed' in o.text for o in p.overlays)
