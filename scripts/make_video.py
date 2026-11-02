@@ -679,7 +679,7 @@ def make_plan(
     del rates  # the film ends with a human line, not a rates wall
     folder = Path(vo.get("_folder", "."))
     opening, warnings = cold_open(takes.get("take-B"))
-    # Each request appears once; the same fight’s real result is reserved for the ending.
+    # Each request appears once; the same fight's real result is reserved for the ending.
     drop = set(force_drop) | {"B0", "B1", "B2", "B3", "B4"}
     lines = ct_pieces(takes, picks, drop, 8, warnings)
     maps = []
