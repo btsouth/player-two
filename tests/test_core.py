@@ -196,6 +196,31 @@ class TestAgent:
             "or repeat something they've already heard, say it again in full.")
         assert said == ["The brief says go."] and result.outcome == "The brief says go."
 
+    MARKUP = ('<atem:function_calls>\n<atem:invoke name="default.finish">\n'
+              '<atem:parameter name="text">There\'s no menu open. You\'re by the wagon at '
+              'night.</atem:parameter>\n</atem:invoke>\n</atem:function_calls>')
+
+    def test_a_finish_written_out_as_markup_is_said_as_its_text(self):
+        """Live: "Read this menu." got this as words, twice: held as the model talking about
+        itself, so the player got an apology and not the answer."""
+        agent, _, said, _, muse = self.make([])
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            return SimpleNamespace(content=self.MARKUP, tool_calls=[])
+
+        muse.tools = words
+        result = run(agent.run("read this menu"))
+        answer = "There's no menu open. You're by the wagon at night."
+        assert said == [answer] and result.outcome == answer
+
+    def test_another_tool_written_out_as_markup_is_not_said(self):
+        from playertwo.agent import plain_reply
+
+        assert plain_reply('<invoke name="default.press"><parameter name="buttons">a'
+                           '</parameter></invoke>') == ""
+        assert plain_reply('<atem:invoke name="default.say"><atem:parameter name="text">'
+                           'Tom &amp; Jerry</atem:parameter></atem:invoke>') == "Tom & Jerry"
+
     def test_talk_about_its_own_steps_is_never_said_even_when_asked_to_read(self):
         """Live: "Read it." got "No final response yet; gathering information or acting."
         said aloud."""
