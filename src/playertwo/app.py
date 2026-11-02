@@ -371,6 +371,7 @@ class Session:
         self.keywords: list[str] = []
         self._tasks: set[asyncio.Task] = set()
         self.side_task: asyncio.Task | None = None  # a "where is" or health-bar search
+        self.guide_task: asyncio.Task | None = None  # "walk me to it": the side task, too
         self.unnamed_answer = False  # the answer came hands-free, without "Player Two"
         self.last_trouble = ""  # the last problem said, for "what's wrong?"
         self.fps_before_hud: float | None = None
@@ -866,6 +867,9 @@ class Session:
         model call every second, say nothing and pay for all of it.
         """
         if self.pending is None or (self.narrating and not self.narrating.done()):
+            return
+        if self.guiding():
+            self.pending = None  # the pings have the floor; the world moves too fast to tell
             return
         if self.listening():
             return  # never over the player; the newest screen waits until they're done
@@ -1585,7 +1589,7 @@ class Session:
                 said = None
             elif said is None and text and not (echo_possible and self.echo(text)):
                 busy = (self.agent_task is not None and not self.agent_task.done()) or (
-                    not self.voice.idle())
+                    not self.voice.idle()) or self.guiding()
                 if self.open_ear(started) or (busy and local_action(text) == "stop"):
                     said = text  # an answer, a follow-up, or "stop" while it's busy
                     # Heard without its name: over speakers that could be the game.
@@ -1676,10 +1680,15 @@ class Session:
         if action:
             await self.local(action)
             return
+        from .guide import guide_request
         from .locate import where_request
 
         phrase = where_request(text)
+        thing = guide_request(text)
         self.stop_side()
+        if thing:
+            self.side_task = self.guide_task = self.spawn(self.guide(thing))
+            return
         if phrase:
             self.side_task = self.spawn(self.where(phrase))
             return
@@ -1799,6 +1808,81 @@ class Session:
             if a.level in ("low", "critical", "recovered") or "stamina" not in a.meter:
                 words = HUD_WORDS[a.level].format(name=a.meter.capitalize())
                 self.spawn(self.voice.say(words, interrupt=a.level == "critical"))
+
+    def guiding(self) -> bool:
+        return self.guide_task is not None and not self.guide_task.done()
+
+    async def guide(self, phrase: str) -> None:
+        """Walk the player to a thing by ear (guide.py). Presses nothing: their hands, or
+        their robot's. Ends on arrival, on "stop", or at the timeout, with a true line."""
+        try:
+            await self._guide(phrase)
+        except asyncio.CancelledError:
+            self.events.emit("guide_end", phrase=phrase, reason="stopped")
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.events.emit("guide_end", phrase=phrase, reason="error")
+            self.trouble(exc, "guide", answer=True)
+
+    async def _guide_line(self, line: str, must: bool = False) -> bool:
+        """Say a guide line, but not over the game's voices (gameaudio's rule): one that
+        can wait is held for the next look, one that can't waits for a gap, as narration
+        does, and goes on after GAP_MAX_S."""
+        if self._ears_on() and self.ears.speaking():
+            if not must:
+                return False
+            end = time.monotonic() + self.GAP_MAX_S
+            while self.ears.speaking() and time.monotonic() < end:
+                await asyncio.sleep(0.05)
+        self.events.emit("say", text=line, source="guide")
+        self.spawn(self.voice.say(line))
+        return True
+
+    async def _guide(self, phrase: str) -> None:
+        from .audio import tone
+        from .guide import START, Guide
+        from .locate import locate
+
+        if self.narrating and not self.narrating.done():
+            self.narrating.cancel()
+        self.pending = None
+        await self.announce(START, interrupt=True, status=True)
+        guide = Guide(time.monotonic())
+        self.events.emit("guide_start", phrase=phrase)
+        cycle = 0
+        while True:
+            cycle += 1
+            t0 = time.monotonic()
+            frame = await self.grab_now()
+            frame_t = time.time()
+            matches, secs = await locate(self.muse, frame.image, phrase)
+            now = time.monotonic()
+            step = guide.look(matches, now)
+            said = ""
+            if step.say and await self._guide_line(step.say, must=bool(step.end)):
+                said = step.say
+                guide.said(said, now)
+            if step.pan is not None and not self.listening():
+                beep = tone(step.hz, 90, volume=0.6)
+                for i in range(step.beeps):
+                    self.mixer.cue(beep, pan=step.pan)
+                    if i + 1 < step.beeps:
+                        await asyncio.sleep(0.14)
+            self.events.emit(
+                "guide", phrase=phrase, cycle=cycle, frame_t=frame_t, seconds=round(secs, 2),
+                cycle_s=round(time.monotonic() - t0, 2),
+                boxes=[list(m.box) for m in matches[:12] if m.box is not None],
+                box=list(step.target.box) if step.target and step.target.box else None,
+                area=round(step.target.area, 4) if step.target else None, pan=step.pan,
+                hz=round(step.hz) if step.hz else None, beeps=step.beeps, side=step.side,
+                said=said)
+            if step.end:
+                self.events.emit("guide_end", phrase=phrase, reason=step.end, cycles=cycle,
+                                 seconds=round(now - guide.started, 1))
+                return
+            left = step.wait_s - (time.monotonic() - t0)
+            if left > 0:
+                await asyncio.sleep(left)
 
     async def where(self, phrase: str) -> None:
         """Find things with SAM 3.1, say where they are, and ping each one from its side."""
@@ -2033,8 +2117,13 @@ class Session:
         self.events.emit("local", action=action)
         self.spawn(self._after_local())
         if action == "stop":
+            guiding = self.guiding()
             self.stop_side()
             self.voice.stop()
+            if guiding:
+                from .guide import STOPPED
+
+                await self.announce(STOPPED, interrupt=True)
             if self.answer is not None and not self.answer.done():
                 self.answer.set_result("")
             if self.agent_task and not self.agent_task.done():

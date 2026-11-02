@@ -1,171 +1,151 @@
-"""A walkthrough to look things up in: where a place is and how to get there, what to do
-next. Blind players already play with text guides; this reads one so they don't have to.
+"""Walk me to it: find a thing by ear, in any game with a view of the world.
 
-Guides are plain text files the player puts in ~/.config/player-two/guides/, named after
-the game ("chrono-trigger.txt"), with blank lines between paragraphs; a line starting
-with a number and a dot ("3. The Queen is Gone") starts a chapter. A search is plain
-word matching, rarer words counting more, so it needs no index or model. Boss stat
-tables, move names and enemy lists are left out: they match names but say nothing about
-where to go. A short heading with a place in brackets ("Guardia Castle (1000 A.D.)")
-labels the passages under it.
+Each look finds the thing with SAM, then plays one ping panned to where it truly is on screen,
+higher and more often as its box grows, like a parking sensor. Words come only when something
+changes. No game knowledge here: a phrase, a screen and the size of a box. A box says how big
+a thing looks, not how far it is, so nothing here claims a distance.
 """
 
 from __future__ import annotations
 
-import itertools
 import math
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
-from .config import CONFIG_DIR
+from .locate import Match
 
-GUIDES = CONFIG_DIR / "guides"
-STOP = set("""a an and are as at be but by can do does for from get go going how i if in into is
-it its me my of on or so than that the then there this to up was what when where
-which who why will with you your""".split())  # noqa: SIM905
-CHAPTER = re.compile(r"^\d+\.\s+\S")
-SECTION = re.compile(r"^[A-Z][^.!?:]{2,50}\(\d[^)]*[A-Za-z][^)]*\)$")  # "Lab 16 (2300 A.D.)"
-STATS = re.compile(r"\bLevel HP\b|Tech Points|Treasures:|^Combo: |\bDef\. ")
+REQUEST = re.compile(
+    r"^(?:(?:hey|so|okay|ok|please|can you|could you|would you),? )*"
+    r"(?:walk|guide|lead) me (?:over )?(?:to|towards?)\s+(?:the |a |an |my |that |this )?"
+    r"(?P<what>[\w' -]{2,40}?)(?:,? please)?$", re.IGNORECASE)
 
 
-def noise(para: str) -> bool:
-    """Not walkthrough prose: a stat table, an enemy or treasure list, a boss or move
-    name, a "Chapters" link."""
-    if STATS.search(para):
-        return True
-    digits = sum(c.isdigit() for c in para)
-    if digits > 12 and digits > len(para) * 0.12:
-        return True
-    return len(para) < 60 and not re.search(r"[.!?]$", para)
+def guide_request(text: str) -> str | None:
+    """The thing in "walk me to my horse", or None if it isn't that kind of request."""
+    text = text.strip().replace("’", "'").rstrip(".!?,;: ")
+    m = REQUEST.match(text)
+    return m.group("what").strip() if m else None
 
 
-def words(text: str) -> list[str]:
-    return [w for w in re.findall(r"[a-z0-9']+", text.lower()) if w not in STOP and len(w) > 1]
+LEFT, AHEAD, RIGHT = "Left.", "Straight ahead.", "Right."
+CLOSE = "Getting close."
+THERE = "You're there."
+LOST = "I don't see it. Turn slowly."
+STOPPED = "Okay, stopped."
+START = "Okay. Listen for the ping."
+TIMED_OUT = "That's two minutes, and we didn't get there, so I've stopped."
+NEVER_SEEN = "That's two minutes, and I never found it, so I've stopped."
 
-
-def slug(name: str) -> str:
-    return "-".join(words(re.sub(r"\(.*?\)", "", name)))
-
-
-def guide_path(game: str, folder: Path = GUIDES) -> Path | None:
-    """The guide whose file name is this game's name, or is all in it."""
-    if not folder.is_dir():
-        return None
-    name = slug(game)
-    for f in sorted(folder.glob("*.txt")):
-        if f.stem == name or (f.stem and all(w in name.split("-") for w in f.stem.split("-"))):
-            return f
-    return None
-
-
-def chapters(text: str) -> list[tuple[str, str]]:
-    """The guide cut into its numbered chapters: (title, text). Chapter numbers go up one
-    at a time, so a numbered list inside a chapter ("1. Rename characters at...") isn't
-    taken for one."""
-    out: list[tuple[str, list[str]]] = []
-    want = 1
-    for line in text.splitlines():
-        m = re.match(r"^\s*(\d+)\.\s+(\S.*)$", line)
-        if m and int(m.group(1)) == want and len(line.strip()) < 70:
-            out.append((line.strip(), []))
-            want += 1
-        elif out:
-            out[-1][1].append(line)
-        elif line.strip():
-            out.append(("", [line]))
-    return [(title, "\n".join(body).strip()) for title, body in out]
-
-
-def prose(text: str) -> str:
-    """A chapter's text without stat tables and lists (see noise), paragraphs kept."""
-    paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
-    return "\n\n".join(p for p in paras if p and (SECTION.match(p) or not noise(p)))
+# Straight ahead within this much of the middle (-1 to 1 across the screen), and it stays so
+# until the thing is this far out: no flipping between words at the edge.
+AHEAD_PAN = 0.16
+AHEAD_LEAVE = 0.26
+LOW_HZ, HIGH_HZ = 660.0, 1760.0
+# The box's size, as a fraction of the screen, from far off to right there.
+FAR_AREA, CLOSE_AREA, THERE_AREA = 0.002, 0.03, 0.08
+THERE_LOOKS = 2  # looks in a row at that size, since one box can be a fluke
+SIDE_LOOKS = 2  # looks on a new side before saying so
+LOST_S = 4.0  # not seen for this long: say so
+LOST_AGAIN_S = 15.0
+TIMEOUT_S = 120.0
 
 
 @dataclass
-class Passage:
-    chapter: str
-    text: str
+class Step:
+    """What one look comes to."""
+
+    target: Match | None
+    pan: float | None  # where to ping, -1 to 1; None when it isn't in frame
+    hz: float | None
+    beeps: int
+    wait_s: float  # to the next look, at least
+    say: str  # "" when nothing has changed
+    side: str
+    end: str = ""  # "there" or "timeout"
+
+
+def size_of(area: float) -> float:
+    """0 (far off) to 1 (right there) for a box's share of the screen, by its log: each
+    halving of the distance about quadruples the area, so this moves evenly as you walk."""
+    if area <= FAR_AREA:
+        return 0.0
+    return min(1.0, math.log(area / FAR_AREA) / math.log(THERE_AREA / FAR_AREA))
+
+
+def pick(matches: list[Match], last: Match | None) -> Match | None:
+    """Which match to follow: the one nearest where it was, or at the start the biggest,
+    which is most likely the nearest. SAM finds the kind of thing, not whose it is."""
+    if not matches:
+        return None
+    if last is None:
+        return max(matches, key=lambda m: m.area)
+    return min(matches, key=lambda m: abs(m.cx - last.cx) + abs(m.cy - last.cy)
+               + abs(math.log(max(m.area, 1e-5) / max(last.area, 1e-5))) * 0.1)
 
 
 class Guide:
-    def __init__(self, text: str):
-        self.passages: list[Passage] = []
-        chapter = section = ""
-        for para in re.split(r"\n\s*\n", text):
-            para = " ".join(para.split())
-            if not para:
-                continue
-            if CHAPTER.match(para) and len(para) < 80:
-                chapter, section = para, ""
-                continue
-            if SECTION.match(para):
-                section = para
-                continue
-            if noise(para):
-                continue
-            self.passages.append(Passage(f"{chapter} / {section}" if section else chapter,
-                                         para))
-        n = len(self.passages) or 1
-        df: dict[str, int] = {}
-        self._words = [words(p.text) for p in self.passages]
-        for ws in self._words:
-            for w in set(ws):
-                df[w] = df.get(w, 0) + 1
-        self.idf = {w: math.log(1 + n / c) for w, c in df.items()}
+    """The words and pings for a run of looks. Time comes in, so this can be tested."""
 
-    @classmethod
-    def for_game(cls, game: str, folder: Path = GUIDES) -> Guide | None:
-        f = guide_path(game, folder)
-        return cls(f.read_text(encoding="utf-8", errors="replace")) if f else None
+    def __init__(self, started: float, timeout_s: float = TIMEOUT_S):
+        self.started = started
+        self.timeout_s = timeout_s
+        self.target: Match | None = None
+        self.side = ""  # the side as last said
+        self.seen_side = ""  # the side as last seen
+        self.side_looks = 0
+        self.close_said = False
+        self.there_looks = 0
+        self.seen_at: float | None = None
+        self.lost_said_at: float | None = None
+        self.ever_seen = False
 
-    def search(self, query: str, limit: int = 5, max_chars: int = 2400) -> list[Passage]:
-        q = words(query)
-        if not q:
-            return []
-        pairs = list(itertools.pairwise(q))  # place names are often two words
-        scored = []
-        for i, ws in enumerate(self._words):
-            if not ws:
-                continue
-            have = set(ws)
-            s = sum(self.idf.get(w, 0) for w in set(q) if w in have)
-            text = " ".join(ws)
-            s += sum(2 * (self.idf.get(a, 0) + self.idf.get(b, 0)) / 2
-                     for a, b in pairs if f"{a} {b}" in text)
-            if s:
-                scored.append((s / (1 + len(ws) / 400), i))
-        out, used = [], 0
-        for _, i in sorted(scored, reverse=True)[:limit]:
-            p = self.passages[i]
-            text = clip(p.text, q, max_chars // limit)
-            if used + len(text) > max_chars and out:
-                break
-            out.append(Passage(p.chapter, text))
-            used += len(text)
-        return out
+    def _side(self, pan: float) -> str:
+        limit = AHEAD_LEAVE if self.seen_side == AHEAD else AHEAD_PAN
+        if abs(pan) < limit:
+            return AHEAD
+        return LEFT if pan < 0 else RIGHT
 
+    def look(self, matches: list[Match], now: float) -> Step:
+        """One look's matches. `say` isn't taken as said until `said` is called with it."""
+        if now - self.started >= self.timeout_s:
+            line = TIMED_OUT if self.ever_seen else NEVER_SEEN
+            return Step(None, None, None, 0, 0.0, line, self.seen_side, end="timeout")
+        target = pick(matches, self.target)
+        if target is None:
+            self.there_looks = 0
+            self.target = None  # gone: the biggest again when it's back
+            since = now - (self.seen_at if self.seen_at is not None else self.started)
+            say = ""
+            if since >= LOST_S and (self.lost_said_at is None
+                                    or now - self.lost_said_at >= LOST_AGAIN_S):
+                say = LOST
+            return Step(None, None, None, 0, 0.6, say, "")
+        back = self.target is None
+        self.target, self.seen_at, self.ever_seen = target, now, True
+        pan = target.pan
+        side = self._side(pan)
+        self.side_looks = self.side_looks + 1 if side == self.seen_side else 1
+        self.seen_side = side
+        size = size_of(target.area)
+        hz = LOW_HZ * (HIGH_HZ / LOW_HZ) ** size
+        beeps = 3 if size >= 0.85 else 2 if size >= 0.55 else 1
+        self.there_looks = self.there_looks + 1 if target.area >= THERE_AREA else 0
+        wait_s = 1.0 - 0.7 * size
+        if self.there_looks >= THERE_LOOKS:
+            return Step(target, pan, hz, beeps, 0.0, THERE, side, end="there")
+        say = ""
+        if side != self.side and (back or not self.side or self.side_looks >= SIDE_LOOKS):
+            say = side
+        elif not self.close_said and target.area >= CLOSE_AREA:
+            say = CLOSE
+        return Step(target, pan, hz, beeps, wait_s, say, side)
 
-def clip(text: str, q: list[str], n: int) -> str:
-    """Up to about n characters of text, around where most of the query's words are."""
-    if len(text) <= n:
-        return text
-    lower = text.lower()
-    hits = [m.start() for w in q for m in re.finditer(re.escape(w), lower)]
-    mid = sorted(hits)[len(hits) // 2] if hits else 0
-    start = max(0, min(mid - n // 2, len(text) - n))
-    return ("..." if start else "") + text[start:start + n].strip() + (
-        "..." if start + n < len(text) else "")
-
-
-def look_up(game: str, query: str) -> str:
-    guide = Guide.for_game(game)
-    if guide is None:
-        return (f"no guide for {game}: the player can put a text walkthrough in "
-                f"{GUIDES} named {slug(game)}.txt")
-    found = guide.search(query)
-    if not found:
-        return "nothing in the guide about that; try other words (place or person names)"
-    return "From the guide (it follows the story in order; you may be at another point):\n" \
-        + "\n\n".join(f"[{p.chapter or 'start'}] {p.text}" for p in found)
+    def said(self, line: str, now: float) -> None:
+        """That line was really said."""
+        if line in (LEFT, RIGHT, AHEAD):
+            self.side = line
+        elif line == CLOSE:
+            self.close_said = True
+        elif line == LOST:
+            self.lost_said_at = now
+            self.side = ""  # say the side again when it's back
