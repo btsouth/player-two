@@ -1619,6 +1619,10 @@ class Session:
                 self.voice.cue("listening")
                 return
             self.follow_until = 0.0
+            if addressed(text) is not None and not woke:
+                # While it says its own name, partials deliberately wait for the full
+                # sentence. Once that is a genuine request, don't queue behind it.
+                self.voice.stop()
             self.voice.cue("heard")
             self._heard(said, timing, raw=text)
             await self.handle(said)

@@ -368,6 +368,7 @@ async def test_a_different_target_is_not_its_own_greeting_echo(monkeypatch):
     s.voice.speaking = True
     await heard(s, "Player Two, open the journal.", ago=1.5, length=1)
     assert s.handled == ["open the journal"]
+    assert s.voice.stopped == 1  # final genuine request cuts off its greeting
 
 
 async def test_its_actual_named_greeting_echo_still_does_not_act(monkeypatch):
