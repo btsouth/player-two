@@ -840,6 +840,9 @@ def test_menu_claim_requires_muse_turns_and_shows_its_own_keyboard_press():
     take=_take(es,'rdr-menu',50)
     take.edit={'backend':'keyboard','story':[[10,15],[26,28],[34,40]]}
     assert len(mv.rdr_menu_pieces(take))==3
+    with pytest.raises(ValueError,match='edit must show its own journal press'):
+        mv.menu_records(take,[mv.Piece('hidden','game3',take='rdr-menu',a=30,b=40)])
+    mv.menu_records(take,[mv.Piece('shown','game3',take='rdr-menu',a=26,b=28)])
     take.edit['story']=[[10,15],[27,28],[34,40]]
     with pytest.raises(ValueError,match='show its own journal press'):
         mv.rdr_menu_pieces(take)

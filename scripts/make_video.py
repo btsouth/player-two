@@ -679,7 +679,7 @@ def rdr_sam_pieces(take: Take) -> list[Piece]:
     return parts
 
 
-def menu_records(take: Take) -> tuple[list[float],list[dict]]:
+def menu_records(take: Take, parts: list[Piece] | None = None) -> tuple[list[float],list[dict]]:
     """The accepted keyboard take must prove both reads and its actual journal press."""
     if take.edit.get('backend')!='keyboard':raise ValueError('RDR menu proof needs the accepted keyboard backend')
     requests=['Read this menu.','Open the journal.','Read it.'];times=[];agents=[]
@@ -694,6 +694,8 @@ def menu_records(take: Take) -> tuple[list[float],list[dict]]:
         raise ValueError('RDR menu needs the real journal navigation presses')
     at=times[1]+next(x['t'] for x in presses if x['args'].get('buttons')==['a'])
     if not any(a<=at<b for a,b in take.edit['story']):raise ValueError('RDR menu must show its own journal press')
+    if parts is not None and not any(p.take==take.name and p.a<=at<p.b and not p.freeze and p.speed==1 for p in parts):
+        raise ValueError('RDR edit must show its own journal press at1x')
     return times,agents
 
 
@@ -1086,7 +1088,7 @@ def paced_plan(folder: Path, takes: dict[str,Take], vo: dict, vo_s: dict) -> lis
             p.vo=vo.get(key,'')
         parts.append(p)
     # Recheck the specific source proofs, not an invented model or game-specific macro.
-    menu_records(takes['rdr-menu'])
+    menu_records(takes['rdr-menu'],parts)
     resume=next(e for e in takes['nav'].events if e.get('kind')=='agent' and e.get('request')=='Keep going to the castle.')
     if len(resume['turns'])!=9 or not any(x.get('tool')=='walk_to' and 'not_found' in x.get('result','') for x in resume['steps']) or not any(x.get('tool')=='remember' for x in resume['steps']):raise ValueError('Paced recovery proof changed')
     return parts
@@ -1312,7 +1314,7 @@ def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
             try:
                 take=load_take(Path(p.proof),'rdr-menu',False)
                 if not take:raise ValueError('menu take absent')
-                menu_records(take)
+                menu_records(take,parts)
             except (OSError,ValueError,KeyError,StopIteration) as exc:out.append(f'unsupported menu proof: {exc}')
             checked_menu=True
         if (p.id.startswith("c-how") or p.id in ("identity","limit")) and not p.vo:
