@@ -878,3 +878,22 @@ def test_paced_health_summary_waits_for_both_real_health_facts():
                 _spoken('Crono took 779, down to 1.',3,5)],'t',10)
     take.edit={'paced':True};rows=mv.caption_rows(take)
     assert len(rows)==1 and rows[0][0]==3 and rows[0][2]=='Frog and Crono: 1 HP.'
+
+
+def test_transcribe_badge_uses_only_a_measured_stream_stage():
+    events = [
+        {"t": 2.0, "kind": "heard", "text": "Open the journal", "transcribe_s": 2.34},
+        {"t": 2.01, "kind": "model_stage", "model": "Muse Voice Transcribe",
+         "seconds": 2.34, "timing": "stream"},
+        _spoken("Okay, opening the journal.", 2.2, 3.2),
+    ]
+    take = _take(events, "voice", 5)
+    piece = mv.Piece("voice", "clip", take="voice", a=0, b=5, captions=True)
+    report = mv._evidence_for_window([piece], {"voice": take})
+    assert any(r["layer"] == "Muse Voice Transcribe" for r in report)
+    assert any("Stream 2.34 s" in o.text for o in piece.overlays)
+    assert any("You: Open the journal" in c[3] for c in take.caps)
+    old = _take([events[0], events[2]], "old", 5)
+    old_piece = mv.Piece("old", "clip", take="old", a=0, b=5, captions=True)
+    assert not any(r["layer"] == "Muse Voice Transcribe"
+                   for r in mv._evidence_for_window([old_piece], {"old": old}))

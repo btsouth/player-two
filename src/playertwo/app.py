@@ -1428,7 +1428,7 @@ class Session:
         finally:
             self.transcribing = False
         self.voice.cue("heard")
-        self.events.emit("heard", text=text or "")
+        self._heard(text or "", utt.timing())
         try:
             if text:
                 await self.handle(text)
@@ -1438,6 +1438,16 @@ class Session:
             # Whatever they said that wasn't stop or a new request (a repeat, a question,
             # nothing), the action they asked for earlier carries on.
             self.agent.resume()
+
+    def _asr_stage(self, timing: dict | None) -> None:
+        if timing and isinstance(timing.get("transcribe_s"), (int, float)):
+            self.events.emit("model_stage", model="Muse Voice Transcribe",
+                             seconds=timing["transcribe_s"], timing="stream", **timing)
+
+    def _heard(self, text: str, timing: dict | None = None, raw: str | None = None) -> None:
+        self.events.emit("heard", text=text, **(timing or {}),
+                         **({"raw_transcript": raw} if raw is not None else {}))
+        self._asr_stage(timing)
 
     # Hands-free
 
@@ -1486,7 +1496,8 @@ class Session:
                 if e["kind"] in ("say", "ask") and now - e["t"] < 30 and e.get("text")]
         return [*said, self.narrating_text]
 
-    def new_stops(self, text: str, started: float, final: bool = False) -> bool:
+    def new_stops(self, text: str, started: float, final: bool = False,
+                  timing: dict | None = None) -> bool:
         """Whether `text` (the speech that began at `started`, so far, or all of it when
         `final`) has a "Player Two, stop" not acted on yet. It counts even mixed into
         Player Two's own voice (speakers, no headset), unless it's the very words Player
@@ -1502,7 +1513,7 @@ class Session:
             return False
         self.stop_seen = (started, len(found))
         self.voice.cue("heard")
-        self.events.emit("heard", text="stop")
+        self._heard("stop", timing, raw=text)
         return True
 
     def hands_partial(self, text: str, started: float) -> None:
@@ -1551,7 +1562,7 @@ class Session:
                 self.agent.resume()
 
     async def hands_heard(self, text: str, error: BaseException | None,
-                          started: float, ended: float) -> None:
+                          started: float, ended: float, timing: dict | None = None) -> None:
         """Speech heard hands-free, from `started` to `ended`: act on it if it was said to
         Player Two."""
         # Only the speech that said "Player Two" lets go of what that held: another
@@ -1568,12 +1579,16 @@ class Session:
                 else:
                     self.events.emit("error", where="listen", message=str(error)[:300])
                 return
-            if self.new_stops(text, started, final=True):
+            new_stop = self.new_stops(text, started, final=True, timing=timing)
+            if new_stop:
                 await self.local("stop")
             stops = list(STOP_CALL.finditer(text))
             if self.stop_seen[0] == started and self.stop_seen[1] and stops:
                 # Stopped in this breath: only what came after counts ("Player Two, stop.
                 # Player Two, open the map"), and only if it's said to Player Two too.
+                if not new_stop:
+                    # Stop can act on a partial; publish completed ASR timing later.
+                    self._asr_stage(timing)
                 text = text[stops[-1].end():]
                 if not addressed(text):
                     return
@@ -1599,7 +1614,7 @@ class Session:
                 return
             self.follow_until = 0.0
             self.voice.cue("heard")
-            self.events.emit("heard", text=said)
+            self._heard(said, timing, raw=text)
             await self.handle(said)
         finally:
             if woke and self.utt is None:

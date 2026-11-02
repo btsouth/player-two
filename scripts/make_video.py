@@ -1674,7 +1674,8 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
             # Future instrumentation may supply explicit stage records; no inferred SAM/STT.
             elif kind == "model_stage" and e.get("model") in ("Muse Voice Transcribe", "SAM 3.1") \
                     and isinstance(e.get("seconds"), (int,float)):
-                facts.append((e, e["model"], f"Stage time {e['seconds']:.2f} s"))
+                facts.append((e, e["model"], f"Stream {e['seconds']:.2f} s"
+                              if e.get("timing") == "stream" else f"Stage time {e['seconds']:.2f} s"))
         label = "You: typed" if request.get("typed") else "You: heard"
         base = f"{label}\n{request['text']}"
         heard_at = max(0, (t-p.a)/p.speed)
@@ -1689,7 +1690,8 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
             text = base + "".join(f"\n{k}\n{v}" for k,v in state.items())
             if at > cur:
                 p.overlays.append(Overlay(text, 30, "trace", cur, at))
-            display=f'Answer {response[1]:.1f} s' if response else ''
+            display = timing if layer == 'Muse Voice Transcribe' else (
+                f'Answer {response[1]:.1f} s' if response else '')
             state[layer] = display
             cur = at
             report.append({"piece": p.id, "request": request['text'], "layer": layer,

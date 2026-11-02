@@ -303,3 +303,54 @@ async def test_okay_stopped_is_not_cut_off_by_the_rest_of_the_same_stop(monkeypa
     s.hands_partial("Player Two stop. Um", started)
     await asyncio.sleep(0)
     assert s.handled == ["local:stop"] and s.voice.stopped == 0 and not s.hands_active
+
+
+async def test_completed_transcription_timing_is_logged_without_guessing(monkeypatch):
+    s = session(monkeypatch)
+    timing = {"transcribe_s": 2.34, "transcribe_finalize_s": 0.12, "transcribe_audio_s": 2.08}
+    now = time.monotonic()
+    await s.hands_heard("Player Two, open the menu", None, now - 2, now, timing)
+    event = next(e for e in s.events.recent if e["kind"] == "heard")
+    assert event["text"] == "open the menu"
+    assert event["raw_transcript"] == "Player Two, open the menu"
+    assert {k: event[k] for k in timing} == timing
+
+
+async def test_partial_stop_does_not_invent_a_completed_asr_time(monkeypatch):
+    s = session(monkeypatch)
+    now = time.monotonic()
+    s.hands.started = now
+    s.hands_partial("Player Two, stop.", now)
+    await asyncio.sleep(0)
+    first = next(e for e in s.events.recent if e["kind"] == "heard")
+    assert "transcribe_s" not in first
+    timing = {"transcribe_s": 1.5, "transcribe_finalize_s": 0.1, "transcribe_audio_s": 1.4}
+    stages = []
+    emit = s.events.emit
+    def capture(kind, **data):
+        if kind == "model_stage":
+            stages.append(data)
+        emit(kind, **data)
+    s.events.emit = capture
+    await s.hands_heard("Player Two, stop.", None, now, now + 1, timing)
+    assert len(stages) == 1 and stages[0]["seconds"] == 1.5
+    assert s.handled.count("local:stop") == 1
+
+
+async def test_utterance_timing_measures_stream_not_text(monkeypatch):
+    from playertwo.listen import RATE, Utterance
+    clock = [10.0]
+    monkeypatch.setattr("playertwo.listen.time.monotonic", lambda: clock[0])
+    u = Utterance()
+    async def session():
+        clock[0] = 12.6
+        return "Open the menu."
+    monkeypatch.setattr(u, "_session", session)
+    u.start()
+    u.feed(b"\0\0" * RATE)
+    clock[0] = 12.5
+    u.finish()
+    assert u.timing() == {}
+    assert await u.text() == "Open the menu."
+    assert u.timing() == {"transcribe_s": 2.6, "transcribe_finalize_s": 0.1,
+                          "transcribe_audio_s": 1.0}

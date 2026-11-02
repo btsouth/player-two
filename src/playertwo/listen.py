@@ -118,24 +118,46 @@ class Utterance:
         self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.result: asyncio.Future[str] | None = None
         self._task: asyncio.Task | None = None
+        self.started_at = self.finished_at = self.completed_at = 0.0
+        self.audio_bytes = 0
 
     def start(self) -> None:
+        self.started_at = time.monotonic()
         self.result = asyncio.get_running_loop().create_future()
         self._task = asyncio.create_task(self._run())
 
     def feed(self, frame: bytes) -> None:
+        self.audio_bytes += len(frame)
         self.audio.put_nowait(frame)
 
     def finish(self) -> None:
+        self.finished_at = time.monotonic()
         self.audio.put_nowait(None)
 
     async def text(self, timeout: float = 8.0) -> str:
         assert self.result is not None
         return await asyncio.wait_for(self.result, timeout)
 
+    def timing(self) -> dict[str, float]:
+        """Measured streaming duration, including uploaded speech, not model compute.
+
+        Finalize is finish/endStream queueing to the completed transcript; audio is
+        the amount of PCM fed. No estimate from text length or speech rate.
+        """
+        if not self.started_at or not self.completed_at:
+            return {}
+        return {
+            "transcribe_s": round(self.completed_at - self.started_at, 4),
+            "transcribe_finalize_s": round(max(0.0, self.completed_at - self.finished_at), 4)
+            if self.finished_at else 0.0,
+            "transcribe_audio_s": round(self.audio_bytes / (2 * RATE), 4),
+        }
+
     async def _run(self) -> None:
         try:
-            self.result.set_result(await self._session())
+            text = await self._session()
+            self.completed_at = time.monotonic()
+            self.result.set_result(text)
         except Exception as exc:  # noqa: BLE001  surfaced to the caller
             if not self.result.done():
                 self.result.set_exception(exc)
@@ -351,14 +373,14 @@ class HandsFree:
     """Always listening: sends each stretch of speech to Muse Voice Transcribe.
 
     `on_partial(text, started)` gets the words so far of the stretch that began at
-    `started`, and `on_text(text, error, started, ended)` its final words (or the error
+    `started`, and `on_text(text, error, started, ended, timing)` its final words (or the error
     that stopped it) and when the speech in it began and ended; the session decides what
     was said to it. `on_drop()` says a stretch was cut off unheard. While `paused()` (the
     talk key is held), it doesn't listen.
     """
 
     def __init__(self, on_partial: Callable[[str, float], None],
-                 on_text: Callable[[str, BaseException | None, float, float],
+                 on_text: Callable[[str, BaseException | None, float, float, dict],
                                    Awaitable[None]],
                  on_drop: Callable[[], None],
                  keywords: Callable[[], list[str]], paused: Callable[[], bool],
@@ -452,9 +474,9 @@ class HandsFree:
             try:
                 text = await utt.text(10)
             except Exception as exc:  # noqa: BLE001  the session says what went wrong
-                await self.on_text("", exc, started, ended)
+                await self.on_text("", exc, started, ended, {})
                 return
-            await self.on_text(text, None, started, ended)
+            await self.on_text(text, None, started, ended, utt.timing())
 
         task = asyncio.create_task(result())
         self.tasks.add(task)
