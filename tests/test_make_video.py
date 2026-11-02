@@ -194,7 +194,7 @@ def test_final_refuses_placeholders_voice_over_labels_and_draft_rates():
 
 def test_the_quote_and_the_honest_lines_are_on_cards():
     parts, _dropped, _warnings = _plan(_events())
-    words = " ".join(str(b[0]) for p in parts for b in p.blocks)
+    words = " ".join([str(b[0]) for p in parts for b in p.blocks]+[o.text for p in parts for o in p.overlays])
     assert "nor defeat Lavos in Chrono Trigger" in words
     assert "Lavos is still ahead" in words and "No blind player has tried it yet" in words
     assert "Muse understands scenes" in words and "common actions" in words
@@ -219,7 +219,7 @@ def test_final_refuses_a_speed_up_without_its_label():
 def test_captions_at_the_top_clear_the_games_message_bar():
     take = _take([{"t": 1.0, "kind": "heard", "text": "hi", "typed": True}], "take-B", top=True)
     head = mv.ass_text(take)
-    assert "PlayResX: 1920" in head and "Style: P2,Inter,48" in head
+    assert "PlayResX: 1920" in head and "Style: P2,Inter,52" in head
     assert "DejaVu" not in head
 
 
@@ -449,9 +449,9 @@ def test_end_card_contains_full_notice_and_goodbye_stays_a_placeholder_until_rec
     mv.card_png(tmp_path/"end.png",end.blocks,end=True)
 
 
-def test_black_captions_are_large_and_use_a_distinct_player_two_colour():
+def test_black_captions_are_large_and_white_for_player_two():
     text=mv.ass_text(_take([_spoken("Fight.",1,2)]),"black")
-    assert "Inter,80" in text and "\\1c&HD7EFFF&" in text
+    assert "Inter,80" in text and "\\1c&HFFFFFF&" in text
 
 
 def test_goodbye_slot_requires_real_ordered_request_and_spoken_exchange():
@@ -574,3 +574,53 @@ def test_shortened_description_ends_before_the_next_spoken_sentence():
                 _spoken("An omitted character description.",8,18)],"take-A",25)
     cut=mv.cut_line("A3b",take,None,7)
     assert cut.left_out>0 and cut.b==8
+
+
+def test_player_two_captions_have_no_repeated_speaker_prefix():
+    text=mv.ass_text(_take([_spoken("A real reply.",1,2)]),"map")
+    assert "Player Two:" not in text and "A real reply." in text
+
+
+def test_sam_sequence_requires_logged_geometry_and_retains_unducked_actor_audio():
+    import pytest
+    take=_take([{"kind":"where","t":3,"via":"sam-3.1","seconds":1.21,"boxes":[[0,.1,.5,.9]]},
+                {"kind":"where","t":9,"via":"sam-3.1","seconds":1.08,"boxes":[[.1,.2,.8,.7]]}],"rdr-sam",30)
+    take.edit={"view":[0,2],"trees":[2,7],"wagon":[8,12],"dialogue":[13,23],
+               "ping_boosts":{"trees":[[6,6.05,3.5]],"wagon":[[11,11.05,3.5]]}}
+    ps=mv.rdr_sam_pieces(take)
+    mv.sam_boxes(ps,{take.name:take})
+    tree=ps[1];boxes=[o for o in tree.overlays if o.where=="box"]
+    assert len(boxes)==1 and boxes[0].f0==1 and abs(boxes[0].f1-4.05)<.001
+    assert ps[-1].captions is False and ps[-1].duck is False
+    take.events[0]['via']='muse-spark'
+    with pytest.raises(ValueError,match=r"actual sam-3\.1"):
+        mv.rdr_sam_pieces(take)
+
+
+def test_ducked_stems_retain_and_boost_the_last_stereo_ping(tmp_path,monkeypatch):
+    import array
+    import math
+    import subprocess
+    import wave
+    for key,value in {"W":64,"H":64,"GAME_W":64,"GAME_H":64}.items():
+        monkeypatch.setattr(mv,key,value)
+    source=tmp_path/"source.mp4"
+    subprocess.run(["ffmpeg","-v","error","-f","lavfi","-i","color=s=64x64:r=60:d=2",
+                    "-c:v","libx264",str(source)],check=True)
+    for stem in ("game","voice"):
+        samples=array.array("h")
+        for i in range(96000):
+            tone=int(4000*math.sin(2*math.pi*1200*i/48000)) if stem=="voice" and 1.90<=i/48000<1.95 else 0
+            samples.extend([tone,tone//4])
+        with wave.open(str(source.with_suffix(f".{stem}.wav")),"wb") as wav:
+            wav.setparams((2,2,48000,0,"NONE","not compressed"));wav.writeframes(samples.tobytes())
+    take=mv.Take("t",source,0,2,[],[])
+    p=mv.Piece("ping","game3",take="t",a=0,b=2,captions=False,voice_boosts=[[1.895,1.955,3.5]])
+    target=tmp_path/"ping.mp4"
+    mv.encode_clip(p,{"t":take},{},tmp_path,target,"libx264")
+    raw=subprocess.check_output(["ffmpeg","-v","error","-i",str(target),"-vn","-f","f32le","-ac","2","-ar","48000","-"])
+    decoded=array.array("f",raw)
+    assert len(decoded)>=96000*2
+    left=decoded[int(1.91*48000)*2:int(1.94*48000)*2:2]
+    right=decoded[int(1.91*48000)*2+1:int(1.94*48000)*2:2]
+    assert max(map(abs,left))>.35 and max(map(abs,right))<.16

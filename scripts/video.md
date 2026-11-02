@@ -12,7 +12,7 @@ python3 scripts/make_video.py takes --out final.mp4 --final --sheet --jobs 2
 ```
 
 Full: 1920x1080 at 60 fps, full-bleed Lanczos scaling, 42px request chips, 34px measured badges,
-48px speech captions (80px on black). Proxies: 960x540 at 30 fps. No FPS-counter masking.
+52px plain white reply captions (80px on black), with the person’s request in a separate chip. Proxies: 960x540 at 30 fps. No FPS-counter masking.
 
 ## Takes
 
@@ -67,13 +67,13 @@ A missing result remains a placeholder. `goodbye.mp4` supplies the separate real
 logged “Goodbye.” followed by actual spoken “Bye for now.” and “Have fun.”. Missing or out-of-order
 records are refused. Until captured, that slot is explicitly labelled as an ending design.
 
-The film follows with a two-second product card and four-second RetroArch excerpt containing
+The film follows with a two-second product card and four-second RetroArch excerpt over moving map footage containing
 “Lavos is still ahead. Here’s how far we’ve got.” `vo-ahead.wav` optionally adds a spoken ahead card. No glasses story.
 Then map proof, actual walking/shop, optional SAM when usable footage exists, other games, how,
 honest limit card, real win and goodbye, then the end card. The complete Square Enix proprietary
 notice is copied verbatim from its Chrono Trigger policy into the end card, alongside the general
 publisher attribution and no-endorsement line. These notices are not a claim of contest clearance. `A3b` (“What does it look like?”) retains whole descriptive sentences
-and marks its shortened tail. No rates wall. `vo-how.wav` voices the how card; `vo-why` is retired.
+and marks its shortened tail. No rates wall. `vo-how.wav` voices the how explanation; `vo-why` is retired.
 
 The earlier `--sample` remains a 45-second style sample based on a continuous Win excerpt; it is
 not the new full choice/delegation story. The full render is the default command.
@@ -89,12 +89,12 @@ Every badge retains its source event timestamp in the evidence JSON.
 SAM requires `where.via == sam-3.1`; the rectangle comes only from that event's normalized `boxes`
 array, never from a centre point or Spark fallback. The app logs returned SAM boxes and queried-frame
 time. Capture a stationary camera/target around the response so a returned box remains valid on the
-recorded frame. The renderer displays it for at most 1.5 seconds after completion. Keep the actual
+recorded frame. The default display lasts at most 1.5 seconds after completion. A reviewed `rdr-sam` beat can retain the box through its last real ping, using the manifest’s measured ping windows. Keep the actual
 stereo ping. A SAM take without real logged boxes is refused by final mode.
 
 `atlas-proof.json` supplies one real `raw_place` from saved label_atlas output, the same-name
-`checked_place` with x/y, and `raw_sha256` / `checked_sha256`. The five-second sequence shows saved
-model JSON, the checked destination, then local-navigation data. It is clearly a saved response,
+`checked_place` with x/y, and `raw_sha256` / `checked_sha256`. The five-second sequence overlays the saved model name/icon result, human check and local
+destination on moving map footage, then leads into the actual navigation request. It is clearly a saved response,
 not a fabricated live model call; those stages are not represented as latency measurements.
 Do not include fan-made map art or source dumps in the public repo.
 
@@ -184,3 +184,31 @@ automatic makeup gain disabled, before returning to48kHz/AAC. This catches trans
 seen on new recordings. Always measure the decoded file; neither the loudnorm target nor an
 intermediate PCM ceiling is proof of the encoded peak. Shortened descriptions end on the last
 complete caption boundary, without carrying a half-second of the omitted next sentence.
+
+
+## Reviewed SAM montage and How voice slot
+
+A `rdr-sam` manifest entry supplies one continuous source file, its original event log, start and
+both stems. Its edit settings contain `view`, `trees`, `wagon`, `dialogue` and `how` source windows,
+plus the measured `recording_delay`. SAM clips require real `where` events with `via=sam-3.1`,
+returned boxes and numeric seconds. Geometry appears only once the result arrives. The actor
+window refuses logged Player Two speech and retains both stems without sidechain ducking.
+The one-line-notes claim requires an explicitly verified `notes_only_verified` flag.
+
+`ping_boosts` maps each SAM beat to `[source_start, source_end, gain]` windows. These are measured
+from the actual stereo tone waveform, not inferred from the response end timestamp. Both channels
+receive the identical gain, preserving pan. Boost only the real tone; do not fabricate a longer
+or differently positioned cue. Inspect the encoded result, including both tree pings. The ducking
+filter flushes its finite input buffers with bounded padding and trims back to the actual cut,
+so a last ping or final spoken word cannot disappear at filter EOF.
+
+The How explanation sits over a separate game-only wide shot before the RDR demonstration.
+Its slot is exactly the `how` window length (5.50 seconds in Draft 3g); a longer VO is refused.
+Place `vo-how.wav` beside takes.json and rebuild. Missing How VO still blocks `--final`.
+Game-only audio is used only for illustrative map/quote/How footage, never as evidence that the
+app stayed silent. The quiet-actors proof retains both stems.
+
+`take-B.edit.pause_windows` supplies source intervals confirmed paused against the footage and
+application behavior. Only their intersections with shown pieces receive the explanatory chip.
+Never infer a pause from a long response or display the label across an unpaused section.
+Monster Hunter remains a replaceable `game2` manifest entry with its own measured story windows.

@@ -132,6 +132,9 @@ class Piece:
     captions: bool = True
     vol: float = 1.0
     duck: bool = True
+    audio_mode: str = "mix"
+    voice_boosts: list = field(default_factory=list)
+    box_until: float = 0.0
     fade_in: bool = False
     fade_out: bool = False
     vo: str = ""
@@ -554,6 +557,51 @@ def mh_story_pieces(take: Take) -> list[Piece]:
     return parts
 
 
+
+def rdr_sam_pieces(take: Take) -> list[Piece]:
+    e=take.edit
+    parts=[]
+    for ident,key in [("rdr-look","view"),("rdr-trees","trees"),("rdr-wagon","wagon"),("rdr-dialogue","dialogue")]:
+        a,b=map(float,e[key])
+        quiet=key=="dialogue"
+        p=Piece(ident,"game3",line="RDR "+key,take=take.name,a=a,b=b,layout="rdr",captions=not quiet,duck=not quiet)
+        if key=="view":
+            if e.get("notes_only_verified"):
+                p.overlays.append(Overlay(NO_CODE,40,"tl",0,min(5,b-a)))
+        elif quiet:
+            if any(x.get("kind")=="spoken" and min(b,x["ended"]-take.start)>max(a,x["began"]-take.start) for x in take.events):
+                raise ValueError("RDR actors window contains Player Two speech")
+            p.overlays.append(Overlay("Player Two stays quiet while the game's voices talk.",42,"bc",0,b-a))
+        else:
+            events=[x for x in take.events if x.get("kind")=="where" and a<=x["t"]-take.start<b]
+            if not events or any(x.get("via")!="sam-3.1" or not isinstance(x.get("seconds"),(float,int)) or not x.get("boxes") or not all(valid_box(z) for z in x['boxes']) for x in events):
+                raise ValueError("RDR SAM beat needs actual sam-3.1 geometry")
+            p.voice_boosts=e.get("ping_boosts",{}).get(key,[])
+            p.box_until=max((x[1] for x in p.voice_boosts),default=b)
+            if key=="trees":
+                p.overlays.append(Overlay("Headphones: the ping moves left and right",36,"tl",0,b-a))
+        parts.append(p)
+    return parts
+
+
+def moving_atlas(folder: Path, take: Take | None) -> list[Piece]:
+    base=atlas_beat(folder)
+    if not take or any(p.kind=="slate" for p in base):
+        return base
+    raw=json.loads(base[0].blocks[1][0])
+    texts=[f"Muse Spark / saved result\n{raw['name']} · icon {raw['icon']}",
+           "Human checked\n"+base[1].blocks[1][0],"Local destination\n"+base[2].blocks[1][0]]
+    t=12.0
+    out=[]
+    for old,text in zip(base,texts,strict=True):
+        p=Piece(old.id,"ct",line="atlas proof",take=take.name,a=t,b=t+old.secs,captions=False,
+                audio_mode="game",vol=.6,proof=old.proof,layout="map")
+        p.overlays=[Overlay(text,38,"atlas-stage",0,p.out_s),
+                    Overlay("Muse labels the map. I check it. Local code navigates.",40,"how",0,p.out_s)]
+        out.append(p);t+=old.secs
+    return out
+
+
 def rdr_pieces(look: Take, dialogue: Take) -> list[Piece]:
     a,b=map(float,look.edit.get("clip",[18.4,28.1]))
     x,y=map(float,dialogue.edit.get("clip",[24,35]))
@@ -821,7 +869,7 @@ def make_plan(
     maps = []
     for line in ("A1", "A2", "A3", "A3b", "A4", "A5"):
         if line == "A3":
-            maps += atlas_beat(folder)
+            maps += moving_atlas(folder,takes.get("take-A"))
         maps += lines.get(line, [])
     for p in maps:
         p.sharp_at = None
@@ -851,7 +899,9 @@ def make_plan(
     ]
     mh=takes.get("game2")
     games += mh_story_pieces(mh) if mh and mh.edit.get("story") else game_pieces("game2",mh,"game2" in no_code,clips.get("game2"),warnings)
-    if takes.get("rdr-look") and takes.get("rdr-dialogue"):
+    if takes.get("rdr-sam"):
+        games += rdr_sam_pieces(takes["rdr-sam"])
+    elif takes.get("rdr-look") and takes.get("rdr-dialogue"):
         games += rdr_pieces(takes["rdr-look"], takes["rdr-dialogue"])
     else:
         games += game_pieces("game3", takes.get("game3"), "game3" in no_code, clips.get("game3"), warnings)
@@ -884,16 +934,40 @@ def make_plan(
             ("Local readers and routines handle common actions.", 42, False),
         ],
     )
+    how_parts=[how]
+    if takes.get("rdr-sam"):
+        take=takes["rdr-sam"]
+        a,b=map(float,take.edit["how"])
+        if vo_s.get("how",0)>b-a:
+            raise ValueError(f"How VO exceeds its {b-a:.2f}s footage slot")
+        how=Piece("c-how","game3",line="how VO",take=take.name,a=a,b=b,captions=False,
+                  audio_mode="game",vol=.35,vo=vo.get("how",""),layout="rdr")
+        how.overlays=[Overlay("Muse understands scenes and open-ended requests. Local readers and routines handle common actions.",42,"how",0,how.out_s)]
+        games.insert(next(i for i,p in enumerate(games) if p.id=="rdr-look"),how)
+        how_parts=[]
+    intro_cards=round2_cards(folder)
+    if takes.get("take-A"):
+        for i,p in enumerate(intro_cards):
+            if p.id=="lavos":
+                intro_cards[i]=Piece("lavos","hook",kind="clip",take="take-A",a=0,b=p.secs,captions=False,
+                    audio_mode="game",vol=.5,layout="map",overlays=[Overlay("\n".join(x[0] for x in p.blocks),52,"lavos",0,p.secs)])
     parts = [
         *opening,
-        *round2_cards(folder),
+        *intro_cards,
         *maps,
         *sam_parts,
         *games,
-        how,
+        *how_parts,
         Piece("limit","outro",kind="card",secs=3.2,blocks=[(LIMIT_LINE,58,True)]),
         *end_parts,
     ]
+    fight=takes.get("take-B")
+    if fight:
+        for p in opening:
+            for a,b in fight.edit.get("pause_windows",[]):
+                lo,hi=max(p.a,a),min(p.b,b)
+                if hi>lo:
+                    p.overlays.append(Overlay("Paused until you ask to continue",34,"pause",(lo-p.a)/p.speed,(hi-p.a)/p.speed))
     # Cut whole optional requests, never the payoff of one already shown.
     dropped = []
     for line in ("A2", "A5", "A1"):
@@ -1177,27 +1251,38 @@ def label_png(path: Path, o: Overlay) -> Path:
             bx += bw + 16
         img.save(path)
         return path
+    elif o.where == "atlas-stage":
+        lines=o.text.split("\n")
+        d.rounded_rectangle((48,170,1130,355),radius=20,fill=(9,15,25,220))
+        d.text((72,190),lines[0],font=_font(True,34),fill=ACCENT)
+        d.text((72,250),lines[1],font=_font(True,44),fill="white")
     elif o.where == "box":
         # Coordinates are normalized source-frame xyxy, supplied by the SAM event itself.
         x0, y0, x1, y1 = json.loads(o.text)
         d.rectangle((x0 * W, y0 * H, x1 * W, y1 * H), outline=ACCENT, width=6)
     else:
         f = _font(True, max(34, o.size))
-        lines = _wrap(d, o.text, f, 1600)
+        lines = _wrap(d, o.text, f, 1176 if o.where=="how" else 1728 if o.where=="lavos" else 1600)
         is_speed=bool(re.fullmatch(r"\d+(?:\.\d+)?x",o.text))
         if is_speed:
             lines = [o.text + " SPEED"]
         y = 52 if o.where in ("tl", "tl2", "tr", "trl", "intro") else 700
         if o.where == "intro":
             y = 66
-        if o.where == "gap":
+        if o.where in ("gap","pause"):
             y = 150
+        if o.where=="lavos":
+            y=240
         if is_speed or o.where in ("speed","trim"):
             y = 64
         if o.where=="speed-shop":
             y = 700
         tw = int(max(d.textlength(ln, font=f) for ln in lines))
         x = ((W-tw)//2 if o.where in ("bc","intro") else W-tw-64 if is_speed or o.where in ("speed","trim") else 64)
+        if o.where=="how":
+            x,y=640,700
+        if o.where=="pause":
+            x=W-tw-64
         bh = len(lines) * int(f.size * 1.35) + 28
         d.rounded_rectangle(
             (x - 20, y - 12, x + tw + 20, y + bh), radius=18, fill=(9, 15, 25, 218)
@@ -1326,7 +1411,7 @@ def sam_boxes(parts: list[Piece], takes: dict[str, Take]) -> None:
                 # Never pin a box across a changing scene or before the result arrived.
                 if 0 <= t < p.out_s:
                     p.overlays.append(
-                        Overlay(json.dumps(box), 34, "box", t, min(t + 1.5, p.out_s))
+                        Overlay(json.dumps(box), 34, "box", t, min((p.box_until-p.a)/p.speed if p.box_until else t+1.5, p.out_s))
                     )
 
 
@@ -1437,13 +1522,22 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         # Very short accelerated gaps can exhaust atempo before AAC receives a frame.
         # They are silent by design, so generate exact-length silence without time-stretching.
         a=f"anullsrc=r=48000:cl=stereo,atrim=duration={dur},asetpts=PTS-STARTPTS"
+    elif p.audio_mode=="game":
+        stream=f"{stem_n}:a" if stems else "0:a"
+        a=f"[{stream}]asetpts=PTS-STARTPTS,{tempo}volume={gain}"
     elif stems and p.duck:
         # Voice stem contains Player Two + the microphone; the game stem contains only game.
-        a = (f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}asplit[voice][side];"
-             f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}anull"
+        boost=""
+        if p.voice_boosts:
+            expr="1"+"".join(f"+({g}-1)*between(t,{(x-p.a)/p.speed},{(y-p.a)/p.speed})" for x,y,g in p.voice_boosts)
+            boost=f"aeval=exprs='val(0)*({expr})|val(1)*({expr})':c=stereo,"
+        # FFmpeg framesync can stop the compressor early when the two stems arrive
+        # in different block sizes. Flush it with padding, then trim to the real cut.
+        a = (f"[{stem_n+1}:a]asetpts=PTS-STARTPTS,{tempo}apad=pad_dur=2,{boost}asplit[voice][side];"
+             f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}apad=pad_dur=2"
              "[game];[game][side]sidechaincompress=threshold=0.025:ratio=8:"
              "attack=15:release=220[duck];[duck][voice]amix=inputs=2:normalize=0:"
-             f"duration=first,volume={gain}")
+             f"duration=first,atrim=duration={dur},volume={gain}")
     elif stems:
         # Preserve both stems untouched by the sidechain, including any unexpected voice.
         a = (f"[{stem_n}:a]asetpts=PTS-STARTPTS,{tempo}anull[game];"
@@ -1468,11 +1562,11 @@ def ass_text(take: Take, layout: str = "") -> str:
     """Full-bleed captions, positioned by scene; black opening gets generous central type."""
     layout = layout or ("fight" if take.top else "map")
     size, align, ml, mr, mv = {
-        "map": (48, 2, 100, 100, 60),
-        "rdr": (48, 2, 100, 100, 60),
-        "mh": (48, 8, 100, 100, 740),
-        "fight": (48, 8, 100, 100, 240),
-        "shop": (48, 9, 1000, 64, 420),
+        "map": (52, 2, 100, 100, 60),
+        "rdr": (52, 2, 100, 100, 60),
+        "mh": (52, 8, 100, 100, 740),
+        "fight": (52, 8, 100, 100, 240),
+        "shop": (52, 9, 1000, 64, 420),
         "black": (80, 5, 200, 200, 30),
     }[layout]
     head = demo_captions.ASS_HEAD.replace("PlayResX: 512", "PlayResX: 1920").replace(
@@ -1493,13 +1587,11 @@ def ass_text(take: Take, layout: str = "") -> str:
         if who != "Player Two":
             continue
         txt = txt.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
-        if not txt.startswith("Player Two:"):
-            txt = "Player Two: " + txt
+        txt=txt.removeprefix("Player Two: ")
         rows.append(
             f"Dialogue: 0,{demo_captions._ass_stamp(a)},"
             f"{demo_captions._ass_stamp(b)},P2,,0,0,0,,"
-            + (r"{\fad(90,70)\1c&HFFFFFF&}" if layout != "black" else
-               r"{\fad(90,70)\1c&HD7EFFF&}")
+            + r"{\fad(90,70)\1c&HFFFFFF&}"
             + txt.replace(chr(10), " ")
         )
     return head + "\n".join(rows) + "\n"
@@ -1618,7 +1710,7 @@ def caption_shots(parts: list[Piece], takes: dict[str, Take]) -> list[tuple[floa
                     continue
                 at = out_time(parts, name, t)
                 if at is not None:
-                    shots.append((at, f"{int(at // 60)}:{at % 60:04.1f} {text}"))
+                    shots.append((at, f"{int(at // 60)}:{at % 60:04.1f} {text.removeprefix('Player Two: ')}"))
                     break
     return sorted(shots)
 
@@ -1771,7 +1863,7 @@ def main() -> None:
     out = a.out or a.folder.parent / "video.mp4"
     tops = set(filter(None, a.top.split(",")))
     takes = {}
-    for name in ("take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", *GAMES):
+    for name in ("take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", "rdr-sam", *GAMES):
         take = load_take(a.folder, name, name in tops)
         if take is not None:
             takes[name] = take
