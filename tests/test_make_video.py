@@ -514,3 +514,12 @@ def test_mh_story_is_one_run_with_false_narration_only_in_muted_uncaptioned_gap(
     take.edit["story"]["normal"]=[[2,15],[20,23]]
     with pytest.raises(ValueError,match="False MH line"):
         mv.mh_story_pieces(take)
+
+
+def test_caption_sheet_does_not_label_intentionally_muted_uncaptioned_speech():
+    take=_take([_spoken("omit false line",1,2),_spoken("keep true line",5,6)],"game2",8)
+    parts=[mv.Piece("muted","game2",take="game2",a=0,b=3,speed=4,captions=False),
+           mv.Piece("normal","game2",take="game2",a=3,b=8)]
+    shots=mv.caption_shots(parts,{"game2":take})
+    assert shots and all("omit false" not in label for _,label in shots)
+    assert any("keep true" in label for _,label in shots)

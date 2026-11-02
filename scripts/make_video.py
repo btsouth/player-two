@@ -1602,6 +1602,8 @@ def caption_shots(parts: list[Piece], takes: dict[str, Take]) -> list[tuple[floa
     for name, take in takes.items():
         for a, b, _who, text in take.caps:
             for t in (b - 0.1, (a + b) / 2):
+                if not any(p.kind=="clip" and p.captions and p.take==name and p.a<=t<p.b for p in parts):
+                    continue
                 at = out_time(parts, name, t)
                 if at is not None:
                     shots.append((at, f"{int(at // 60)}:{at % 60:04.1f} {text}"))
