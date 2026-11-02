@@ -152,6 +152,23 @@ prompts, tutorial boxes, item and skill text) is read as usual. In a cutscene, l
 audio description track, say only what visibly happens that the voices don't, in one \
 short sentence, or <silent>."""
 
+# "What just happened?", with the last few looks at the game, oldest first.
+JUST_HAPPENED = """\
+The player asked what just happened. These pictures are the last moments of the game, \
+oldest first. Tell them in one or two short sentences, as a friend on the couch would: what \
+changed or what someone did, ending on where things stand now. Words in subtitles are \
+yours to use, in your own words, never read out. Only what the pictures show, no guessing \
+at the story, no talk of pictures or subtitles. If nothing much changed, say so in a few \
+words."""
+
+# "Who's talking?", with the last looks at the game, oldest first.
+WHO_TALKS = """\
+The player asked who's talking. In one short sentence, from the last picture: who is \
+speaking, by name if the screen shows it or you clearly recognize the character from this \
+game, otherwise by how they look and where they are ("the older man in the brown hat, \
+just ahead of you"). If you can't tell, say so in a few words ("I can't tell, someone off \
+screen"). Never read the subtitle, and no talk of pictures or subtitles."""
+
 # The first time Player Two sees a place it has no line ready for (not surveyed).
 PLACE_FEEL = """\
 The player has just arrived somewhere new to them. If this screen is a place they're \

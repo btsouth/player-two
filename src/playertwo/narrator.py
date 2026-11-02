@@ -201,6 +201,21 @@ class Narrator:
         async for delta in self._answer(frame, ATMOSPHERE.format(length=length)):
             yield delta
 
+    async def from_looks(self, frames: list[Frame], ask: str) -> AsyncIterator[str]:
+        """Answer `ask` from the last few looks at the game, oldest first: what just
+        happened, who's talking. Fewer pixels each, so the first words aren't late."""
+        said = "\n".join(f"- {r}" for r in self.recent) or "- (nothing yet)"
+        side = min(self.muse.s.image_max_side, 768)
+        content = [image_part(f.image, side) for f in frames]
+        content.append({"type": "text", "text": f"You said recently:\n{said}\n\n{ask}"})
+        messages = [{"role": "system", "content": self.system()},
+                    {"role": "user", "content": content}]
+        text = ""
+        async for delta in self.muse.stream(messages):
+            text += delta
+            yield delta
+        self.recent.append(text.strip())
+
     async def _answer(self, frame: Frame, ask: str) -> AsyncIterator[str]:
         text = ""
         async for delta in self.muse.stream(self.messages(frame, ask)):

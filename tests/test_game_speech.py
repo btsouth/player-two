@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 
 from playertwo import gameaudio
-from playertwo.app import Session
+from playertwo.app import Session, local_action
 from playertwo.audio import Mixer
 from playertwo.gameaudio import (
     GameEars,
@@ -375,6 +375,33 @@ def test_description_waits_for_a_real_pause_and_is_dropped_without_one():
         assert await s._narration_gap()
 
     asyncio.run(go())
+
+
+def test_answers_wait_a_moment_for_a_gap_but_are_always_said():
+    async def go():
+        ears = Ears(speaking=True)
+        s = ears_session(ears)
+        s.GAP_MAX_S = 0.1
+        t = time.monotonic()
+        assert await s._answer_gap()
+        assert time.monotonic() - t >= 0.1
+
+    asyncio.run(go())
+
+
+def test_what_just_happened_and_whos_talking_are_commands_of_their_own():
+    for said in ("what just happened", "What happened?", "what did I miss"):
+        assert local_action(said) == "just_happened", said
+    for said in ("who's talking", "Who is speaking now?", "who said that"):
+        assert local_action(said) == "who_talks", said
+
+
+def test_the_last_few_looks_are_kept_some_seconds_apart():
+    s = ears_session(Ears())
+    s.looks = deque(maxlen=4)
+    for t in (0.0, 1.0, 5.0, 6.0, 10.5, 20.0, 30.0):
+        s._keep_look(frame(t))
+    assert [f.t for f in s.looks] == [5.0, 10.5, 20.0, 30.0]
 
 
 def test_held_narration_restarts_a_few_times_at_most_and_goes_on_past_the_limit():
