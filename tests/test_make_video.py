@@ -905,3 +905,11 @@ def test_hands_free_clip_keeps_the_wake_name_before_listening_status():
     take = _take([{"t": 3.0, "kind": "status", "state": "listening"}, request], "voice", 8)
     # Wake detection can set listening only AFTER the user said Player Two.
     assert mv._lead(take, 5.0, request) == 4.8
+
+
+def test_retained_audio_can_keep_a_soft_name_without_changing_caption_clock():
+    request = {"t": 5.0, "kind": "heard", "text": "Read this menu", "utterance_started_at": 1.0,
+               "utterance_audio_started_at": 0.2}
+    take = _take([request], "voice", 8)
+    assert mv._lead(take, 5.0, request) == 5.1
+    assert next(c[0] for c in take.caps if c[2] == "You") == 5.0

@@ -1,7 +1,7 @@
 """Ears: speech recognition with Muse Voice Transcribe over a WebSocket.
 
-Push to talk: the socket opens the moment the talk key goes down and the mic is buffered
-while it connects, so the first word is never lost.
+Push to talk: after the key opens the microphone, its frames are buffered while the
+speech socket connects. Audio before the microphone opens cannot be recovered.
 
 Hands-free: the mic stays open and a small speech detector (Silero VAD) runs on the PC.
 Only stretches of speech go to Muse Voice Transcribe, starting a moment before the

@@ -494,3 +494,41 @@ async def test_preroll_tail_does_not_steal_a_new_named_request(monkeypatch):
     s.handled.clear()
     await s.hands_heard('Player Two, open the menu.', None, now - 2, now, timing)
     assert s.handled == []
+
+
+async def test_talk_key_audio_waits_in_order_while_the_socket_connects(monkeypatch):
+    import json
+    from playertwo import listen
+    sent = []
+    connected = asyncio.Event()
+    ended = asyncio.Event()
+    class Socket:
+        async def send(self, data):
+            sent.append(data)
+            if isinstance(data, str) and json.loads(data).get('type') == 'endStream':
+                ended.set()
+        async def recv(self):
+            return '{"sessionId":"test"}'
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            await ended.wait()
+            raise StopAsyncIteration
+    class Connection:
+        async def __aenter__(self):
+            await connected.wait()
+            return Socket()
+        async def __aexit__(self, *args):
+            return None
+    monkeypatch.setattr(listen.websockets, 'connect', lambda *args, **kwargs: Connection())
+    monkeypatch.setattr(listen, 'api_key', lambda: 'test')
+    u = listen.Utterance()
+    u.start()
+    u.feed(b'first word')
+    await asyncio.sleep(0)
+    u.feed(b'rest of request')
+    u.finish()
+    assert not sent
+    connected.set()
+    assert await u.text() == ''
+    assert sent[1:3] == [b'first word', b'rest of request']
