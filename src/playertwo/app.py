@@ -24,7 +24,7 @@ from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
 from .narrator import Narrator
-from .prompts import BATTLE_START, PLACE_FEEL, PLACE_SAID, VOICE_NOW, VOICED_GAME
+from .prompts import BATTLE_START, PLACE_FEEL, PLACE_SAID, VOICE_NOW, VOICE_SPACED, VOICED_GAME
 from .screen import (
     Capture,
     CaptureError,
@@ -45,9 +45,11 @@ LOCAL = [
     ((r"repeat|repeat that|say that again|say it again|read that again|what did (you|they|he"
       r"|she) say|again|come again|what|what was that|sorry|pardon|huh"), "repeat"),
     ((r"describe|describe (the|this) screen|what'?s on (the )?screen|where am i|look around"
-      r"|what do you see|what'?s (going on|happening)"), "describe"),
+      r"|what'?s (going on|happening)"), "describe"),
     # What it's like, not the tour: the setting, light, colours and mood.
-    ((r"describe (the |this )?(atmosphere|mood|scene|scenery|setting|surroundings|vibe|view"
+    ((r"what (do|can) you see( (here|now|out there|around( here| me| us)?))?"
+      r"|what are (we|you) looking at|how'?s the view|what'?s the view( like)?"
+      r"|describe (the |this )?(atmosphere|mood|scene|scenery|setting|surroundings|vibe|view"
       r"|place|area|room)( (here|around (me|us)|for me))?"
       r"|what('?s| is) the (atmosphere|mood|vibe|feel|feeling|scene|scenery|setting)"
       r"( like)?( (here|in here|around here|out here))?"
@@ -752,6 +754,8 @@ class Session:
             voice = ""
         self.narration_ad = bool(voice)
         self.holds = 0
+        if voice and time.monotonic() - self.ad_said_at < self.AD_SPACING_S:
+            voice = f"{voice}\n\n{VOICE_SPACED}"
 
         def narrate(more: str = ""):
             if voice:
@@ -876,8 +880,15 @@ class Session:
     # text no one speaks) is said anyway: singing in a game's music sounds like speech, and
     # it mustn't keep the player from hearing what's on screen.
     GAP_MAX_S = 3.0
-    # At most one line of audio description this often, unless the scene cuts.
-    AD_SPACING_S = 5.0
+    # At most one line of audio description this often; a new shot in a cutscene only gets
+    # a look for a menu or a choice until then.
+    AD_SPACING_S = 15.0
+    # The game spoke this lately: the scene is a voiced one, so what's on screen is told as
+    # audio description, in pauses, even if no voice came with this very shot.
+    VOICED_SCENE_S = 20.0
+    # Audio description starts only after the game has been quiet this long: a shorter
+    # pause is actors taking a breath, and the line would run into the next one.
+    AD_QUIET_S = 1.0
 
     async def start_ears(self) -> None:
         """Start listening to the game's own sound (Linux; a no-op elsewhere). The speech
@@ -933,6 +944,8 @@ class Session:
             return ""
         ears = getattr(self, "ears", None)
         if ears is not None:
+            if ears.quiet_for() < self.VOICED_SCENE_S:
+                return VOICE_NOW
             changed = frame.changed_at if frame.changed_at is not None else frame.t - 0.3
             # Speech still going a moment after the screen changed, or starting with it:
             # the words on it are being spoken. A line cut off by the press that changed
@@ -963,7 +976,8 @@ class Session:
         """Before each sentence of narration: wait for a gap in the game's speech. When
         none comes in time, audio description isn't said (False); anything else is."""
         end = time.monotonic() + self.GAP_MAX_S
-        while self._ears_on() and self.ears.speaking():
+        while self._ears_on() and (self.ears.speaking() or (
+                self.narration_ad and self.ears.quiet_for() < self.AD_QUIET_S)):
             if time.monotonic() >= end:
                 return not self.narration_ad
             await asyncio.sleep(0.05)
@@ -975,22 +989,25 @@ class Session:
         if loop is not None and not loop.is_closed():
             loop.call_soon_threadsafe(self._game_spoke)
 
-    # A line of narration is held for the game's voices at most this many times; then
-    # audio description is dropped and anything else goes on (gaps too short to fit it).
+    # A line of narration is held for the game's voices at most this many times; then it
+    # goes on (gaps too short to fit it).
     MAX_HOLDS = 2
 
     def _game_spoke(self) -> None:
-        """Narration being said stops the moment the game speaks, and starts its sentence
-        over once the game stops. If the game goes on too long, audio description is
-        dropped and anything else goes on over it (see GAP_MAX_S)."""
+        """Narration being said stops the moment the game speaks. Audio description is
+        dropped there: said over again it would only come late and twice. Anything else
+        starts its sentence over once the game stops, or goes on over it if the game goes
+        on too long (see GAP_MAX_S)."""
         if not self._ears_on() or self.mixer.current_tag() != "narration":
+            return
+        if self.narration_ad:
+            self.voice.stop()
+            self.events.emit("note", text="game speaking: description dropped")
             return
         if self.holding is not None and not self.holding.done():
             return  # already held
         self.holds = getattr(self, "holds", 0) + 1
         if self.holds > self.MAX_HOLDS:
-            if self.narration_ad:
-                self.voice.stop()  # the gaps are too short for it
             return
         self.mixer.hold_speech(True)
         self.events.emit("note", text="game speaking: narration held")
@@ -1001,10 +1018,6 @@ class Session:
         try:
             while self._ears_on() and self.ears.speaking() and self.mixer.held:
                 if time.monotonic() >= end:
-                    # Only the held narration: an answer the player asked for that took
-                    # its place (it cleared the lane) isn't touched.
-                    if self.narration_ad and self.mixer.current_tag() == "narration":
-                        self.voice.stop()  # stale by now
                     break
                 await asyncio.sleep(0.05)
         finally:

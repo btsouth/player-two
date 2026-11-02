@@ -103,36 +103,47 @@ teams only when marked, names only when shown or clearly recognized."""
 DESCRIBE_HERE = (" You've just said this place's name aloud: {place}. Don't say it again; go "
                  "straight on with what it's like.")
 
-# "What does it look like?": the feel of the scene, not the tour. {length}: how long,
-# by verbosity.
+# "What does it look like?", "What do you see?": the feel of the scene, not the tour.
+# {length}: how long, by verbosity.
 ATMOSPHERE = """\
-The player asked what it's like here: paint the scene for someone who can't see it, in \
-{length}, vivid but plain. From the picture only: the setting (indoors or out, what kind \
-of place), the light, the main colours, the mood, and what the people or creatures are \
-doing; the time of day or the weather only when the picture clearly shows it (a black \
-backdrop isn't night). When the scene clearly suggests a sound (a crowded fair, a storm, \
-a fight), you may end on it, in your own words, as an impression: you see the picture, \
-you never hear the game. In a fight: the backdrop and what the enemies look like; no HP, \
-menus or turns. With a text box or a menu up: the scene behind it, not the text. People \
-as the rules above say: "you" only for the one you're sure is the player's own \
+The player asked what it's like here. You're the friend beside them, telling someone who \
+can't see it about the view: {length}, in whole sentences that sound spoken, the way you'd \
+tell a friend about something worth seeing, never a list of fragments. Open with a short \
+sentence on what strikes you most. From the picture only: the setting (indoors or out, what \
+kind of place), the light, the main colours, and what the people or creatures are doing; \
+the time of day or the weather only when the picture clearly shows it (a black backdrop \
+isn't night). Say only what you can plainly see: no guessing how many there are, which way \
+they're heading or what they're up to, and nothing about how it feels, sounds or smells: \
+the player can hear the game themselves. In a fight: the backdrop and what the enemies \
+look like; no HP, menus or turns. With a text box or a menu up: the scene behind it, not \
+the text. A screen that's only a menu, a title or text, with no scene behind it: say what \
+screen it is and what's selected. Nothing about what you can do next or what isn't there. \
+People as the rules above say: "you" only for the one you're sure is the player's own \
 character, others by a name shown or clearly recognized, or by how they look. No place \
 names unless the screen shows them, no story, nothing that isn't in the picture, no \
 preamble, nothing about the art style ("pixel", "sprite"). Scenery, colours and light are \
 exactly what's wanted here, whatever the rules above say."""
 ATMOSPHERE_LENGTH = {"terse": "two short sentences, about 25 words",
                      "quiet": "two short sentences, about 25 words",
-                     "normal": "two to four short sentences, about 50 words",
+                     "normal": "two to four sentences, about 50 words",
                      "detailed": "four or five sentences, about 80 words"}
 
-# The game's own voices are saying this screen's lines (heard on its sound stream).
+# The game's own voices are talking in this scene (heard on its sound stream).
 VOICE_NOW = """\
-The game's voice actors are saying this screen's lines aloud right now, and the player \
-hears them: they can't see, but they can hear. Don't read the dialogue or subtitles, and \
-don't say who is talking or what they said. Like an audio description track, add only \
-what the voices don't give: what visibly happens (who appears, what they do, a new \
-place), in one short sentence of at most twelve words. If nothing new is happening, \
-reply <silent>. A choice, menu or prompt the player has to answer is still read as \
-usual."""
+The game's voice actors are talking in this scene, and the player hears them: they can't \
+see, but they can hear. Like a good audio description track, stay out of the way: reply \
+<silent> unless something important happens on screen that the voices can't tell them \
+(someone is shot or falls, someone new arrives, the place changes). A new camera angle, or \
+someone standing, sitting, looking or talking, is not news. Subtitles on screen mean \
+someone is talking right now: reply <silent>, never read them and never say who is \
+talking. When it is worth saying: one short sentence of at most eight words, only what you \
+plainly see; if you're unsure, <silent>. A choice, menu or prompt the player has to answer \
+is still read as usual."""
+
+# Audio description was just given, and this scene has cut to a new shot.
+VOICE_SPACED = """\
+You spoke moments ago, and that's enough for now: reply <silent> unless this screen is a \
+choice, menu or prompt the player has to answer."""
 
 # The game pack says every dialogue line and subtitle in this game is spoken.
 VOICED_GAME = """\

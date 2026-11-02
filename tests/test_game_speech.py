@@ -217,8 +217,11 @@ def test_the_narrator_is_told_the_game_is_speaking():
 
 
 class Ears:
-    def __init__(self, speaking=False, heard=False, ever=True):
-        self._speaking, self.heard, self._ever = speaking, heard, ever
+    def __init__(self, speaking=False, heard=False, ever=True, quiet=1e9):
+        self._speaking, self.heard, self._ever, self.quiet = speaking, heard, ever, quiet
+
+    def quiet_for(self):
+        return 0.0 if self._speaking else self.quiet
 
     def speaking(self):
         return self._speaking
@@ -253,6 +256,11 @@ def test_subtitles_the_game_is_saying_arent_read_and_unvoiced_text_is():
     assert ears_session(Ears(heard=False), "- Voiced: all")._voice_note(f) == VOICED_GAME
     assert ears_session(Ears(heard=True), "- Voiced: none")._voice_note(f) == ""
     assert ears_session(None, "- Voiced: all")._voice_note(f) == VOICED_GAME  # can't hear
+    # A voice a few seconds ago: still a voiced scene, so a subtitle isn't read out, whether
+    # or not a voice came with this shot. Long after it, text is read again.
+    assert ears_session(Ears(quiet=5.0))._voice_note(f) == VOICE_NOW
+    assert ears_session(Ears(quiet=30.0))._voice_note(f) == ""
+    assert ears_session(Ears(quiet=5.0), "- Voiced: none")._voice_note(f) == ""
 
 
 def test_narration_waits_while_the_game_talks_and_for_a_voice_to_start():
@@ -268,7 +276,8 @@ def test_narration_waits_while_the_game_talks_and_for_a_voice_to_start():
     # A game whose pack says it never speaks (Chrono Trigger) is never held.
     assert not ears_session(Ears(speaking=True), "Voiced: none")._hold_for_game(f, cut=True)
     assert not ears_session(None)._hold_for_game(f, cut=True)  # can't hear: as before
-    # Audio description: one line every few seconds at most, unless the scene cuts.
+    # Audio description: one line every so often, unless the scene cuts, and then only a
+    # look for a menu or a choice (VOICE_SPACED).
     s = ears_session(Ears(heard=True))
     s.ad_said_at = time.monotonic()
     assert s._hold_for_game(f, cut=False) and not s._hold_for_game(f, cut=True)
@@ -347,28 +356,49 @@ def held_session(ad: bool):
     return s, stopped
 
 
-def test_held_narration_restarts_a_few_times_at_most_and_stale_description_is_dropped():
+def test_description_is_dropped_when_a_voice_starts_never_said_again():
+    s, stopped = held_session(ad=True)
+    s._game_spoke()
+    assert stopped and not s.mixer.held and s.holding is None
+
+
+def test_description_waits_for_a_real_pause_and_is_dropped_without_one():
     async def go():
-        s, stopped = held_session(ad=True)
+        ears = Ears(quiet=0.2)
+        s = ears_session(ears)
+        s.GAP_MAX_S, s.narration_ad = 0.1, True
+        assert not await s._narration_gap()  # only a breath between lines, for too long
+        ears.quiet = 2.0
+        assert await s._narration_gap()
+        ears.quiet = 0.2
+        s.narration_ad = False  # a menu doesn't wait for a pause, only for the voice to stop
+        assert await s._narration_gap()
+
+    asyncio.run(go())
+
+
+def test_held_narration_restarts_a_few_times_at_most_and_goes_on_past_the_limit():
+    async def go():
+        s, stopped = held_session(ad=False)
         s._game_spoke()
         assert s.mixer.held
-        await s.holding  # the game talks past the limit: the description is dropped
-        assert stopped and not s.mixer.held
-        s, stopped = held_session(ad=True)
+        await s.holding  # the game talks past the limit: said over it
+        assert not stopped and not s.mixer.held
+        s, stopped = held_session(ad=False)
         for _ in range(s.MAX_HOLDS):
             s._game_spoke()
             s.holding.cancel()
             await asyncio.sleep(0)
             s.holding = None
-        s._game_spoke()  # one hold too many: short gaps, the line would restart forever
-        assert stopped
+        s._game_spoke()  # one hold too many: short gaps, it goes on rather than restart
+        assert not stopped and not s.holding
 
     asyncio.run(go())
 
 
 def test_an_answer_that_replaced_held_narration_is_never_cut_off():
     async def go():
-        s, stopped = held_session(ad=True)
+        s, stopped = held_session(ad=False)
         s._game_spoke()
         s.mixer.clear_speech()  # the player asked something: its answer takes the lane
         s.mixer.push_speech(np.zeros(100, np.float32))

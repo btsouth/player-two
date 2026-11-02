@@ -24,12 +24,12 @@ def test_asking_what_it_looks_like_is_a_command_of_its_own():
                  "paint me a picture", "what's the mood", "describe the scene",
                  "hey player two, what does this place look like", "set the scene",
                  "could you paint me a picture please", "what's the vibe in here",
-                 "tell me what it looks like"):
+                 "tell me what it looks like", "what do you see", "What can you see?",
+                 "what are we looking at", "how's the view"):
         assert local_action(said) == "atmosphere", said
     # The tour stays the tour, and questions about one thing are the agent's.
     assert local_action("describe") == "describe"
     assert local_action("describe the screen") == "describe"
-    assert local_action("what do you see") == "describe"
     for said in ("describe the enemy on the left", "what does the enemy look like",
                  "what does Frog look like", "what do I look like"):
         assert local_action(said) is None, said
