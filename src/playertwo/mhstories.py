@@ -407,8 +407,12 @@ def arc_seen(img: Image.Image) -> tuple[str, str]:
             if span >= 28 and near < 215 and (colour not in best
                                               or len(pts) > len(best[colour])):
                 best[colour] = pts
-    # A red streak's bright core reads yellow, so red goes first. A real yellow arc has no red.
-    if "red" in best and len(best["red"]) >= 150:
+    # A red streak's bright core reads yellow, and a yellow arc can flare red where it leaves the
+    # wheel: only a yellow far longer than the red is the arc.
+    def span(name: str) -> float:
+        return float(np.hypot(*(best[name].max(axis=0) - best[name].min(axis=0)))) if name in best else 0.0
+
+    if "red" in best and len(best["red"]) >= 150 and span("yellow") < 1.6 * span("red"):
         colour = "red"
     elif "blue" in best and len(best["blue"]) >= 300:
         colour = "blue"
@@ -454,7 +458,8 @@ water, thunder, ice, dragon. Under each is a mark: red down arrows mean it's wea
 weapons Zerk carries have these elements: {elements}.
 Then tell them what they're up against, the way a friend on the couch would who can see the screen \
 and they can't: one short plain sentence with its name and level and the most useful thing about \
-its elements for those weapons. No dashes.
+its elements for those weapons. Say what the arrows say: "resists", "strongly resists", "weak to"; \
+don't overstate it. No dashes.
 JSON: {{"name": "...", "level": 0, "state": "...", "weak": ["..."], "very_weak": ["..."], \
 "resists": ["..."], "say": "..."}}"""
 
@@ -543,7 +548,7 @@ class Plan:
     double: bool = False
 
 
-HURT = {"Zerk": 0.6, "Canyne": 0.4, "Ogden": 0.4, "Chirpy": 0.35}
+HURT = {"Zerk": 0.6, "Canyne": 0.5, "Ogden": 0.5, "Chirpy": 0.5}
 
 
 def shrugged_off(view: View, part: Part) -> bool:
@@ -722,13 +727,8 @@ class Lines:
                                  f"{plan.type.lower()}, so I'll match.",
                                  f"{name} is in its sights. Going {plan.type.lower()} too.")
             return self.pick(f"It's going for {name}.", f"{name} is in its sights.")
-        if view.arc == "red":
-            name = who or "one of us"
-            return self.pick(f"It's going after {name}, and you can't counter this one. "
-                             "Just hitting hard.",
-                             f"It's winding up on {name}. No counter for that one.",
-                             "Another hit we can't counter.")
-        return self.pick("I'll just go for damage.", "Going for damage again.", "More damage.")
+        # A red streak or no streak says nothing sure about what's coming, so nothing's said of it.
+        return self.pick("I'll just go for damage.")
 
     def choice(self, view: View, plan: Plan, swapped: bool) -> str:
         """What's being done, said only once the screen shows it selected."""
@@ -773,7 +773,10 @@ class Lines:
             bits.append("Everyone else is fine.")
         return " ".join(bits)
 
-    def broke(self, part: str) -> str:
+    def broke(self, part: str, heard: bool = False) -> str:
+        """heard: the game's message has already been passed on; now the wheel says which part."""
+        if heard:
+            return self.pick(f"That was the {part.lower()}.", f"That one was the {part.lower()}.")
         return self.pick(f"That broke the {part.lower()}.", f"{part.capitalize()} {is_are(part)} broken.")
 
     def monster_low(self, share: float) -> str:
@@ -809,6 +812,7 @@ class Fight:
         self.turns = 0
         self.won = False
         self.monster_share = 1.0
+        self.break_heard = False
         self.muse_agrees = True
         self.note: Callable[[str, dict], None] = (
             lambda name, args: agent.on_action and agent.on_action(name, args))
@@ -1154,6 +1158,7 @@ class Fight:
         self.lines = Lines()
         self.turns = 0
         self.monster_share = 1.0
+        self.break_heard = False
         self.won = False
         self.muse_agrees = True
 
@@ -1343,16 +1348,25 @@ class Fight:
         hits, toast_band, looking = 0, None, None
         nearly_won = 0 < self.monster_share < 0.25
         last_screen, over, nudge = t0 + (3.0 if nearly_won else 9.0), 0, t0 + 14.0
+        looks, worst, before = 0, 0.0, time.monotonic()
+
+        def seen_all() -> None:
+            self.note("mh_watch", {"looks": looks, "worst_gap": round(worst, 2),
+                                   "seconds": round(time.monotonic() - t0, 1)})
+
         while time.monotonic() - t0 < 70 and not self.a.cancelled:
             img = await self._shot()
+            stamp = time.monotonic()
+            looks, worst, before = looks + 1, max(worst, stamp - before), stamp
             if menu_up(img):
                 hits += 1
                 if hits >= 2:
+                    seen_all()
                     return img
                 continue
             hits = 0
             now = time.monotonic()
-            if now - t0 > 1.2 and (wheel_open(img) or skills_tab(img) is not None):
+            if now - t0 > 1.2 and (wheel_open(img) or skills_tab(img) is not None or items_open(img)):
                 await self._press("b", 0.3)
                 continue
             if now >= nudge:  # this long with no menu: one that no check knows may be open
@@ -1367,6 +1381,7 @@ class Fight:
                 # On first sight: at double speed a message is up for under a second.
                 if toast_band is None or float(np.abs(band - toast_band).mean()) > 12:
                     toast_band = band
+                    self.note("mh_note", {"text": "message band up"})
                     self.aside(self.read_message(img))
             else:
                 toast_band = None
@@ -1400,9 +1415,11 @@ class Fight:
                 self.won = True
                 return
             if "broke" in text and "part" in text:  # which one, the next wheel shows
+                self.break_heard = True
                 self.say(self.lines.pick("That's a part broken!", "Another part broken!"))
             if "toppled" in text:
                 self.say(self.lines.pick("It's down!", "Knocked it over again."))
+                self.aside(self.synchro_rush())
             if "double attack" in text:
                 self.say(self.lines.pick(
                     "There's the double attack." if "zerk" in text
@@ -1412,6 +1429,15 @@ class Fight:
                 self.note("mh_seen", {"type": "", "phase": text})
                 self.say(self.lines.pick("It's calmed down." if "normal" in text
                                          else "Careful, it's changed gears."))
+
+    async def synchro_rush(self) -> None:
+        """The game's Y prompt while the monster's toppled. Never into a menu: Y there is Items."""
+        for _ in range(4):
+            if menu_up(await self._shot()):
+                return
+            await self._press("y", 0.05)
+            await asyncio.sleep(0.25)
+        self.note("mh_note", {"text": "pressed Y for the Synchro Rush"})
 
     async def screen(self, img: Image.Image) -> str:
         try:
@@ -1463,8 +1489,9 @@ class Fight:
                         type=view.menu_type, weapon=view.in_hand)
         t_read = time.monotonic() - t
         # Said now, while the presses go on: all true of this moment.
-        reaction = self.lines.broke(just_broke) if just_broke else (
+        reaction = self.lines.broke(just_broke, self.break_heard) if just_broke else (
             self.lines.monster_low(low) if self.parts else "")
+        self.break_heard = False
         if plan.do == "item":
             first = self.lines.hurt(plan.on, view.hp.get(plan.on, 0.0))
         else:

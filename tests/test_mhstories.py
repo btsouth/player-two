@@ -89,7 +89,7 @@ def test_an_untyped_attack_changes_no_type_and_claims_none():
     plan = m.choose(v)
     assert plan.type == "Technical" and plan.why_type == "none"
     line = m.Lines().reason(v, plan)
-    assert "counter" in line and "Power" not in line and "Speed" not in line
+    assert "counter" not in m.Lines().reason(view(arc="red", toward="Ogden"), m.Plan("attack"))
 
 
 def test_no_arc_claims_nothing_about_who_gets_hit():
@@ -438,6 +438,7 @@ def test_jargon_and_repeats_stay_out_of_the_lines():
     assert lines.monster_low(0.1) == "It's almost done."
     plan = m.Plan("attack", type="Speed")
     assert "line" not in lines.reason(m.View([], [], 0, "Speed", arc="none"), plan)
+    assert lines.reason(m.View([], [], 0, "Speed", arc="red", toward="Canyne"), plan) == ""
 
 
 def test_a_part_muse_never_named_is_not_said():
