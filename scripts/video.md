@@ -128,7 +128,9 @@ that is never used as evidence of the app's silence. The creator-testing limit r
 card, with the first-person limit line spoken over it. Missing VO still blocks final mode.
 
 The game ducks under real voice stems (15ms attack,220ms release,8:1). No added music. Accelerated
-parts are silent. Short cut ramps avoid clicks. Bounded padding flushes finite-stem sidechain
+opening gaps are silent. Speech-free navigation fight gaps retain pitch-preserving game audio;
+any logged speech overlapping such a gap is refused. Clean t13 excerpts keep both stems at1x;
+cuts remove intervening waits and turns. Short cut ramps avoid clicks. Bounded padding flushes finite-stem sidechain
 buffers, then trims to the real cut so a last word or ping cannot disappear at EOF.
 
 Audio is decoded and trimmed per piece to its actual video frame count before joining. Video
