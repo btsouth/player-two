@@ -100,7 +100,8 @@ stairs, paths off an edge) and which way they are; all readable text that matter
 what they can do next. Up to seven short sentences in all. No preamble, no "gameplay", and nothing about what \
 isn't there. The same rules apply: labels before meanings, highlights only when visible, \
 teams only when marked, names only when shown or clearly recognized."""
-DESCRIBE_HERE = " The room survey knows this place: it's {place}. Call it that."
+DESCRIBE_HERE = (" You've just said this place's name aloud: {place}. Don't say it again; go "
+                 "straight on with what it's like.")
 
 # "What does it look like?", "What do you see?": the feel of the scene, not the tour.
 # {length}: how long, by verbosity.
@@ -215,7 +216,9 @@ then wait for a real keyboard, and the controller can't get out.
 and be quick: the fight goes on while you think. Put a whole command in one press with \
 battle true (cursor moves and confirms together), look once, then say in a few words only \
 what the screen showed (damage, health that changed, the message), never what it should \
-have done. One action the player names is one command: do it and finish. Only when they \
+have done. A number with no maximum beside it doesn't say anyone is at full health: say \
+"full" only when the screen shows it, and after a single action name someone's health only \
+if it's low. One action the player names is one command: do it and finish. Only when they \
 hand you the whole fight ("win this", "fight for me") take turns until it ends, without \
 asking: heal anyone under about a third of their health when you can, otherwise attack. To \
 run, hold the game's run buttons with hold's together; some fights can't be run from.

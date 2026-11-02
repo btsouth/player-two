@@ -2,8 +2,10 @@
 reach the edge of a tile they can't stand on: the top of a fence's row, the side of a
 stall), and the party following the player (it never blocks the way)."""
 
+import asyncio
 import json
 
+import pytest
 from test_rooms import Sim, make
 
 from playertwo.rooms import Rooms, Target, centre, on_tile, walk_out
@@ -32,16 +34,14 @@ def fenced(tmp_path, fence=True):
 class Ground(Sim):
     """A Sim whose ground isn't whole tiles: `ok(x, y)` says where the feet may be."""
 
-    def __init__(self, img, ok, x, y):
-        super().__init__(img, set(), x, y)
+    def __init__(self, img, ok, x, y, clock=None):
+        super().__init__(img, set(), x, y, clock=clock)
         self.ok = ok
 
     def update(self):
-        import time
-
         from playertwo.controls import steer_dirs
 
-        now = time.monotonic()
+        now = self.clock()
         dt = 0.0 if self.t is None else min(0.1, now - self.t)
         self.t = now
         ds = steer_dirs(self.angle)
@@ -97,7 +97,9 @@ async def test_walk_from_a_fences_edge_goes_the_near_way(tmp_path):
     assert sim.y < 144  # never went round below the fence
 
 
-async def test_a_spot_by_someone_that_cant_be_stood_on_is_given_up(tmp_path):
+@pytest.mark.parametrize("capture_seconds", [0.015, 0.04, 0.08])
+async def test_a_spot_by_someone_that_cant_be_stood_on_is_given_up(
+        tmp_path, monkeypatch, capture_seconds):
     """Live (the fair, 63 s): the survey walked the edge of the tile beside the item
     seller (their stall's side), the walk pushed into it 15 s (a stand tile was never
     found shut), then pressed a from the wrong spot. Now it's shut like any other and
@@ -111,17 +113,40 @@ async def test_a_spot_by_someone_that_cant_be_stood_on_is_given_up(tmp_path):
         t = (int(y) // 16, int(x) // 16)
         return t in room.walk and t != side
 
-    sim = Ground(img, ok, 440.0, 125.0)  # row 7, column 27: coming from the right
+    from types import SimpleNamespace
+
+    from playertwo import rooms as rooms_module
+
+    # The simulator and executor share explicit game time. Thread/rendering cost and
+    # OS sleep granularity must not alter the collision being tested. Captures still
+    # advance game time while input is held, at each of three tested capture rates.
+    clock = [0.0]
+
+    async def sleep(seconds):
+        clock[0] += seconds
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(rooms_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(rooms_module, "asyncio",
+                        SimpleNamespace(sleep=sleep, to_thread=asyncio.to_thread))
+    sim = Ground(img, ok, 440.0, 125.0, clock=lambda: clock[0])
+
+    async def capture():
+        clock[0] += capture_seconds
+        return await sim.shoot()
+
     target = Target(2, (240.0, 116.0), True, "the item seller")
     ends = rooms.stand_by(room, target.at, True)
     assert side in ends
     sim.answers = lambda x, y, f: (int(y) // 16, int(x) // 16) != side and \
         ends.get((int(y) // 16, int(x) // 16)) == f
     notes = []
-    out = await walk_out(rooms, 2, sim.shoot, sim.steer, _true, notes.append, 25.0,
+    out = await walk_out(rooms, 2, capture, sim.steer, _true, notes.append, 25.0,
                          spot=target, press=sim.press, talk=True)
     assert out.startswith("arrived") and "pressed a" in out, out
-    assert side in room.learned
+    assert clock[0] <= 25.0
+    assert side in room.learned, notes
+    assert all((int(y) // 16, int(x) // 16) != side for _, x, y, _ in sim.pressed)
     _, x, y, facing = sim.pressed[-1]
     assert ends[(int(y) // 16, int(x) // 16)] == facing
 

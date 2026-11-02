@@ -19,6 +19,16 @@ def _set(text: str) -> set[str]:
     return set(text.split())
 
 
+# The model talking about its own steps ("No tool calls needed for this turn."): its words are
+# all in its instructions, so they look grounded, but no player should hear them.
+ITS_OWN_STEPS = re.compile(r"\b(?:tool|function)[ _-]?calls?\b|\bno tools?\b"
+                           r"|\bcall(?:ing)? (?:a|the|any|that) tool\b", re.IGNORECASE)
+
+
+def about_itself(text: str) -> bool:
+    return bool(ITS_OWN_STEPS.search(text))
+
+
 # Words that say nothing of what a line is about.
 STOP = _set("""
 a an the and or but if then than so as of to in on at by for with from into onto off up down

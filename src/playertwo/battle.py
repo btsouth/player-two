@@ -7,9 +7,9 @@ watches it play out, and pauses again. Anything unexpected (the hand gone, the e
 in the list, the actor knocked out, the wrong actor's menu) stops it, paused, with the
 reader's state in words.
 
-"Win this fight" is a loop over the same steps: at each turn a standing plan (attack while
-everyone is healthy) or, on a surprise, a decision callback (Muse, given the state in
-words, while the game is paused) gives the next command.
+"Win this fight" loops over the same steps with local attack/heal/revive rules by default.
+An optional decision callback can ask Muse while the game is paused; Tuning.model_decides
+is False by default, and the agent supplies no callback in that configuration.
 
 Live facts (Steam, 2026-11-01): Start pauses a battle and the menus freeze while paused;
 Battle Mode is Wait (time stops in the Tech and Item lists only); Battle Cursor Memory is

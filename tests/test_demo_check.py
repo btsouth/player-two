@@ -225,7 +225,15 @@ def test_report_keeps_the_latest_of_each_take(tmp_path):
                                               "“What are we fighting?” 1/1"]
 
 
-def test_a_live_run_sends_every_line_in_order_and_judges_them(tmp_path):
+def test_a_live_run_sends_every_line_in_order_and_judges_them(tmp_path, monkeypatch):
+    strftime = dc.time.strftime
+
+    def portable_date(fmt, *args):
+        if "%-" in fmt:
+            raise ValueError("Unix-only date format")
+        return strftime(fmt, *args)
+
+    monkeypatch.setattr(dc.time, "strftime", portable_date)
     log = tmp_path / "events.jsonl"
     log.touch()
     sent = tmp_path / "sent.txt"
@@ -251,6 +259,12 @@ elif args[0] == "do":
     emit(kind="status", state="watching", t=now + 0.7)
 """)
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    if sys.platform == "win32":
+        # Windows does not execute a shebang script as a native program. Keep a real
+        # subprocess integration test, using a batch launcher for the Python fixture.
+        launcher = tmp_path / "player-two.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{fake}" %*\n')
+        fake = launcher
     a = argparse.Namespace(p2=str(fake), log=str(log), out=str(tmp_path / "out"), frames="none",
                            monitor="DP-2", launcher="", budgets="predicted", repeats=2, take="A",
                            skip="A2,A4,A5", add="", reload="never",

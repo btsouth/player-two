@@ -946,6 +946,10 @@ def answer(question: str, lk: Look, party: list[str] = (), heard: str = "",
     if ASK_HP.search(q):
         who = [n for n in ctsteam.NAMES if re.search(rf"\b{n.lower()}", q)]
         if st is not None and st.party and all(m.hp is not None for m in st.party):
+            if not who and re.search(r"\bhow\b", q):  # "how are we doing?": trouble first
+                from .battle import party_brief
+                if brief := party_brief(st):
+                    return brief
             out = []
             for m in st.party:
                 if who and m.name not in who:
