@@ -700,7 +700,7 @@ def menu_records(take: Take, parts: list[Piece] | None = None) -> tuple[list[flo
     if not any(x.get('args',{}).get('buttons')==['a'] for x in presses):
         raise ValueError('RDR menu needs the real journal navigation presses')
     at=times[1]+next(x['t'] for x in presses if x['args'].get('buttons')==['a'])
-    if not any(a<=at<b for a,b in take.edit['story']):raise ValueError('RDR menu must show its own journal press')
+    if parts is None and not any(a<=at<b for a,b in take.edit['story']):raise ValueError('RDR menu must show its own journal press')
     if parts is not None and not any(p.take==take.name and p.a<=at<p.b and not p.freeze and p.speed==1 for p in parts):
         raise ValueError('RDR edit must show its own journal press at1x')
     return times,agents
@@ -2026,7 +2026,12 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         a += ",afade=t=in:d=0.5"
     if p.fade_out:
         a += f",afade=t=out:st={max(0.0, dur - 0.5):.2f}:d=0.5"
-    if p.vo:
+    if p.vo and p.audio_mode=='game':
+        # Founder narration is a speech sidechain too; pad through the whole shot.
+        a += (f"[ta];[1:a]apad=pad_dur={dur+2},asplit[vovoice][voside];"
+              "[ta][voside]sidechaincompress=threshold=0.01:ratio=8:attack=15:release=220[vogame];"
+              f"[vogame][vovoice]amix=inputs=2:duration=first:normalize=0,atrim=duration={dur}[a]")
+    elif p.vo:
         a += "[ta];[ta][1:a]amix=inputs=2:duration=first:normalize=0[a]"
     else:
         a += "[a]"
@@ -2082,7 +2087,7 @@ def ass_text(take: Take, layout: str = "") -> str:
     size, align, ml, mr, mv = {
         "map": (52, 2, 100, 100, 60),
         "rdr": (52, 2, 100, 100, 60),
-        "menu": (52, 8, 500, 100, 650),
+        "menu": (52, 8, 500, 100, 700),
         "mh": (52, 8, 100, 100, 740),
         "fight": (52, 8, 100, 100, 240),
         "shop": (52, 9, 1000, 64, 420),

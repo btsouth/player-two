@@ -983,3 +983,11 @@ def test_pace_uses_listening_start_for_reply_to_request_gap():
     p=mv.Piece('p','ct',take='t',a=0,b=8)
     _,blocked=mv.pacing_report([p],{'t':take},{})
     assert 'request-gap:p' in blocked
+
+
+def test_new_menu_edit_is_checked_instead_of_the_old_story_clock():
+    es=[{'kind':'heard','t':1,'text':'Read this menu.'},{'kind':'heard','t':10,'text':'Open the journal.'},{'kind':'heard','t':25,'text':'Read it.'}]
+    for t,request in [(2,'Read this menu.'),(20,'Open the journal.'),(29,'Read it.')]:
+        es.append({'kind':'agent','t':t,'request':request,'turns':[{}],'steps':[{'tool':'press','t':5,'args':{'buttons':['a']}}]})
+    t=_take(es,'rdr-menu',40);t.edit={'backend':'keyboard','story':[[1,2]]}
+    mv.menu_records(t,[mv.Piece('j','game3',take='rdr-menu',a=10,b=22)])

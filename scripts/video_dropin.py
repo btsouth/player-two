@@ -59,6 +59,10 @@ def stage(source: Path, mapping: dict, output: Path):
             ):
                 raise ValueError(f"{name}: unchanged_windows requires byte-identical footage")
         else:
+            if "recording_delay" not in entry.get("edit", {}):
+                raise ValueError("A changed take needs its measured recording_delay")
+            if name == "rdr-menu" and entry.get("edit", {}).get("backend") != "keyboard":
+                raise ValueError("New Red Dead menu take needs explicit reviewed keyboard backend")
             missing = [
                 p["id"]
                 for p in pacing["shots"]

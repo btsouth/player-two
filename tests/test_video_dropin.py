@@ -27,7 +27,12 @@ def fixture(tmp_path):
     return source, {
         "template": str(template),
         "takes": {
-            "take-B": {"video": "new.mp4", "start": "new.mp4.start", "events": "events.jsonl"}
+            "take-B": {
+                "video": "new.mp4",
+                "start": "new.mp4.start",
+                "events": "events.jsonl",
+                "edit": {"recording_delay": 0},
+            }
         },
     }
 
@@ -52,3 +57,10 @@ def test_stand_in_cannot_be_staged_under_a_real_cut_name(tmp_path):
     (source / "STAND-IN.json").write_text("{}")
     with pytest.raises(ValueError, match="TEMP-NOT-FOR-SUBMISSION"):
         m.stage(source, config, tmp_path / "real-cut")
+
+
+def test_changed_take_requires_its_own_measured_recorder_offset(tmp_path):
+    source, config = fixture(tmp_path)
+    config["takes"]["take-B"].pop("edit")
+    with pytest.raises(ValueError, match="measured recording_delay"):
+        m.stage(source, config, tmp_path / "stage")
