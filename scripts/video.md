@@ -212,3 +212,10 @@ app stayed silent. The quiet-actors proof retains both stems.
 application behavior. Only their intersections with shown pieces receive the explanatory chip.
 Never infer a pause from a long response or display the label across an unpaused section.
 Monster Hunter remains a replaceable `game2` manifest entry with its own measured story windows.
+
+
+Audio assembly decodes each piece before joining and trims it to that piece's actual video frame
+count. The video concat list uses those same durations. AAC packet copying across many tiny cuts
+can accumulate encoder priming and break synchronization; do not restore that shortcut. The
+master has one continuous audio clock and one final AAC tail. Verify cue timing in the whole
+film as well as isolated clips.

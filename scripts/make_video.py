@@ -1639,11 +1639,28 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         files = list(pool.map(one, parts))
-    lst = work / "list.txt"
-    lst.write_text("".join(f"file '{f.resolve()}'\n" for f in files))
     joined = work / "joined.mp4"
-    _ff("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined))
+    join_pieces(files,joined,work)
     normalize_mix(joined, out, work)
+
+
+def join_pieces(files: list[Path], joined: Path, work: Path) -> None:
+    """Trim decoded AAC per piece; copying packets carries priming across every cut."""
+    lengths=[]
+    for f in files:
+        data=json.loads(subprocess.check_output(["ffprobe","-v","error","-select_streams","v:0",
+            "-show_entries","stream=nb_frames,r_frame_rate","-of","json",str(f)]))["streams"][0]
+        num,den=map(int,data["r_frame_rate"].split("/"))
+        lengths.append(int(data["nb_frames"])*den/num)
+    lst=work/"list.txt"
+    lst.write_text("".join(f"file '{f.resolve()}'\nduration {s:.9f}\n" for f,s in zip(files,lengths,strict=True)))
+    inputs=list(itertools.chain.from_iterable(("-i",str(f)) for f in files))
+    filters=";".join(f"[{i}:a]apad,atrim=duration={s:.9f},asetpts=N/SR/TB[a{i}]" for i,s in enumerate(lengths))
+    filters+=";"+"".join(f"[a{i}]" for i in range(len(files)))+f"concat=n={len(files)}:v=0:a=1[a]"
+    wav=work/"joined-audio.wav"
+    _ff(*inputs,"-filter_complex",filters,"-map","[a]","-c:a","pcm_s24le",str(wav))
+    _ff("-f","concat","-safe","0","-i",str(lst),"-i",str(wav),"-map","0:v:0","-map","1:a:0",
+        "-c:v","copy","-c:a","aac","-b:a","192k",str(joined))
 
 
 def normalize_mix(joined: Path, out: Path, work: Path) -> None:

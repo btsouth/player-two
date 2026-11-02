@@ -624,3 +624,19 @@ def test_ducked_stems_retain_and_boost_the_last_stereo_ping(tmp_path,monkeypatch
     left=decoded[int(1.91*48000)*2:int(1.94*48000)*2:2]
     right=decoded[int(1.91*48000)*2+1:int(1.94*48000)*2:2]
     assert max(map(abs,left))>.35 and max(map(abs,right))<.16
+
+
+def test_join_removes_per_clip_aac_padding_instead_of_accumulating_it(tmp_path):
+    import array
+    import subprocess
+    source=tmp_path/"short.mp4"
+    subprocess.run(["ffmpeg","-v","error","-f","lavfi","-i","color=s=64x64:r=60:d=0.1",
+                    "-f","lavfi","-i","sine=frequency=1200:sample_rate=48000:duration=0.1",
+                    "-c:v","libx264","-c:a","aac",str(source)],check=True)
+    joined=tmp_path/"joined.mp4"
+    mv.join_pieces([source]*20,joined,tmp_path)
+    raw=subprocess.check_output(["ffmpeg","-v","error","-i",str(joined),"-vn","-f","f32le","-ac","1","-ar","48000","-"])
+    samples=array.array("f",raw)
+    assert 2<=len(samples)/48000<2.03  # one master AAC tail, never twenty clip tails
+    assert abs(mv.probe_s(joined)-2)<.03
+    assert max(map(abs,samples[int(1.95*48000):int(1.98*48000)]))>.05
