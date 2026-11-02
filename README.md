@@ -26,7 +26,7 @@ success rates. Newer code and the final voice recording need their own results.
 | Request | Passed | Whole task | Limit |
 |---|---:|---|---|
 | Take me to the fair | 11/11 | 3 to 4 s | From the demo world-map position |
-| Buy three potions | 11/11 | 19 to 50 s in the run sheet | Final three entrance-to-purchase runs: 18.6, 26.0, 26.7 s after map fixes |
+| Buy three potions | 11/11 | 17.6 to 63 s | Final three entrance-to-purchase runs: 18.6, 26.0, 26.7 s after map fixes |
 | What are we fighting? | 3/3 | 1.9 to 3.2 s | Fight-start enemy count had separate errors |
 | Crono, use Cyclone | 2/2 | 9.5 to 12.2 s | Only when Crono was ready |
 | Win this fight for me | 3/4 | Wins 55 to 75 s | Lost when begun with two party members knocked out |
@@ -102,8 +102,7 @@ uv run --python 3.12 python scripts/self_check.py
 
 This loads the packaged reader assets, processes a blank frame, and routes around a wall
 with the real A* planner. No network calls, audio, controller or desktop are opened. It is
-an install smoke check, **not an AI gameplay demo**. For development, `uv run python scripts/self_check.py`
-works after `uv sync --python 3.12 --group dev`.
+an install smoke check, **not an AI gameplay demo**. The first `uv run` may install the project dependencies; the check itself makes no network calls.
 
 For a no-commercial-game demo on a supported desktop, open `tests/arena/index.html` in a browser
 from this clone. It is a small local test battle: up/down choose, Enter confirms, Escape cancels.
