@@ -54,10 +54,26 @@ def test_a_part_being_worked_on_stays_until_it_breaks():
     assert m.choose(view(parts=parts, target="Tail")).part.name == "Legs"
 
 
+def test_a_part_whose_weapon_it_resists_comes_last():
+    parts = [part("Head", "pierce", gauge=0.2), part("Legs", "blunt", gauge=0.9)]
+    assert m.choose(view(parts=parts, resists=["water"])).part.name == "Legs"
+    head_only = [part("Head", "pierce"), part("Legs", "blunt", broken=True)]
+    assert m.choose(view(parts=head_only, resists=["water"], in_hand=0)).part.name == "Legs"
+    assert m.choose(view(parts=parts)).part.name == "Head"
+
+
 def test_the_type_that_beats_the_one_it_has_been_using():
     for seen, want in (("Power", "Speed"), ("Speed", "Technical"), ("Technical", "Power")):
         plan = m.choose(view(arc="yellow", toward="Zerk", monster_type=seen))
         assert plan.type == want and plan.why_type == "seen"
+
+
+def test_what_it_usually_uses_is_said_as_usual_and_gives_way_to_what_is_seen():
+    v = view(arc="yellow", toward="Zerk", usual_type="Power")
+    plan = m.choose(v)
+    assert plan.type == "Speed" and plan.why_type == "usual"
+    assert "usually" in m.Lines().reason(v, plan)
+    assert m.choose(view(arc="yellow", usual_type="Power", monster_type="Technical")).type == "Power"
 
 
 def test_an_allys_pick_is_used_only_as_a_hint_and_said_as_one():
@@ -91,13 +107,13 @@ def test_a_double_attack_when_canyne_is_on_the_winning_type():
 def test_the_skill_that_breaks_parts_when_the_gauge_pays_for_it():
     plan = m.choose(view(gauge=60))
     assert plan.do == "skill" and plan.skill.name == "Spinning Meteor"
-    assert m.choose(view(gauge=40)).do == "attack"  # Sweet Spot hits all and doesn't break parts
+    assert m.choose(view(gauge=15)).do == "attack"  # nothing it can pay for
 
 
 def test_healing_comes_first_and_goes_to_who_is_worst_off():
     plan = m.choose(view(hp={"Zerk": 0.2, "Canyne": 0.3, "Ogden": 0.9, "Chirpy": 1.0}))
     assert (plan.do, plan.on, plan.item) == ("item", "Zerk", "Potion")
-    assert m.choose(view(hp={"Zerk": 0.5, "Canyne": 0.8})).do == "attack"
+    assert m.choose(view(hp={"Zerk": 0.65, "Canyne": 0.8})).do == "attack"
 
 
 def test_no_line_is_said_twice():
@@ -124,14 +140,19 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
     f.weak_line = "Hit the tail with the sword and the legs with the hammer."
     assert f.where_weak() == f.weak_line
     f.weak_line = "Go for the tail."
-    assert f.where_weak() == "The tail takes slash, the legs take blunt."
+    f.weapons = gear()
+    assert f.where_weak() == "Sword on the tail, hammer on the legs."
+    f.weak_line = "Hit the tail with the sword and the legs with the hammer."
+    f.muse_agrees = False
+    assert f.where_weak() == "Sword on the tail, hammer on the legs."
 
 
 # A fake game: the routine's pixel reads look at its state instead of a picture.
 
 def title(name):
     """A part's name as a wheel title's letters: a different mask for each."""
-    return np.array([[k == ["Tail", "Head", "Legs"].index(name) for k in range(3)]])
+    i = ["Tail", "Head", "Legs"].index(name)
+    return np.array([[j % (i + 2) == 0 for j in range(40)] for _ in range(8)])
 
 
 class Game:
@@ -202,6 +223,8 @@ class Game:
     def stick(self, which, way, ms, strength=1.0):
         if self.screen == "ring":
             self.ring = (self.ring + 1) % 4
+        elif way in ("up", "down"):
+            self.press(way)
         else:
             step = 1 if way == "right" else -1
             self.type = m.TYPES[(m.TYPES.index(self.type) + step) % 3]
@@ -236,6 +259,7 @@ def game(monkeypatch):
         "bar_share": lambda i, who, y=684: 0.9,
         "monster_health": lambda i: 0.9,
         "monster_ribbon": lambda i: "",
+        "clash_type": lambda i: "",
         "toast_up": lambda i: False,
     }
     for name, fn in patch.items():
@@ -337,7 +361,7 @@ def test_a_whole_turn_says_why_then_what_in_order(game):
     plan = run(go())
     assert plan.type == "Speed"
     assert game.screen == "playing"
-    assert "Speed beats" in said[0] and "power" in said[0]
+    assert "so speed" in said[0] and "last hit was power" in said[0]
     assert len(said) == 2
 
 
@@ -396,3 +420,25 @@ def test_a_menu_left_open_during_the_turn_is_backed_out_of_fast(game, monkeypatc
     assert img is not None and took < 3.0
     assert "b" in game.presses
     del real
+
+
+def test_a_title_a_few_pixels_off_is_still_that_part():
+    tail, head = title("Tail"), title("Head")
+    assert m._title_gap(np.roll(tail, 4, axis=1), tail) < m._title_gap(np.roll(tail, 4, axis=1), head)
+
+
+def test_jargon_and_repeats_stay_out_of_the_lines():
+    lines = m.Lines()
+    assert lines.monster_low(0.3) == "It's getting weak."
+    assert lines.monster_low(0.25) == ""
+    assert lines.monster_low(0.5) == ""
+    assert lines.monster_low(0.1) == "It's almost done."
+    plan = m.Plan("attack", type="Speed")
+    assert "line" not in lines.reason(m.View([], [], 0, "Speed", arc="none"), plan)
+
+
+def test_a_part_muse_never_named_is_not_said():
+    part = m.Part("part 2", ["blunt"], False, 0.5, "", title("Legs"))
+    plan = m.Plan("attack", type="Speed", part=part)
+    line = m.Lines().choice(m.View([part], [], 0, "Speed"), plan, False)
+    assert "part" not in line

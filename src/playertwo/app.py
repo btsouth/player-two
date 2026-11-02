@@ -1741,6 +1741,9 @@ class Session:
         self.voice.cue("working")
         # Heard, in the player's words, before the model's first word seconds later.
         line = ack(text) if "English" in (self.narrator.language or "English") else None
+        if line == getattr(self, "_last_ack", None) == "Let me look.":
+            line = "One second."  # two questions in a row don't get the same words
+        self._last_ack = line
         if line:
             self.announce(line, status=True)
         ticks = self.spawn(self._working_ticks())
