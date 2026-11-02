@@ -373,3 +373,21 @@ def test_measured_recorder_delay_aligns_captions_without_rewriting_source(tmp_pa
     take=mv.load_take(tmp_path,"take-A",False)
     assert abs(take.caps[0][0]-.68)<.001
     assert take.events==es and (tmp_path/"take-A.mp4.start").read_text()=="1000"
+
+
+def test_speed_label_stays_clear_of_the_upper_request_chip(tmp_path):
+    from PIL import Image
+    path=tmp_path/"speed.png"
+    mv.label_png(path,mv.Overlay("2x",48,"tr",0,1))
+    bbox=Image.open(path).getchannel("A").getbbox()
+    assert bbox[0]>mv.W*.7  # caller's legacy top-right slot must still be physically right
+    mv.label_png(path,mv.Overlay("2x",48,"speed-shop",0,1))
+    assert Image.open(path).getchannel("A").getbbox()[1]>mv.H*.6
+
+
+def test_shop_completion_is_not_cut_before_its_measured_result_can_be_read():
+    es=[{"t":1,"kind":"heard","text":"Buy three potions.","typed":True},
+        _spoken("Bought. You have 370 gold left.",3,5),
+        {"t":6.2,"kind":"agent","request":"Buy three potions.","turns":[],"steps":[],"seconds":5.2}]
+    cut=mv.cut_line("A4",_take(es),None,None)
+    assert cut.b>=7.4-.001

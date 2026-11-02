@@ -390,6 +390,8 @@ def cut_line(line: str, take: Take, pick: int | None, max_talk: float | None) ->
     if max_talk is not None:
         own, left = talk_cut(own, max_talk)
     end = (own[-1][1] if own else heard_t + 3.0) + 0.5
+    if done is not None and left == 0:
+        end = max(end, done + 1.2)  # let the completed action's real timing remain readable
     start = heard_t - _lead(take, heard_t, event)
     # A line still being said as the request starts stays whole, not cut into mid-word.
     said = [c[0] for c in take.caps if c[2] == "Player Two" and c[0] < start < c[1]
@@ -1030,15 +1032,18 @@ def label_png(path: Path, o: Overlay) -> Path:
     else:
         f = _font(True, max(34, o.size))
         lines = _wrap(d, o.text, f, 1600)
-        if o.text.endswith("x"):
+        is_speed=bool(re.fullmatch(r"\d+(?:\.\d+)?x",o.text))
+        if is_speed:
             lines = [o.text + " SPEED"]
         y = 52 if o.where in ("tl", "tl2", "tr", "trl", "intro") else 700
         if o.where == "intro":
             y = 66
-        if o.where in ("speed","trim"):
+        if is_speed or o.where in ("speed","trim"):
             y = 64
+        if o.where=="speed-shop":
+            y = 700
         tw = int(max(d.textlength(ln, font=f) for ln in lines))
-        x = ((W-tw)//2 if o.where in ("bc","intro") else W-tw-64 if o.where in ("speed","trim") else 64)
+        x = ((W-tw)//2 if o.where in ("bc","intro") else W-tw-64 if is_speed or o.where in ("speed","trim") else 64)
         bh = len(lines) * int(f.size * 1.35) + 28
         d.rounded_rectangle(
             (x - 20, y - 12, x + tw + 20, y + bh), radius=18, fill=(9, 15, 25, 218)
@@ -1207,6 +1212,8 @@ def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], 
     inputs: list[str] = []
     chain, last = "", "v0"
     for i, o in enumerate(p.overlays):
+        if p.layout=="shop" and re.fullmatch(r"\d+(?:\.\d+)?x",o.text):
+            o=dataclasses.replace(o,where="speed-shop")
         if o.where == "trace":
             o = dataclasses.replace(o, where="trace-" + (p.layout or ("fight" if p.take=="take-B" else "map")))
         png = work / ("ov-" + hashlib.sha1(f"{CODE}|{o.text}|{o.size}|{o.where}".encode())

@@ -105,3 +105,7 @@ font, source size/mtime, captions and settings. `--final` refuses placeholders, 
 incomplete choice/delegation opening, missing geometry/timing/captions, unlabelled speed-ups, stale health facts,
 sped-up speech and duration above 3:00, including after encoding. `--accept-captions` cannot bypass
 stale facts or sped-up speech. Human frame and full-speed listening checks remain essential.
+
+Completed action windows hold at least 1.2 seconds after the logged result so measured completion
+badges remain readable. Speed labels stay physically clear of request chips; shop speed labels use
+the lower-right open area, away from its quantity/item menus. Recheck placement on new games.
