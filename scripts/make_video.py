@@ -1554,9 +1554,9 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
 
 
 def normalize_mix(joined: Path, out: Path, work: Path) -> None:
-    """Two-pass EBU R128. -2.5 dBTP leaves AAC reconstruction headroom."""
+    """Two-pass EBU R128. -4 dBTP leaves headroom for AAC reconstruction transients."""
     result = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(joined), "-vn", "-af",
-        "loudnorm=I=-14:TP=-2.5:LRA=9:print_format=json", "-f", "null", "-"],
+        "loudnorm=I=-14:TP=-4:LRA=9:print_format=json", "-f", "null", "-"],
         capture_output=True, text=True, check=True)
     match = re.search(r'\{\s*"input_i".*?\}', result.stderr, re.DOTALL)
     if not match:
@@ -1567,7 +1567,7 @@ def normalize_mix(joined: Path, out: Path, work: Path) -> None:
         # A completely silent layout proxy has no meaningful LUFS; preserve silence.
         _ff("-i", str(joined), "-c", "copy", "-movflags", "+faststart", str(out))
         return
-    af = ("loudnorm=I=-14:TP=-2.5:LRA=9:linear=true:"
+    af = ("loudnorm=I=-14:TP=-4:LRA=9:linear=true:"
           f"measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:"
           f"measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}:"
           f"offset={stats['target_offset']}")

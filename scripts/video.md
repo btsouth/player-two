@@ -105,7 +105,7 @@ start at video time zero and cover its duration. Voice contains microphone + Pla
 separate. The game ducks under voice (15ms attack, 220ms release, 8:1). An incomplete pair is an
 error. Premixed takes cannot be independently ducked. No added music. Accelerated gaps are silent;
 all speech stays at normal speed. Cut ramps prevent clicks. Two-pass normalization targets -14 LUFS
-and -2.5 dBTP; measure decoded AAC with ebur128 again.
+and -4 dBTP before AAC; measure decoded AAC with ebur128 again. New takes have produced over2dB of reconstruction overshoot, so the decoded measurement is required.
 
 Cut/evidence JSON, caption warnings and optional sheets accompany the output. `--cut` replays a
 hand-edited cut; rebuild without it to discover new source/VO files. Cache keys include renderer,
