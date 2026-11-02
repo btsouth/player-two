@@ -416,7 +416,8 @@ def arc_seen(img: Image.Image) -> tuple[str, str]:
     def span(name: str) -> float:
         return float(np.hypot(*(best[name].max(axis=0) - best[name].min(axis=0)))) if name in best else 0.0
 
-    if "red" in best and len(best["red"]) >= 150 and span("yellow") < 2.2 * span("red"):
+    if "red" in best and len(best["red"]) >= 150 and (
+            span("yellow") < 2.2 * span("red") or span("yellow") < 120):
         colour = "red"
     elif "blue" in best and len(best["blue"]) >= 300:
         colour = "blue"
@@ -788,7 +789,7 @@ class Lines:
 
     def monster_low(self, share: float) -> str:
         """Each step down gets said once a fight."""
-        step = 3 if share < 0.15 else 2 if share < 0.35 else 1 if share < 0.55 else 0
+        step = 3 if share < 0.15 else 2 if share < 0.35 else 1 if 0.45 <= share < 0.58 else 0
         if step <= self.low_step:
             return ""
         self.low_step = step
@@ -1028,6 +1029,19 @@ class Fight:
         await self._press("rt", 0.15)
         if not menu_up(await self._shot()):
             await self._press("b", 0.2)
+
+    async def read_arc(self, wheel: Image.Image) -> tuple[str, str]:
+        """The streak sweeps and flares, so one picture can mislead: three, a moment apart. Any
+        red makes it red: "it's coming at you" is only said when nothing else was seen."""
+        seen = [arc_seen(wheel)]
+        for _ in range(2):
+            await asyncio.sleep(0.12)
+            seen.append(arc_seen(await self._shot()))
+        for colour in ("red", "blue", "yellow"):
+            hits = [x for x in seen if x[0] == colour]
+            if hits:
+                return hits[-1]
+        return "none", ""
 
     async def read_wheel(self, hold: bool = False) -> None:
         """Round the wheel once with the camera watching, then one look by Muse at all of it.
@@ -1475,9 +1489,7 @@ class Fight:
             self.note("mh_note", {"text": "wheel didn't open"})
             return None
         wheel = await self.settled_wheel(0.9) if self.parts else await self._shot()
-        if arc_seen(wheel)[0] == "none":  # give the streak a moment
-            await asyncio.sleep(0.3)
-            wheel = await self._shot()
+        arc, toward = await self.read_arc(wheel)
         if os.environ.get("PLAYER_TWO_FRAMES"):  # what each turn was picked from (debugging)
             with contextlib.suppress(OSError):
                 wheel.convert("RGB").save(Path(os.environ["PLAYER_TWO_FRAMES"]).expanduser()
@@ -1491,6 +1503,7 @@ class Fight:
                 just_broke = on.name
             on.broken, on.gauge = broken, wheel_gauge(wheel)
         view = await asyncio.to_thread(self.view, img, wheel, kind_now)
+        view.arc, view.toward = arc, toward
         low = monster_health(wheel)
         self.monster_share = low
         view.top_up = not self.healed and low > 0.2
