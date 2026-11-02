@@ -1408,7 +1408,7 @@ def label_png(path: Path, o: Overlay) -> Path:
         if o.where=="how":
             x,y=640,700
         if o.where=="pause":
-            x=W-tw-64
+            x,y=W-tw-64,680
         if o.where=='nav-map':x,y=64,52
         if o.where=='nav-route':x,y=64,500
         if o.where=='bench':
