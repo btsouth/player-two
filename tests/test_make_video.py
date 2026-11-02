@@ -197,7 +197,9 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
     words = " ".join(str(b[0]) for p in parts for b in p.blocks)
     assert "nor defeat Lavos in Chrono Trigger...”" in words
     assert "hasn't beaten Lavos yet" in words and "no blind player has tried it" in words
-    assert "free-form requests" in words and "there for speed" in words
+    assert "Muse understands scenes and open-ended requests" in words
+    assert "Local readers and routines handle common actions, including default fight choices" in words
+    assert "decides what to do about them" not in words
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
 
