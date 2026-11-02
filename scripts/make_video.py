@@ -2351,7 +2351,7 @@ def main() -> None:
             for o in p.overlays:
                 if o.where.startswith('trace'):
                     o.text='\n'.join(o.text.splitlines()[:2])
-                    if p.id in ('mh-weak','rdr-menu-read'):o.f0=max(o.f0,1.1)
+                    if p.id in ('mh-weak','rdr-menu-read','rdr-journal'):o.f0=max(o.f0,1.1)
         for p in parts:p.overlays=[o for o in p.overlays if o.text!='You:\nRequest begins' and o.f1>o.f0 and not (p.id=='ct-castle' and o.where.startswith('trace'))]
         weak=next(p for p in parts if p.id=='mh-weak')
         weak.overlays.append(Overlay('You: typed\nWhere’s it weak?',42,'trace-mh',1.1,weak.out_s))
