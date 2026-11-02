@@ -151,7 +151,8 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
 
 def title(name):
     """A part's name as a wheel title's letters: a different mask for each."""
-    return np.array([[k == ["Tail", "Head", "Legs"].index(name) for k in range(3)]])
+    i = ["Tail", "Head", "Legs"].index(name)
+    return np.array([[j % (i + 2) == 0 for j in range(40)] for _ in range(8)])
 
 
 class Game:
@@ -419,3 +420,18 @@ def test_a_menu_left_open_during_the_turn_is_backed_out_of_fast(game, monkeypatc
     assert img is not None and took < 3.0
     assert "b" in game.presses
     del real
+
+
+def test_a_title_a_few_pixels_off_is_still_that_part():
+    tail, head = title("Tail"), title("Head")
+    assert m._title_gap(np.roll(tail, 4, axis=1), tail) < m._title_gap(np.roll(tail, 4, axis=1), head)
+
+
+def test_jargon_and_repeats_stay_out_of_the_lines():
+    lines = m.Lines()
+    assert lines.monster_low(0.3) == "It's getting weak."
+    assert lines.monster_low(0.25) == ""
+    assert lines.monster_low(0.5) == ""
+    assert lines.monster_low(0.1) == "It's almost done."
+    plan = m.Plan("attack", type="Speed")
+    assert "line" not in lines.reason(m.View([], [], 0, "Speed", arc="none"), plan)

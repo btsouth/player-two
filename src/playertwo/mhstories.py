@@ -253,24 +253,37 @@ def hud_up(img: Image.Image) -> bool:
 
 
 def monster_ribbon(img: Image.Image) -> str:
-    """The monster's move as it plays, from the ribbon under its name. One monster on screen. A
-    ribbon is dark and saturated; sky behind the same spot isn't."""
+    """The monster's move as it plays, from the ribbon under its name: a band darker than what's
+    just above and below it. A cut-in or sky behind the same spot has no such edge."""
     c = _arr(img, 590, 90, 720, 101)
-    r, g, b = np.median(c.reshape(-1, 3), axis=0)
-    if max(r, g, b) > 185 or max(r, g, b) - min(r, g, b) < 45 or not hud_up(img):
+    band = np.median(c.reshape(-1, 3), axis=0)
+    if band.max() > 135 or band.max() - band.min() < 45 or not hud_up(img):
         return ""
+    for box in ((590, 70, 720, 76), (590, 104, 720, 110)):
+        if np.abs(np.median(_arr(img, *box).reshape(-1, 3), axis=0) - band).sum() < 60:
+            return ""
     return _ribbon_type(c)
 
 
 def clash_type(img: Image.Image) -> str:
-    """The Head-to-Head banner fills the screen, split in two: the right half is in the colour of
-    the monster's attack type."""
-    r, g, b = np.median(_arr(img, 1010, 170, 1270, 560).reshape(-1, 3), axis=0)
-    if r > 130 and g < 60 and b < 70:
+    """The type of the monster's attack, from the Head-to-Head screen: white title at the top, two
+    name bars at the bottom, and the right hand ribbon in the colour of its attack."""
+    title = _arr(img, 440, 125, 840, 185).min(axis=2) > 225
+    left, right = _arr(img, 10, 656, 150, 676), _arr(img, 1130, 656, 1270, 676)
+    if not 0.08 < float(title.mean()) < 0.5:
+        return ""
+    if np.median(left.max(axis=2)) > 95 or np.median(right.max(axis=2)) > 95:
+        return ""
+    c = _arr(img, 960, 606, 1270, 626).reshape(-1, 3)
+    c = c[c.min(axis=1) < 150]  # not the white letters
+    if not len(c):
+        return ""
+    r, g, b = np.median(c, axis=0)
+    if r > g * 1.5 and r > b * 1.5:
         return "Power"
-    if b > 130 and r < 70 and g < 110:
+    if b > r * 1.3 and b > g * 1.05:
         return "Speed"
-    if g > 100 and r < 70 and b < 90:
+    if g > r * 1.3 and g > b * 1.2:
         return "Technical"
     return ""
 
@@ -508,7 +521,7 @@ class Plan:
     double: bool = False
 
 
-HURT = {"Zerk": 0.35, "Canyne": 0.35, "Ogden": 0.35, "Chirpy": 0.3}
+HURT = {"Zerk": 0.5, "Canyne": 0.4, "Ogden": 0.4, "Chirpy": 0.35}
 
 
 def shrugged_off(view: View, part: Part) -> bool:
@@ -610,6 +623,7 @@ class Lines:
 
     def __init__(self) -> None:
         self.used: set[str] = set()
+        self.low_step = 0
 
     def pick(self, *options: str) -> str:
         for line in options:
@@ -657,12 +671,11 @@ class Lines:
             return self.pick(f"It's going for {name}.", f"{name} is in its sights.")
         if view.arc == "red":
             name = who or "one of us"
-            return self.pick(f"Big one coming at {name}, and you can't counter it. Just hitting hard.",
+            return self.pick(f"It's going after {name}, and you can't counter this one. "
+                             "Just hitting hard.",
                              f"It's winding up on {name}. No counter for that one.",
                              "Another hit we can't counter.")
-        return self.pick("No target line this turn, so I'll just go for damage.",
-                         "Can't tell who's next. Going for damage.",
-                         "No line again, so more damage.")
+        return self.pick("I'll just go for damage.", "Going for damage again.", "More damage.")
 
     def choice(self, view: View, plan: Plan, swapped: bool) -> str:
         """What's being done, said only once the screen shows it selected."""
@@ -711,13 +724,12 @@ class Lines:
         return self.pick(f"That broke the {part.lower()}.", f"{part.capitalize()} {is_are(part)} broken.")
 
     def monster_low(self, share: float) -> str:
-        if share < 0.15:
-            return self.pick("It's almost done.", "Nearly there.")
-        if share < 0.35:
-            return self.pick("It's getting weak.")
-        if share < 0.55:
-            return self.pick("It's down to about half.")
-        return ""
+        """Each step down gets said once a fight."""
+        step = 3 if share < 0.15 else 2 if share < 0.35 else 1 if share < 0.55 else 0
+        if step <= self.low_step:
+            return ""
+        self.low_step = step
+        return ("", "It's down to about half.", "It's getting weak.", "It's almost done.")[step]
 
 
 class Fight:
@@ -1114,7 +1126,7 @@ class Fight:
 
     def current_part(self, img: Image.Image) -> Part | None:
         mask = wheel_title(img)
-        scored = [(int(np.logical_xor(mask, p.mask).sum()), i) for i, p in enumerate(self.parts)
+        scored = [(_title_gap(mask, p.mask), i) for i, p in enumerate(self.parts)
                   if p.mask is not None]
         return self.parts[min(scored)[1]] if scored else None
 
@@ -1264,7 +1276,7 @@ class Fight:
         a game message into account, and return at the next menu. None when the fight's over. A menu left open gets backed out of quickly: the party waits forever
         on a menu."""
         t0 = time.monotonic()
-        hits, read_toast = 0, False
+        hits, read_toast, toast_at = 0, False, None
         last_screen, over, nudge = t0 + 9.0, 0, t0 + 14.0
         while time.monotonic() - t0 < 70 and not self.a.cancelled:
             img = await self._shot()
@@ -1285,11 +1297,14 @@ class Fight:
             if kind and kind in ANSWER and kind != self.seen_type:
                 self.seen_type = kind
                 self.note("mh_seen", {"type": kind})
-            if not read_toast and toast_up(img):
-                read_toast = True
-                self.aside(self.read_message(img))
-            elif read_toast and not toast_up(img):
-                read_toast = False
+            if toast_up(img):
+                if toast_at is None:
+                    toast_at = now
+                elif not read_toast and now - toast_at >= 0.3:  # it fades in
+                    read_toast = True
+                    self.aside(self.read_message(img))
+            else:
+                read_toast, toast_at = False, None
             if self.won:
                 self.ended = "won"
                 return None
@@ -1310,7 +1325,7 @@ class Fight:
         with contextlib.suppress(Exception):
             d = await self.ask("message", [image_part(crop, 800)], READ_TOAST, 200, 5)
             text = str(d.get("text") or "").lower()
-            if self.parts and ("slay" in text or "slain" in text):
+            if self.parts and any(w in text for w in ("slay", "slain", "its den", "retreating")):
                 self.won = True
                 return
             if "toppled" in text:
@@ -1463,6 +1478,13 @@ class Fight:
         if not won:
             await self._press("a", 1.0)  # past the rank screen
         return "That's the fight. We won."
+
+
+def _title_gap(a: np.ndarray, b: np.ndarray) -> int:
+    """How far apart two title masks are. The wheel can sit a few pixels off, so the best of the
+    small shifts counts."""
+    return min(int(np.logical_xor(a, np.roll(np.roll(b, dx, axis=1), dy, axis=0)).sum())
+               for dx in range(-10, 11, 2) for dy in (-2, 0, 2))
 
 
 def _same(a: np.ndarray, b: np.ndarray) -> bool:
