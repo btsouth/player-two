@@ -726,3 +726,41 @@ def test_live_acceleration_cannot_speed_a_spoken_line(tmp_path):
     p=mv.Piece('fast','ct',take='t',a=0,b=2,speed=5,captions=False,audio_mode='live')
     with pytest.raises(ValueError,match='Live accelerated audio'):
         mv.encode_clip(p,{'t':take},{},tmp_path,tmp_path/'bad.mp4','libx264')
+
+
+def test_how_bridge_keeps_one_voice_clock_and_requires_real_windows():
+    import pytest
+    takes={n:_take([],n,100) for n in ('take-A','game2','rdr-sam')}
+    takes['rdr-sam'].edit={'bridge':[{'take':n,'a':10,'b':10+d} for n,d in
+                                    [('take-A',3),('game2',3),('rdr-sam',4)]]}
+    ps=mv.how_bridge(takes,{'how':'voice.wav'},{'how':10})
+    assert [p.take for p in ps]==['take-A','game2','rdr-sam']
+    assert [p.vo_offset for p in ps]==[0,3,6] and sum(p.out_s for p in ps)==10
+    assert all(p.vo_prompt==mv.GENERAL_LINE and p.audio_mode=='game' and not p.captions for p in ps)
+    with pytest.raises(ValueError,match='exceeds'):
+        mv.how_bridge(takes,{}, {'how':10.01})
+    takes['game2'].duration=11
+    with pytest.raises(ValueError,match='outside'):
+        mv.how_bridge(takes,{}, {})
+
+
+def test_bridge_uses_the_later_voice_samples_instead_of_restarting(tmp_path):
+    import subprocess
+    import wave
+
+    import numpy as np
+    source=tmp_path/'source.mp4';vo=tmp_path/'vo.wav'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=s=64x64:r=60:d=0.5',
+                    '-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','0.5',
+                    '-c:v','libx264','-c:a','aac',str(source)],check=True)
+    n=np.arange(24000)/48000
+    samples=np.concatenate([np.sin(2*np.pi*440*n),np.sin(2*np.pi*880*n)])*.2
+    with wave.open(str(vo),'wb') as f:
+        f.setparams((1,2,48000,0,'NONE','not compressed'));f.writeframes((samples*32767).astype('<i2').tobytes())
+    take=mv.Take('t',source,0,.5,[],[])
+    p=mv.Piece('bridge','games',take='t',a=0,b=.5,captions=False,audio_mode='game',vo=str(vo),vo_offset=.5)
+    out=tmp_path/'out.mp4';mv.encode_clip(p,{'t':take},{},tmp_path,out,'libx264')
+    raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(out),'-f','f32le','-ac','1','-ar','48000','-'])
+    decoded=np.frombuffer(raw,np.float32)[2400:19200];phase=np.arange(len(decoded))/48000
+    power=lambda hz:abs(np.mean(decoded*np.exp(-2j*np.pi*hz*phase)))
+    assert power(880)>10*power(440)

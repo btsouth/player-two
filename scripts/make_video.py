@@ -63,7 +63,8 @@ NO_CODE = "No code written for this game. One line of notes."
 LIMIT_LINE = "Creator-tested. No blind player has tried it yet. That's next."
 INTRO_VO = "Player Two. For players who can't see the screen or can't hold a controller. You ask. It reads, answers and presses the buttons."
 LIMIT_VO = "I've tested this myself. No blind player has tried it yet. That's next."
-GENERAL_LINE = "Muse sees any game. Chrono Trigger and Monster Hunter also have code written for them. Red Dead has none."
+GENERAL_LINE = "Muse looks at the picture, so it can follow all three. Chrono Trigger and Monster Hunter also have code written for them. Red Dead has none."
+HOW_SECONDS = 10.0
 MAP_LINE = "Muse labelled this map. I checked it. Local code walks it."
 RETRO_QUOTE = "A blind person still cannot get Super Mario into the castle in Super Mario 64, nor defeat Lavos in Chrono Trigger."
 SE_NOTICE = ("The copyright of the materials used on this page or video is owned by SQUARE ENIX CO., LTD. "
@@ -144,6 +145,7 @@ class Piece:
     freeze: bool = False
     timing_group: str = ""
     vo_prompt: str = ""
+    vo_offset: float = 0.0  # continuous founder narration across the bridge shots
     fade_in: bool = False
     fade_out: bool = False
     vo: str = ""
@@ -880,6 +882,8 @@ def timing_text(parts: list[Piece], group: str) -> str:
         return f"Cuts and speed-ups: {source:.0f} s of play in {shown:.0f} s"
     if group=='fair':
         return f"Description shortened. {source-shown:.1f} s wait cut."
+    if group=="shop":
+        return f"Cuts between steps: {source:.0f} s of play in {shown:.0f} s"
     removed=source-shown
     return f"Wait cut: {removed:.1f} s"
 
@@ -993,12 +997,11 @@ def map_walk(take: Take | None, folder: Path) -> list[Piece]:
             for j,(x,y,rate) in enumerate(windows):
                 p=Piece(f'nav-{index}-{j}','ct',line='castle and fair',take=take.name,a=x,b=y,speed=rate,
                         captions=rate==1,layout='fight' if role in ('interrupt','fight','fight-win') else 'map',audio_mode='live')
-                if role in ('interrupt','fight','fight-win'):
-                    p.overlays.append(Overlay('Muse Spark decides the route and fight. Local code moves and takes turns.',34,'nav-route',0,p.out_s))
-                if role=='walk':p.overlays.append(Overlay(MAP_LINE,40,'nav-map',0,p.out_s))
+                if role=='fight' and rate>1:
+                    p.overlays.append(Overlay('Muse Spark chooses the route and fight. Local code executes.',34,'nav-route',0,p.out_s))
+                if role=='walk' and p.out_s>=2:p.overlays.append(Overlay(MAP_LINE,40,'nav-map',0,p.out_s))
                 if role=='exit':p.overlays.append(Overlay('Muse Spark planned the forest exit. Local code moves and takes turns.',34,'nav-route',0,p.out_s))
                 if role=='summary':p.overlays.append(Overlay('Description shortened',34,'trim',0,p.out_s))
-                if role=='fair-arrival':p.overlays.append(Overlay('Next: another run of the same save',34,'trim',0,p.out_s))
                 parts.append(p)
         steady_timing(parts,'nav')
         return parts
@@ -1013,6 +1016,31 @@ def map_walk(take: Take | None, folder: Path) -> list[Piece]:
     p.proof=str(folder/'atlas-proof.json')
     p.overlays=[Overlay(MAP_LINE,40,"how",0,b-a)]
     return [p]
+
+
+def how_bridge(takes: dict[str, Take], vo: dict[str,str], vo_s: dict[str,float]) -> list[Piece]:
+    """One continuous voice-over over three illustrative, real game shots."""
+    if vo_s.get('how',0)>HOW_SECONDS:
+        raise ValueError(f"How VO exceeds its {HOW_SECONDS:.2f}s footage slot")
+    # Source windows are selected together with the takes, never borrowed from another run.
+    config=takes.get('rdr-sam').edit.get('bridge',[]) if takes.get('rdr-sam') else []
+    if not config:
+        return [Piece('c-how','games',line='how VO / general and specific',kind='card',secs=HOW_SECONDS,
+                      vo=vo.get('how',''),vo_prompt=GENERAL_LINE,blocks=[(GENERAL_LINE,52,True)])]
+    if len(config)!=3 or [x['take'] for x in config]!=['take-A','game2','rdr-sam']:
+        raise ValueError('How bridge needs CT, Monster Hunter and Red Dead in that order')
+    out=[];elapsed=0
+    for i,w in enumerate(config):
+        name=w['take'];take=takes.get(name);a,b=float(w['a']),float(w['b'])
+        if not take or not 0<=a<b<=take.duration:
+            raise ValueError('How bridge source window outside its real take')
+        p=Piece('c-how' if i==0 else f'c-how-{i}','games',line='how VO / general and specific',
+                take=name,a=a,b=b,captions=False,audio_mode='game',vol=.35,
+                vo=vo.get('how',''),vo_offset=elapsed,vo_prompt=GENERAL_LINE,layout='map',
+                overlays=[Overlay(GENERAL_LINE,44,'how',0,b-a)])
+        out.append(p);elapsed+=p.out_s
+    if abs(elapsed-HOW_SECONDS)>.001:raise ValueError('How bridge must cover its complete VO slot')
+    return out
 
 
 def make_plan(
@@ -1053,6 +1081,18 @@ def make_plan(
     if take and take.edit.get('shop_end') and lines.get('A4'):
         for p in lines['A4']:p.b=min(p.b,float(take.edit['shop_end']))
         lines['A4']=[p for p in lines['A4'] if p.b>p.a]
+    if take and lines.get('A3b'):
+        for p in lines['A3b']:
+            p.overlays=[o for o in p.overlays if o.where!='trim']
+            p.overlays.append(Overlay('Another run of the same save. Description shortened.',34,'trim',0,p.out_s))
+    if take and take.edit.get('shop_cut') and lines.get('A4'):
+        lo,hi=map(float,take.edit['shop_cut']);new=[]
+        if any(max(lo,a)<min(hi,b) for a,b in speech_spans(take.events,take.start)):
+            raise ValueError('Shop cut overlaps real speech')
+        for p in lines['A4']:
+            for x,y in [(p.a,min(p.b,lo)),(max(p.a,hi),p.b)]:
+                if y>x:new.append(dataclasses.replace(p,id=p.id+f'-cut-{len(new)}',a=x,b=y,overlays=[]))
+        steady_timing(new,'shop');lines['A4']=new
     maps=[*lines.get('A1',[]),*map_walk(takes.get('nav'),folder),*lines.get('A3b',[]),*lines.get('A4',[])]
     for p in maps:
         p.sharp_at=None
@@ -1071,18 +1111,7 @@ def make_plan(
         if vo_s.get(key,0)>limit:raise ValueError(f"{key} VO exceeds its {limit:.2f}s slot")
     games=[]
     rdr=takes.get('rdr-sam')
-    how_len=7.0
-    if vo_s.get('how',0)>how_len:raise ValueError(f"How VO exceeds its {how_len:.2f}s footage slot")
-    if rdr:
-        a,b=map(float,rdr.edit['how']);how_len=b-a
-        if vo_s.get('how',0)>how_len:raise ValueError(f"How VO exceeds its {how_len:.2f}s footage slot")
-        how=Piece('c-how','games',line='how VO / general and specific',take=rdr.name,a=a,b=b,
-                  captions=False,audio_mode='game',vol=.35,vo=vo.get('how',''),layout='rdr',
-                  vo_prompt=GENERAL_LINE,
-                  overlays=[Overlay(GENERAL_LINE,44,'how',0,b-a)])
-    else:
-        how=Piece('c-how','games',kind='card',secs=how_len,vo=vo.get('how',''),vo_prompt=GENERAL_LINE,blocks=[(GENERAL_LINE,52,True)])
-    games.append(how)
+    games.extend(how_bridge(takes,vo,vo_s))
     mh=takes.get('game2')
     games+=mh_story_pieces(mh) if mh and mh.edit.get('story') else game_pieces('game2',mh,False,clips.get('game2'),warnings)
     if rdr:games+=rdr_sam_pieces(rdr)
@@ -1115,7 +1144,7 @@ def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
     for group in {p.timing_group for p in parts if p.timing_group}:
         if not valid_timing_group(parts,group):out.append(f"unsupported time summary: {group}")
     for p in parts:
-        if p.id in ("c-how","identity","limit") and not p.vo:
+        if (p.id.startswith("c-how") or p.id in ("identity","limit")) and not p.vo:
             out.append(f"missing voice-over audio: {p.id}")
         if any(o.text == VO_LABEL for o in p.overlays):
             out.append(f"no voice-over for {p.id} (vo-why.* in the folder)")
@@ -1267,6 +1296,13 @@ def label_png(path: Path, o: Overlay) -> Path:
             font=_font(True, 20),
             fill=(200, 166, 190),
         )
+    elif o.where.startswith('time-'):
+        f=_font(True,34)
+        lines=_wrap(d,o.text,f,600)
+        x,y=W-64-600,52
+        h=len(lines)*46+26
+        d.rounded_rectangle((x-16,y-10,W-48,y+h),radius=16,fill=(9,15,25,225))
+        for i,ln in enumerate(lines):d.text((x,y+i*46),ln,font=f,fill='white')
     elif o.where.startswith("trace"):
         lines = o.text.split("\n")
         # Request chip and measured result are independent, floating surfaces.
@@ -1350,7 +1386,7 @@ def label_png(path: Path, o: Overlay) -> Path:
         d.rectangle((x0 * W, y0 * H, x1 * W, y1 * H), outline=ACCENT, width=6)
     else:
         f = _font(True, max(34, o.size))
-        lines = _wrap(d, o.text, f, 1176 if o.where=="how" else 1728 if o.where=="lavos" else 1600)
+        lines = _wrap(d, o.text, f, 1176 if o.where=="how" else 1080 if o.where=="nav-map" else 1728 if o.where=="lavos" else 1600)
         is_speed=bool(re.fullmatch(r"\d+(?:\.\d+)?x",o.text))
         if is_speed:
             lines = [o.text + " SPEED"]
@@ -1371,9 +1407,6 @@ def label_png(path: Path, o: Overlay) -> Path:
             x,y=640,700
         if o.where=="pause":
             x=W-tw-64
-        if o.where.startswith('time-'):
-            x,y=(W-tw)//2,(775 if o.where=='time-cold' else 180 if o.where in ('time-mh','time-mh-cuts') else 400 if o.where=='time-nav' else 710)
-            if o.where=='time-fair':x,y=W-tw-64,52
         if o.where=='nav-map':x,y=64,52
         if o.where=='nav-route':x,y=64,500
         if o.where=='bench':
@@ -1485,7 +1518,7 @@ def evidence_overlays(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
                 row["badge_from"] += offset
             if p.layout != "black":
                 report += found
-        if p.timing_group=='cold':
+        if p.timing_group in ('cold','nav'):
             for o in p.overlays:
                 if o.where.startswith('trace'):o.text='\n'.join(o.text.splitlines()[:2])
             for row in report:
@@ -1589,7 +1622,7 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     inputs = ["-ss", f"{p.a}", "-to", f"{p.b}", "-i", str(take.video)]
     n = 1
     if p.vo:
-        inputs += ["-i", p.vo]
+        inputs += ["-ss", f"{p.vo_offset}", "-i", p.vo]
         n = 2
     game_audio = take.video.with_suffix(".game.wav")
     voice_audio = take.video.with_suffix(".voice.wav")

@@ -122,7 +122,9 @@ under0.35s, and only displays the12.7s/1.1s comparison when it matches. Missing 
 ## Monday voice slots and audio
 
 Put vo-intro.wav, vo-how.wav and vo-limit.wav beside takes.json, then rebuild without --cut.
-Current slot ceilings: intro8.50s, How7.00s, limit6.00s. Longer takes are refused. The exact prompts
+Current slot ceilings: intro8.50s, How10.00s, limit6.00s. Longer takes are refused. The How slot is one continuous voice over real CT/MH/RDR shots (3s/3s/4s).
+Its script: "Muse looks at the picture, so it can follow all three. Chrono Trigger and Monster Hunter also have code written for them. Red Dead has none."
+Per-shot vo_offset keeps the founder voice on one clock. The exact prompts
 are stored in the cut's vo_prompt fields. Intro and How use quiet game-only illustrative footage;
 that is never used as evidence of the app's silence. The creator-testing limit remains a clean
 card, with the first-person limit line spoken over it. Missing VO still blocks final mode.
@@ -159,3 +161,9 @@ stems at normal speed. There is no narration muting or accelerated speech; the s
 cuts occur between requests and turns. carry_requests can recall an actual typed request on its
 answer; microphone requests must remain in the selected media. Status and weak-point badges
 retain their distinct real call durations. All source windows need fresh review on replacement.
+
+Timing disclosures use one fixed upper-right corner tag at34px throughout their source group.
+Navigation explanations are staggered into speech-free gaps; its requests keep their identity,
+while completed measurements remain in the evidence file. Do not restore overlapping route
+explanation, measured badge and reply captions. Shop edits refuse any cut through logged speech
+and retain a computed cuts-between-steps disclosure.
