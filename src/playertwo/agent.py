@@ -585,9 +585,10 @@ def others_of_kind(m, name: str, said: str, at: tuple[float, float]) -> list[str
 
 def plain_reply(content: str) -> str:
     """What to say from a reply in words, not a tool call. The model sometimes labels it
-    ("Finish: ...") or writes the tool's arguments out ('{"text": "..."}'), and neither
-    is for saying aloud."""
-    text = re.sub(r"^\s*(finish|say)\s*:\s*", "", content, flags=re.IGNORECASE)
+    ("Finish: ...", "Finished with the message: ...") or writes the tool's arguments out
+    ('{"text": "..."}'), and neither is for saying aloud."""
+    text = re.sub(r"^\s*(finish(ed)?( with( the)? (message|text))?|say)\s*:\s*", "",
+                  content, flags=re.IGNORECASE)
     if text.lstrip().startswith("{"):
         with contextlib.suppress(ValueError):
             args = json.loads(text)
