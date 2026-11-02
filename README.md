@@ -1,218 +1,198 @@
 # Player Two
 
-**An AI co-op partner for blind and low-vision gamers, and for players who can't easily hold a
-controller. It reads the game out loud, answers questions, and plays when you ask, all by voice.**
+An AI co-op partner for blind, low-vision and motor-impaired gamers: it reads the screen,
+answers questions and presses the buttons when you ask.
 
-Built for the Meta Global AI Developer Hackathon, Indie Developer track. Everything in this repo
-was written during the event; the first commit is from Oct 27, 2026.
+> **VIDEO PLACEHOLDER: final 3 minute demo goes here before submission.**
+> Final recording results below are marked `TODO-FINAL` until measured on the recorded build.
 
-## Why
+For players who need a sighted friend to read a menu, find a doorway or take a turn.
+Say “take me to the fair”, “buy three potions” or “Crono, use Cyclone”. Player Two narrates,
+acts through a virtual controller, checks the result and tells you what happened.
 
-Most games never get a screen reader. A few have one because a fan spent months writing a mod for
-that one game. Everywhere else, a blind player needs a sighted friend on the couch to read the
-screen and press the buttons.
+**Built during the Oct 26 to Nov 4, 2026 event window.** This project starts at commit
+`5a89075`, Oct 27, 2026 at 17:55 ET. The reader, agent, navigation, tools and tests in this
+repository were built for the Meta Global AI Developer Hackathon, Indie track.
+Dependencies and the commercial games themselves predate the event. MIT licensed code.
+**No blind player has tested it yet.** These are developer measurements, not accessibility validation.
 
-In 2019 the RetroArch emulator added accessibility features for blind players. Its release post
-said:
+## What has actually worked
 
-> "A blind person still cannot get Super mario into the castle in Super Mario 64, nor defeat Lavos
-> in Chrono Trigger ..."
->
-> [RetroArch 1.8.2: Accessibility features for blind people](https://www.libretro.com/index.php/retroarch-1-8-2-coming-soon-accessibility-features-for-blind-people/),
-> libretro, December 12, 2019
+Historical live Steam Chrono Trigger checks, Nov 1 afternoon, ending at `3b98a99`.
+Requests were **typed**, not spoken. Times cover the whole task. These are small repeated
+trials on selected saves, with private atlas data and Battle Mode set to Wait, not general
+success rates. Newer code and the final voice recording need their own results.
 
-Player Two is meant to be that sighted friend, there whenever you want to play. It works on the
-game as it is: no mods, and nothing the game's developer has to build. Chrono Trigger on Steam is
-the game it's built and measured on.
+| Request | Passed | Whole task | Limit |
+|---|---:|---|---|
+| Take me to the fair | 11/11 | 3 to 4 s | From the demo world-map position |
+| Buy three potions | 11/11 | 19 to 50 s in the run sheet | Final three entrance-to-purchase runs: 18.6, 26.0, 26.7 s after map fixes |
+| What are we fighting? | 3/3 | 1.9 to 3.2 s | Fight-start enemy count had separate errors |
+| Crono, use Cyclone | 2/2 | 9.5 to 12.2 s | Only when Crono was ready |
+| Win this fight for me | 3/4 | Wins 55 to 75 s | Lost when begun with two party members knocked out |
+| Take me to the save point | 2/2 | 12.6 and 18.2 s | Walks there; does not save |
 
-## What it does
+The same development runs lost 3/3 boss attempts, missed moving people and once spoke an
+off-topic model answer. More recent guards have unit tests; that does not establish live reliability.
 
-- **Reads the game as it happens:** dialogue word for word with who's speaking, the highlighted
-  option in a menu or a Yes/No choice, whose turn it is, who's in danger.
-- **Answers questions:** "Where am I?" "What's on the screen?" "What are we fighting?"
-- **Gets you places:** "Take me to the fair." "Take me back outside." It knows the game's maps,
-  so it walks the right way instead of wandering.
-- **Does things for you:** "Buy three potions." "Crono, use Cyclone." "Win this fight for me."
-  It says what it's doing, checks the result on screen, and says what happened, bad news included
-  ("Cyclone went off, but Marle dropped to 1 HP").
-- **Asks instead of guessing** when a request is unclear, and says so when it can't read
-  something.
-- **Speaks through your own screen reader** (Orca, NVDA) if you like, or in its own natural voice.
-- **Hands-free mode** for players who can't easily press a key: it listens for "Player Two, ...".
-
-## Demo video
-
-> **VIDEO PLACEHOLDER.** The 3 minute demo (live Steam Chrono Trigger, every request spoken) goes
-> here before Nov 4.
-
-<!-- Replace the placeholder above with: [![Player Two demo](thumbnail)](video link) -->
-
-## Measured on live Steam
-
-Chrono Trigger on Steam, on my Linux desktop, three sessions from the night of Oct 31 to the
-afternoon of Nov 1, all added together, with Battle Mode set to Wait. Each request was sent to
-the running app as text, so speech recognition isn't part of these numbers. Times are for the
-whole job; Player Two starts speaking within 0.1 to 2 seconds of a request.
-
-| Request | Passed | Time |
+| Final demo game | Intended demonstration | Final recorded-build result |
 |---|---|---|
-| "Where am I?" | 12/12 | 4 to 10 s |
-| "What's on the screen?" (the demo save) | 9/9 | first words in about 2 s |
-| "What does it look like?" (after one fix; 0/2 before it) | 4/4 | 2 to 3 s |
-| "Who's here?" | 1/1 | 2.4 s |
-| "Take me to the fair", from the world map | 22/22 | 3 to 10 s, once 38 s |
-| "Take me to the fair", from inside a shop or the inn | 4/4 | 20 to 36 s |
-| "Take me back outside" | 22/23 | 4 to 29 s |
-| "Buy three potions" (gold and count checked every time) | 14/14 | 19 to 48 s |
-| "Buy a hi-potion" where it isn't sold: says so and lists what is | 1/1 | 16 s |
-| "Rest at the inn" (after two fixes; the 3 tries before them failed) | 5/5 | 26 to 63 s |
-| "Take me to the save point" | 2/2 | 13 to 18 s |
-| "Talk to ..." someone, by name or description | 14/19 | 8 to 107 s |
-| "What are we fighting?" | 12/12 | 2 to 6 s |
-| "Attack the one on the left" | 13/14 | 6 to 10 s |
-| "Crono, use Cyclone", when it was his turn (4 other times it said he wasn't ready or was knocked out, which was true) | 9/9 | 9 to 27 s |
-| "Heal Marle" and the like, in a fight (once at full HP: it said so and pressed nothing) | 15/17 | 1 to 42 s |
-| "Win this fight for me" | 17/18 | 10 to 155 s |
-| "Run away" | 6/6 | 10 to 16 s |
-| "Heal everyone up", outside a fight | 4/4 | 16 to 26 s |
-| "Set the battle mode to Wait" | 8/8 | 8 to 12 s |
+| Chrono Trigger (Steam) | Read, navigate, shop, fight | **TODO-FINAL:** commit, spoken k/n, timings, clip |
+| Monster Hunter Stories 3 | Read battle choices and help select actions | **TODO-FINAL:** accuracy, moves actually executed, clip; game-specific routine is experimental |
+| Red Dead Redemption | Describe a landscape; leave room for game speech | **TODO-FINAL:** description accuracy, speech overlap, clip; no autonomous 3D play claimed |
 
-What doesn't work well yet, from the same runs:
+Final footage must show only behavior verified in that take. No claim of beating Lavos,
+playing arbitrary games, or replacing a game's own accessibility features.
 
-- A long trip to Guardia Castle took 2 to 4 minutes through forest fights.
-- "Win this fight for me" lost once, a fight that started with two of three already knocked out,
-  and it lost all 3 tries against a boss.
-- "Talk to ..." can miss people who walk around. When two people fit a description it now asks
-  which one.
-- Once in about 60 requests the model answered with a sentence that had nothing to do with the
-  game, and it was read out.
-- On a save where Crono was alone, "What's on the screen?" said I was Marle (3/3).
+## Try it
 
-Offline benches, on labelled frames from the Steam version and on the SNES version in an emulator:
+A fresh install includes the generic narrator and agent, plus the Chrono Trigger pixel reader.
+**It does not include the private maps, room surveys, game packs, walkthroughs or saves used
+for the navigation results above.** You need your own game. See [game data](#game-data).
 
-| Narration of 163 labelled Steam frames | Muse Spark on every screen | Pixel reader first, Muse Spark for the rest |
-|---|---|---|
-| Must-say items said (text, highlighted option, who's in danger), average per frame | 92% | 100% |
-| The same on 43 frames held out from the design | 88% | 100% |
-| Median time to the first word | 1.45 s | 0.30 s |
-| Cost per 1,000 screens | $11.14 | $2.70 |
+### Requirements
 
-Walking on the SNES version, judged by reading the game's memory: world-map trips passed 144/144
-with the walker alone, and 48/52 and 50/54 with Muse Spark choosing the place from the request.
-Trips inside towns and buildings passed 95/104 with the walker alone and 22/24 with the full agent.
+- Windows 10/11 or Linux; Python 3.12 is selected by the installer.
+- A Meta Model API key with billing from [dev.meta.ai](https://dev.meta.ai) for live narration,
+  questions and speech recognition. Open-weight mode also needs its provider's credentials.
+- A supported capture session: Windows windowed/borderless, Linux Hyprland, or X11.
+  GNOME/KDE Wayland capture is unsupported. X11 captures the first screen, not just the game.
+- Microphone for voice commands, audio output or a supported screen reader. GPU optional.
+- Linux: git, [uv](https://docs.astral.sh/uv/), C compiler and Linux kernel headers (evdev),
+  PortAudio and gdbus. Ubuntu: `sudo apt install git build-essential linux-headers-generic libportaudio2 libglib2.0-bin`.
+  Add `curl` if installing uv with its shell installer.
 
-## How it uses Meta's models
+### Linux
 
-| Model | What it does |
-|---|---|
-| **Muse Spark 1.3** | The brain. Understands the spoken request and plans it with tool calls ("go to Leene Square", "buy 3 Potion at the item seller", "Crono: Cyclone"). Describes scenes, streaming into the voice sentence by sentence. In "win this fight for me" it picks the next command whenever something surprising happens, with the game paused while it thinks. Reads what the pixel reader can't, and finds people and things on screen for walking. |
-| **Muse Spark 1.3, offline** | Builds a game's data once: read all 118 place labels on fan-made world-map images, named the people and exits in each surveyed room, turned a text walkthrough into a list of steps for "what do I do next?", and judged the live task runs. |
-| **Muse Voice Transcribe** | Turns speech into text live, with the game's names as keywords. |
-| **SAM 3.1** | Exact boxes. "Where is it?" answers with a short sound panned to where the thing is, and walking uses SAM's box when Muse Spark's is a sprite off. |
-| **Muse Spark Open** | The same narrator and agent on open weights, through a hosted endpoint (Baseten or Modal); one setting switches. Both brains got 8/8 on a test battle scene and 20/22 on Persona 4 Golden narration checks. Meta's API is the default because it's faster: a median 1.4 s per narration line against 5.3 s. |
-
-Meta has no text-to-speech model, so the voice is [Kokoro](https://github.com/hexgrad/kokoro),
-running on your PC.
-
-## How it works
-
-```mermaid
-flowchart TB
-    you(("You"))
-    game["The game"]
-    subgraph meta["Meta Model API"]
-        stt["Muse Voice Transcribe<br/>speech to text"]
-        spark["Muse Spark 1.3<br/>understands, plans, describes"]
-        sam["SAM 3.1<br/>exact boxes"]
-    end
-    subgraph pc["On your PC"]
-        capture["Screen capture<br/>a few frames a second"]
-        reader["Pixel reader<br/>text, cursor, HP in 0.1 s"]
-        hands["Executors and walker<br/>check every press"]
-        pad["Virtual Xbox pad"]
-        voice["Kokoro voice<br/>or your screen reader"]
-    end
-    you -- "hold F8 and talk" --> stt
-    stt --> spark
-    game --> capture
-    capture --> reader
-    capture -- "what the reader can't read" --> spark
-    spark -- "tool calls" --> hands
-    sam --> hands
-    reader --> hands
-    hands --> pad
-    pad --> game
-    reader --> voice
-    spark --> voice
-    voice --> you
+```bash
+git clone https://github.com/btsouth/player-two && cd player-two
+uv tool install --python 3.12 . --excludes uv-excludes.txt
+# If player-two is not found: run uv tool update-shell, then reopen the terminal.
+player-two --help
+player-two setup
 ```
 
-1. The game window is captured a few times a second, and a new screen is noticed once it settles.
-2. The pixel reader (Chrono Trigger on Steam so far) reads the game's own font, cursor, menus and
-   HP in about a tenth of a second. What it can't read goes to Muse Spark.
-3. You hold a key and talk, or say "Player Two, ..." hands-free. Muse Voice Transcribe turns it
-   into text, and Player Two repeats it back in your words at once, so a misheard request is
-   caught before anything happens.
-4. Muse Spark plans the request with tools: press buttons, walk somewhere, talk to someone, fight,
-   shop, or ask you a question.
-5. Code on the PC carries it out on a virtual Xbox controller (uinput on Linux, ViGEm on
-   Windows), checks every press against the reader, and reads the result: HP before and after,
-   gold before and after.
+Setup asks for the key, speech output, microphone, controller, hands-free/talk key and launcher.
+It can explain missing devices on a headless machine, but a complete live session needs a desktop.
+The controller permission step may request sudo; logging out and back in may be needed.
+With NVIDIA, use `".[cuda]"` instead of `.` (roughly 2 GB extra dependencies).
 
-**Why split it this way.** A blind player can't glance at the screen to check what the AI did. A
-wrong HP number, a misread menu item or a press on the wrong option is worse than silence, and a
-model call before every button press makes a game unplayable. So the model decides, and local
-code does the parts that must be exact and fast. Walking works the same way: the maps were
-surveyed once in an emulator, the player is found on them by image matching, and the route is
-planned with A*, because vision models are bad at maps (Muse Spark took a village for the castle
-and put the fair west of town when it's north).
+### Windows
 
-Every part is described in [docs/how-it-works.md](docs/how-it-works.md).
-
-## Quick start
-
-You need:
-
-- Windows 10 or 11, or Linux.
-  - Windows: run the game windowed or borderless. Exclusive fullscreen can capture as black.
-  - Linux: Hyprland (Omarchy), where it captures just the game window, or an X11 session, where
-    it captures the whole first screen. GNOME and KDE on Wayland can't be captured yet; Player Two
-    says so if the picture comes back black.
-  - Linux also needs `git`, [uv](https://docs.astral.sh/uv/), a C compiler with kernel headers
-    (for the virtual controller), PortAudio (`libportaudio2` on Debian and Ubuntu, `portaudio` on
-    Arch and Fedora), and `gdbus` for screen reader output.
-- A Meta Model API key from [Meta's developer site](https://dev.meta.ai), with billing set up.
-  A described screen costs between a quarter of a cent and a cent in my tests.
-- Speakers or a headset. A headset is best for hands-free.
-- A graphics card is optional: the voice runs on the processor too.
-
-On Windows, paste this into PowerShell. It installs everything, including the virtual controller
-driver (Windows asks for permission once), then starts setup:
+Paste into PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/btsouth/player-two/main/install.ps1 | iex
 ```
 
-On Linux:
+The script installs uv, Python 3.12, the Windows extras, the Visual C++ runtime and, on x64,
+ViGEmBus with one elevation prompt, then starts setup. It downloads **main**, so branch-only
+fixes are not installed until merged. ViGEmBus is retired; if unavailable, keyboard control
+is the fallback. ARM uses keyboard control. Use a windowed or borderless game.
+Earlier Windows 11 VM testing covered installation and input; the deep Chrono Trigger path
+has only been measured on Linux. This is not a fresh Windows acceptance result for every commit.
+
+### No key or no desktop? Run the offline checks
+
+After the Linux tool install, from the clone:
 
 ```bash
-git clone https://github.com/btsouth/player-two && cd player-two
-uv tool install --python 3.12 . --excludes uv-excludes.txt
-player-two setup
+uv run --python 3.12 python scripts/self_check.py
 ```
 
-The `--python 3.12` matters: uv otherwise picks the newest Python, and onnxruntime has no build
-for Python 3.15 yet. With an NVIDIA card, install `".[cuda]"` in place of `.` to run the voice on
-it (about 2 GB more; each line starts about half a second sooner).
+This loads the packaged reader assets, processes a blank frame, and routes around a wall
+with the real A* planner. No network calls, audio, controller or desktop are opened. It is
+an install smoke check, **not an AI gameplay demo**. For development, `uv run python scripts/self_check.py`
+works after `uv sync --python 3.12 --group dev`.
 
-Setup asks one question at a time: your key, screen reader, language, how much it says,
-microphone, controller, hands-free, talk key and app launcher. Then start your game and run
-`player-two`, or pick **Player Two** in your app launcher. It finds the game window by itself,
-says hello, and starts narrating. Hold **F8** and talk. Setup adds that key on Omarchy and
-Hyprland (on GNOME, as press to start and press again to stop), and Player Two takes it itself on
-Windows; elsewhere, bind `player-two ctl talk` to a key
-(press to talk, press again to stop), or turn on hands-free. Say "help" to hear what you can say,
-and "what's wrong?" if something doesn't work.
+For a no-commercial-game demo on a supported desktop, open `tests/arena/index.html` in a browser
+from this clone. It is a small local test battle: up/down choose, Enter confirms, Escape cancels.
+With a key, run:
+
+```bash
+player-two run --controls keyboard --window Arena --game "a small JRPG test scene" --companion off
+# In another terminal, while the Arena window is focused:
+player-two ctl do "Read the dialogue"
+```
+
+Then try “attack the left enemy”. A Chromium browser on Hyprland can receive keyboard input;
+other browser/session combinations are not guaranteed. `tests/town/index.html` supplies a
+walking scene. These synthetic fixtures contain no commercial game footage. They work manually
+without a key; Player Two's AI does not. Automated trials are in `scripts/arena_trials.sh` and
+`scripts/town_trials.sh` and require an isolated desktop, credentials and extra tools.
+
+### Play
+
+Start your game, run `player-two`, hold F8 and speak. Setup binds the talk key on Hyprland and
+Windows; elsewhere bind `player-two ctl talk` (toggle) or use hands-free. A headset reduces echo.
+Say “stop” to cancel. Back up saves before allowing actions. Screen-reader output supports Orca,
+speech-dispatcher and NVDA; JAWS is implemented but untested.
+
+## How Meta models are used
+
+| Model | Exact role and implementation |
+|---|---|
+| Muse Spark 1.3 | Scene narration streams to speech (`narrator.py`, `muse.py`); tool-calling plans in `agent.py`; visual grounding and fallback reads. Offline tools label maps/rooms and build walkthrough steps. |
+| Muse Voice Transcribe | Live speech-to-text in `listen.py`, with game keywords. It is not the speaking voice. |
+| SAM 3.1 | Segmentation/boxes for “where is it?” and optional walking target refinement (`locate.py`, `walk.py`). No-match falls back to Spark; it is not required for each press. |
+| Muse Spark Open | `brain = "open"` switches narration and tool calls to a hosted OpenAI-compatible provider. A saved-frame narration on Baseten returned the visible result text in 6.0 s on Nov 1; this is not a new live agent benchmark. SAM and transcription remain on Meta's API. |
+
+The voice is [Kokoro](https://github.com/hexgrad/kokoro), running locally. Silero VAD detects
+speech. Open weights are hosted, not running on the player's PC. Baseten's published rates are
+$1.25/M input, $0.15/M cached input and $4.25/M output tokens
+([provider](https://www.baseten.co/library/muse-spark-open/)); the saved-frame call used
+2,401 input and 294 output tokens, approximately $0.0043 before credits. This is an estimate,
+not an invoice. A shorter 400-token JSON probe exhausted its budget and returned no usable content.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    player[Player request] --> stt[Muse Voice Transcribe]
+    stt --> route[Local command router]
+    route --> spark[Muse Spark or Spark Open]
+    game[Game window] --> capture[Capture and change detection]
+    capture --> reader[Pixel reader]
+    capture --> spark
+    spark --> tools[Executors and navigation]
+    route --> tools
+    sam[SAM 3.1 boxes] --> tools
+    reader --> tools
+    tools --> pad[Virtual pad or keyboard]
+    pad --> game
+    game --> capture
+    reader --> speech[Kokoro or screen reader]
+    spark --> speech
+    audio[Game speech detector] --> speech
+```
+
+- **Pixel reader:** Chrono Trigger's font, cursor, turn and HP are read locally (`glyphread.py`,
+  `ctsteam.py`, `ctscreen.py`). Ambiguous screens go to Spark. It is a per-game reader, not universal OCR.
+- **Atlas navigation:** survey once, locate the view by image matching, route with A*, then check
+  position as the character moves (`atlas.py`, `rooms.py`). Emulator RAM is survey/test ground truth;
+  live Steam navigation uses pixels, not RAM. Private atlas images are not shipped.
+- **Fast path:** common supported Chrono Trigger commands go straight to local executors
+  (`fast.py`), with no model planning turn. Other requests use the tool loop.
+- **Checks after actions:** battle, shop and menu executors check highlights and before/after
+  values. Generic press sequences force a new look before a confirm after another button.
+  This is evidence checking, not a guarantee that every arbitrary action succeeds.
+- **Game speech hold:** Linux game-audio VAD holds narration during detected speech
+  (`gameaudio.py`). It has recorded-audio tests; final live cutscene coverage is `TODO-FINAL`.
+  It is not available on Windows, and detection can miss speech.
+
+[Implementation walkthrough](docs/how-it-works.md) explains the tools and failure handling.
+
+## Limits and player control
+
+The strongest action support is Chrono Trigger in Wait mode. Deep support costs per-game work.
+Generic descriptions and tools can fail on other games; action games and autonomous 3D traversal
+are not supported. Moving the game between monitors can break image scale matching.
+
+Hands-free has generated-voice tests, not player validation in a real room. Safety prompts for
+saving, loading and story choices are model instructions, not an enforced transaction boundary.
+Single-player only: virtual input can conflict with online anti-cheat. Screen frames and speech
+are sent to model providers; local notes and event logs may contain game text or your requests.
+No blind player has used this build. No outreach or user-benefit outcome is claimed.
 
 ## What you can say
 
@@ -237,46 +217,6 @@ game:
 | "pause narration" / "resume narration" | stops and restarts narration ("pause" alone pauses the game) |
 | "what's wrong?" | what it can and can't reach (game, controller, microphone, talk key) and the last problem |
 | "help" / "goodbye" | what you can say / quit |
-
-## Accessibility
-
-- **No step needs sight.** Setup is plain questions and answers, one line each with the default in
-  brackets, so it reads well in a screen reader. Problems (no key, no microphone, no controller,
-  no network) are spoken with how to fix them, not printed.
-- **Your screen reader, your settings.** With `output = "screen-reader"`, its words go to Orca
-  (and on to a braille display) or speech-dispatcher on Linux, or to NVDA or JAWS on Windows, at
-  the voice and speed you already use. Tested with Orca 51, speech-dispatcher and NVDA 2026.3.
-  JAWS is not tested yet.
-- **Catch mistakes early.** Every request gets an instant spoken echo in your words. It asks
-  before anything that matters, and says so when it can't read something.
-- **Fits how you play.** Terse mode for fast screen reader users, adjustable speed, and narration
-  in English, Spanish, French, Italian, Portuguese or Hindi (it translates on-screen text).
-- **Without a controller.** Hands-free mode listens all the time and acts only on what starts with
-  "Player Two". The talk key can also be a press to start and another to stop.
-- **Low vision.** An optional companion window shows what it sees, says and presses, with large
-  captions and a box to type to it.
-- **Who has tested it:** only me. I'm very nearsighted, not blind, and no blind player has used it
-  yet. Sessions with blind players are the next step.
-
-## Limits
-
-- The deep Chrono Trigger support (the pixel reader, the battle, shop and menu executors, the
-  surveyed maps) is work for each game. Other games get the general features: narration,
-  questions, button presses, and walking to what's on screen in 2D games.
-- Turn-based and menu games only. It doesn't play action games for you (it can warn about low
-  health), and it gets lost in 3D dungeons.
-- Chrono Trigger needs Battle Mode set to Wait; in Active mode its commands land too late. Start
-  the game on the monitor it will stay on: a game moved to another monitor can draw at a slightly
-  different scale, and map positions come out wrong.
-- The Chrono Trigger work was tested on Linux (Hyprland) only. Windows was tested on a clean
-  Windows 11 virtual machine (install, controller, NVDA, a live session), not with Chrono Trigger.
-- Hands-free is tested only with generated voice clips, not a real voice in a real room. Over
-  speakers, words said over its longer lines can get lost.
-- Asking before saving, loading or a story choice is an instruction to the model, not a block in
-  code, so back up saves you care about.
-- Single-player only: virtual controllers can trip anti-cheat in online games.
-- On Windows the virtual controller needs ViGEmBus, which its maintainer has retired. It still
-  installs and works, and Player Two falls back to keyboard input without it.
 
 ## Game data
 
@@ -334,51 +274,22 @@ open_model = "meta-models/muse-spark-open-1026"
 
 SAM 3.1 and speech recognition stay on Meta Model API either way.
 
-## Development
+## Development and evidence
 
 ```bash
 uv sync --python 3.12 --group dev
-uv run pytest -q                  # unit tests, on recorded frames where they're available
 uv run ruff check src tests scripts
-uv run player-two narrate shot1.png shot2.png --wav out.wav
-uv run player-two ask --dry-run --images shot.png -- "who is talking?"
+uv run pytest -q
+uv run python scripts/self_check.py
 ```
 
-Tests that need game frames, maps or recordings skip without them, since those are game art.
-`player-two ctl do "take me to the fair"` sends a request to a running session as if you'd said
-it, and `player-two run --log events.jsonl` keeps everything it heard and said.
-
-The benches in `scripts/` need a copy of the game or frames from it, and the emulator ones an
-isolated desktop (omabox, my own tool for that), so they don't run as is elsewhere:
-
-- `emu_tasks.py`, `rooms_bench.py`, `atlas_walk.py`: the SNES version in RetroArch, each task
-  judged by reading the game's memory.
-- `narrator_bench.py`: narration of labelled Steam frames, scored for what had to be said, what
-  was made up, and time to the first word.
-- `play_tasks.py`: tasks on the Steam version, with Muse Spark judging the last screen.
-- `arena_trials.sh`, `town_trials.sh`: scored runs against the test scenes in `tests/arena` (a
-  small JRPG battle) and `tests/town` (a top-down town).
-- `survey.py`, `survey_rooms.py`, `label_atlas.py`, `build_quests.py`, `atmos_rooms.py`: build a
-  game's maps, room survey, walkthrough steps and place descriptions.
-- `demo_record.sh`, `demo_captions.py`: record a monitor with sound, and turn the event log into
-  subtitles.
-
-## Credits
-
-- Meta's [Muse Spark, Muse Voice Transcribe, SAM 3.1 and Muse Spark Open](https://dev.meta.ai).
-- [Kokoro](https://github.com/hexgrad/kokoro) (voice, Apache 2.0 weights) through
-  [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx).
-- [Silero VAD](https://github.com/snakers4/silero-vad) (speech detection for hands-free).
-- [ViGEmBus](https://github.com/nefarius/ViGEmBus) and
-  [vgamepad](https://github.com/yannbouteiller/vgamepad) (the controller on Windows),
-  [python-evdev](https://github.com/gvalkov/python-evdev) (on Linux).
-- NVDA's controller client and [accessible_output2](https://github.com/accessibleapps/accessible_output2)
-  (screen readers on Windows), Orca and speech-dispatcher (on Linux).
-- OpenCV, NumPy and Pillow for the image work.
-- [RetroArch](https://www.retroarch.com) and the Snes9x core, for the emulator benches, and the
-  libretro team's 2019 post quoted above.
-- Chrono Trigger is © Square Enix. This project isn't affiliated with Square Enix.
+CI runs Linux lint/tests and Windows tests. Frame-dependent tests skip when private recordings
+are absent; a green public run does not prove the full live-game claims. `tests/test_nav.py`
+and the synthetic walker tests exercise geometry without a model or game. Bench tools under
+`scripts/` separate model calls, deterministic execution and game-state ground truth.
 
 ## License
 
-MIT. Kokoro's model weights are Apache 2.0.
+[MIT](LICENSE) applies to the project code. Dependencies and commercial game content retain
+their own licenses. The small reader templates are derived from the game's font/cursors;
+the code license does not grant rights to Square Enix's artwork. No ROMs, maps or saves ship here.

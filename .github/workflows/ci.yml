@@ -1,7 +1,7 @@
 name: ci
 on:
   push:
-    branches: [main]
+    branches: [main, dev, "d3/**"]
   pull_request:
 jobs:
   test:

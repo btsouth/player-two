@@ -178,5 +178,5 @@ def test_no_core_dump_really_sets_the_limit_and_keeps_the_signal():
         return
     out = subprocess.check_output(screen._no_core_dump(["grep", "core", "/proc/self/limits"]))
     assert out.split()[4] == b"1"  # the soft limit
-    done = subprocess.run(screen._no_core_dump(["sh", "-c", "kill -SEGV $$"]))
+    done = subprocess.run(screen._no_core_dump(["sh", "-c", "kill -SEGV $$"]), check=False)
     assert done.returncode == -11  # seen as a crash, the same as without the wrapper

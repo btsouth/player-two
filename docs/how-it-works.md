@@ -19,8 +19,8 @@ The parts, in the order a moment of play goes through them. File names are under
   and every screen in games without a profile, go to Muse Spark, whose answer streams into the
   voice sentence by sentence, so speech starts before the model has finished. It stays silent
   while the agent is acting, so it never talks over what you asked for.
-- **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two never
-  talks over the game's own voices. It listens to the game's own sound stream on PipeWire or
+- **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two aims not to
+  talk over the game's own voices. It listens to the game's own sound stream on PipeWire or
   PulseAudio (found from the game window's process, so Player Two's own voice is never in
   it), and the speech detector used for hands-free listening (Silero VAD) tells voices from
   music and effects, frame by frame. Narration waits for a gap in the game's speech, and a
@@ -45,6 +45,9 @@ The parts, in the order a moment of play goes through them. File names are under
 - **Instant echo** (`ack.py`): says your request back in your own words the moment it arrives,
   with no model call ("Okay, Crono will use Cyclone"), so a misheard request is caught at once. It
   states what it will try, never a result.
+- **Fast path** (`fast.py`): supported Chrono Trigger commands such as buying, attacking and
+  taking a fight are parsed locally and dispatched to the same executors without a planning
+  model call. Unmatched requests continue to the agent. Unit coverage does not establish live timing.
 - **Agent** (`agent.py`): Muse Spark in a tool loop. The tools are `press`, `hold`, `walk_to`,
   `talk_to`, `keep_walking`, `travel`, `exits`, `area_map`, `walk_to_map`, `wait`, `say`,
   `ask_player`, `remember` and `finish`, plus `where_am_i`, `go_to_place`, `go_to_exit` and
