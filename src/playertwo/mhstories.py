@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import difflib
 import json
 import os
 import re
@@ -1022,6 +1023,12 @@ class Fight:
             self.status = await self.ask("status", [image_part(crop, STATUS_PX)],
                                          READ_STATUS.format(elements=elements), 800)
             self.what_line = str(self.status.get("say") or "")
+            # Spoken, so a one-letter misreading of a name it knows is put right.
+            name = str(self.status.get("name") or "")
+            right = difflib.get_close_matches(name.lower(), KNOWN_TYPES, 1, 0.8)
+            if right and right[0] != name.lower():
+                self.what_line = re.sub(re.escape(name), right[0].title(), self.what_line, flags=re.I)
+                self.status["name"] = right[0].title()
 
         job = asyncio.ensure_future(reading())
         if hold:
@@ -1228,7 +1235,7 @@ class Fight:
             if ring_is_small(img):
                 return False
             if self.current_part(img) is part:
-                part.broken = part_broken(img)
+                part.broken = part.broken or part_broken(img)
                 part.gauge = wheel_gauge(img)
                 return True
             await self._press("rb", 0.1)
@@ -1506,7 +1513,9 @@ class Fight:
             broken = part_broken(wheel)
             if broken and not on.broken and on.name == self.target:
                 just_broke = on.name
-            on.broken, on.gauge = broken, wheel_gauge(wheel)
+            # A part stays broken: the word flickers as the wheel zooms in, and a reading of
+            # "not broken" put it back on the list (live: a broken stomach hit again and again).
+            on.broken, on.gauge = on.broken or broken, wheel_gauge(wheel)
         view = await asyncio.to_thread(self.view, img, wheel, kind_now)
         view.arc, view.toward = arc, toward
         low = monster_health(wheel)

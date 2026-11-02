@@ -498,3 +498,11 @@ def test_a_change_of_state_changes_what_it_usually_hits_with():
 def test_four_fifths_of_a_bar_is_not_two_thirds():
     assert m.amount(0.8) == "about three quarters"
     assert m.amount(0.66) == "about two thirds"
+
+
+def test_a_broken_part_stays_broken():
+    part = m.Part("Stomach", ["blunt"], True, 0.0, "", title("Legs"))
+    tail = m.Part("Tail", ["slash"], False, 0.5, "", title("Tail"))
+    v = view()
+    v.parts, v.target = [part, tail], "Stomach"
+    assert m.pick_part(v) is tail
