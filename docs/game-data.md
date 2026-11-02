@@ -5,7 +5,7 @@ Trigger's pixel-reader profile and small glyph/cursor templates, plus synthetic 
 fixtures. With a key and a supported desktop, a judge can try generic descriptions, questions
 and input tools. Without a key, the offline smoke check exercises reader loading and planning.
 
-**The demonstrated map navigation and seller approach cannot currently be reproduced from
+**The measured map navigation and seller approach cannot currently be reproduced from
 this repository alone.** The README's live navigation/shop trials used additional local data that is
 not included. Installing or owning Chrono Trigger does not populate these files automatically.
 
@@ -41,7 +41,7 @@ project license. A candidate data-only package could contain minimal walkability
 coordinates, connectivity and human-written labels/instructions, with provenance and a separate
 license. Those are lower-artwork candidates, not a determination of redistribution rights:
 review the source, publisher terms and any copied names/text before release. No package has
-been approved or exported in this pass.
+been approved or distributed.
 
 **Removing pictures from JSON does not make the demo work.** The current localizer still needs
 reference pictures and player templates. A possible owner-supplied workflow would generate those

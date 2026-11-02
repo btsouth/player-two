@@ -65,9 +65,9 @@ Local-answer times include the spoken answer. First words can include an acknowl
 In the one lost fight the party was wiped out right after Cyclone was picked. Player Two then went
 back through the title and loaded the last save without being asked. One more run didn't count
 because the launch script failed before the fight started. Completed tasks can still fail the
-narration timing checks: all six purchase runs did. These counts measure completion, not speech quality. Just before these runs, on a slightly
-older build, a purchase wandered for 65 s by the seller and said nothing, so the walker was changed to give
-up sooner. This is a small sample on one save, not a general success rate. Earlier
+narration timing checks: all six purchase runs did. These counts measure completion, not speech
+quality. Just before these runs, on a slightly older build, a purchase wandered for 65 s by the
+seller and said nothing, so the walker was changed to give up sooner. This is a small sample on one save, not a general success rate. Earlier
 builds lost 3/3 boss attempts.
 
 ## Try it
@@ -111,7 +111,7 @@ player-two setup
 Setup asks for the key, speech output, microphone, controller, hands-free/talk key and launcher.
 It can explain missing devices on a headless machine, but a complete live session needs a desktop.
 The controller permission step may request sudo; logging out and back in may be needed.
-With NVIDIA, use `".[cuda]"` instead of `.` (roughly 2 GB extra dependencies).
+With NVIDIA, use `".[cuda]"` instead of `.` to install the additional GPU dependencies.
 
 ### Windows
 
@@ -232,7 +232,7 @@ not an invoice. A shorter 400-token JSON probe exhausted its budget and returned
 
 ## Limits and player control
 
-**The recorded navigation/shop configuration cannot currently be reproduced from this repo alone.**
+**The measured navigation/shop configuration cannot currently be reproduced from this repo alone.**
 **It does not include the private maps, room surveys, game packs, walkthroughs or saves used
 for the navigation results above.** You need your own game. See [game data](#game-data).
 
@@ -330,7 +330,7 @@ Visual walking can attempt a visible target, with no equivalent map coverage or 
 [Game-data requirements and distribution limits](docs/game-data.md) explain what is missing.
 
 **`src/playertwo/data/ct_steam/`** is the one piece of Chrono Trigger data in the repo, about
-100 KB. It's what the pixel reader reads with: 2,544 letter shapes from the game's font, each a
+100 KB. It's what the pixel reader reads with: a library of letter shapes from the game's font, each a
 10 by 14 black and white bitmap stored as numbers with its letter, and two small cursor templates
 (the pointing hand, and the bracket drawn round the fighter whose turn it is). They were cut from
 frames of my own copy by `scripts/ct_glyph_learn.py`, from lines whose text I typed in by hand.
