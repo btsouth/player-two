@@ -113,6 +113,15 @@ def hypr_focus(address: str) -> None:
                        capture_output=True, timeout=2, check=False)
 
 
+def _no_core_dump(cmd: list[str]) -> list[str]:
+    """Run a window capture with core dumps off. grim 1.5 prints the output's name when a
+    window capture fails, and a window capture has no output, so every failed capture (a
+    window opening, resizing or closing) segfaults (grim/main.c:100). That's just a failed
+    capture, handled here, but a core dump puts a crash notice on the player's desktop. A
+    core limit of 1 is the kernel's way to skip a piped core dump."""
+    return ["prlimit", "--core=1:", *cmd] if shutil.which("prlimit") else cmd
+
+
 class HyprlandCapture(Capture):
     """Captures the game's own window with grim, even when something covers it.
 
@@ -168,8 +177,9 @@ class HyprlandCapture(Capture):
         still listed (closing) is left alone a while, so it's one crash per close."""
         for _ in range(2):
             try:
-                data = subprocess.check_output(["grim", "-t", "ppm", "-T", str(sid), "-"],
-                                               timeout=3, stderr=subprocess.DEVNULL)
+                data = subprocess.check_output(_no_core_dump(
+                    ["grim", "-t", "ppm", "-T", str(sid), "-"]),
+                    timeout=3, stderr=subprocess.DEVNULL)
                 if data:
                     img = Image.open(io.BytesIO(data))
                     # Decoded here, once: a lazily opened picture read by two threads at

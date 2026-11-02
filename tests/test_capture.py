@@ -160,3 +160,23 @@ def test_a_frame_is_decoded_before_two_threads_read_it(monkeypatch):
         for th in threads:
             th.join()
         assert not errors
+
+
+def test_window_capture_runs_without_core_dumps(monkeypatch):
+    """A failed window capture segfaults grim 1.5; it mustn't put a crash notice on the
+    desktop. The monitor capture has no such bug and runs as it is."""
+    monkeypatch.setattr(screen.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert screen._no_core_dump(["grim", "-T", "x", "-"])[:2] == ["prlimit", "--core=1:"]
+    monkeypatch.setattr(screen.shutil, "which", lambda name: None)
+    assert screen._no_core_dump(["grim", "-T", "x", "-"]) == ["grim", "-T", "x", "-"]
+
+
+def test_no_core_dump_really_sets_the_limit_and_keeps_the_signal():
+    import shutil
+
+    if not shutil.which("prlimit"):
+        return
+    out = subprocess.check_output(screen._no_core_dump(["grep", "core", "/proc/self/limits"]))
+    assert out.split()[4] == b"1"  # the soft limit
+    done = subprocess.run(screen._no_core_dump(["sh", "-c", "kill -SEGV $$"]))
+    assert done.returncode == -11  # seen as a crash, the same as without the wrapper
