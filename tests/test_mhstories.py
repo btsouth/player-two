@@ -129,6 +129,11 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
 
 # A fake game: the routine's pixel reads look at its state instead of a picture.
 
+def title(name):
+    """A part's name as a wheel title's letters: a different mask for each."""
+    return np.array([[k == "Tail Head Legs".split().index(name) for k in range(3)]])
+
+
 class Game:
     def __init__(self):
         self.screen = "menu"
@@ -220,7 +225,7 @@ def game(monkeypatch):
         "lit_row": lambda i, rows: i.item,
         "wheel_open": lambda i: i.screen == "wheel",
         "wheel_has_parts": lambda i: i.screen == "wheel",
-        "wheel_title": lambda i: np.array([[hash(i.part[0]) % 7 == n for n in range(7)]]),
+        "wheel_title": lambda i: title(i.part[0]),
         "wheel_works": lambda i: [i.part[1]],
         "part_broken": lambda i: False,
         "wheel_gauge": lambda i: 0.5,
@@ -255,7 +260,7 @@ def agent_for(g, said):
 def fight_for(g, said):
     f = m.Fight(agent_for(g, said))
     f.weapons = gear()
-    f.parts = [m.Part(n, [w], False, 0.5, "", np.array([[hash(n) % 7 == k for k in range(7)]]))
+    f.parts = [m.Part(n, [w], False, 0.5, "", title(n))
                for n, w in g.parts]
     f.status = {"name": "Tetranadon"}
     f.studied = True
