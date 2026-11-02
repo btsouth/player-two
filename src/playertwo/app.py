@@ -1753,6 +1753,7 @@ class Session:
         # Muse Spark's look finds those, and where the player's character is, so the
         # answer can be from them. Both at once; Muse's is skipped when not needed.
         looking = asyncio.create_task(self._where_spark(frame, phrase))
+        located_frame_t = time.time()
         matches, secs = await locate(self.muse, frame.image, phrase)
         how = "sam-3.1"
         me = await self._character_on_screen(frame)
@@ -1779,7 +1780,9 @@ class Session:
             text = describe_from(phrase, matches, at, step)
             pans = sorted(((m, pan_from(m, at)) for m in matches), key=lambda p: p[1])
         self.events.emit("where", phrase=phrase, via=how, seconds=round(secs, 2),
-                         points=[[round(m.cx, 3), round(m.cy, 3)] for m in matches[:12]])
+                         points=[[round(m.cx, 3), round(m.cy, 3)] for m in matches[:12]],
+                         boxes=[list(m.box) for m in matches[:12] if m.box is not None]
+                         if how == "sam-3.1" else [], frame_t=located_frame_t)
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
         await self.voice.say(text)

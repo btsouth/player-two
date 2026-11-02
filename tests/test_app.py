@@ -722,10 +722,25 @@ async def test_where_answers_from_the_character_even_when_sam_cant_see_it(monkey
     s.agent = SimpleNamespace(_walker=None)
     s.narrator = SimpleNamespace(recent=[])
     s.voice = SimpleNamespace(say=say, wait_idle=idle, cue=lambda *a, **k: None)
+    emitted = []
+    s.events.emit = lambda kind, **data: emitted.append((kind, data))
     await s._where("cat")
     assert "left" in said[-1] and "up" in said[-1], said
+    fallback = next(data for kind, data in emitted if kind == "where")
+    assert fallback["via"] == "muse-spark" and fallback["boxes"] == []
     await s._where("dog")
     assert "can't find" in said[-1], said
+
+    async def sam_box(muse, img, phrase):
+        return [locate.Match(0.25, 0.25, 0.01, (0.2, 0.2, 0.3, 0.3))], 0.4
+
+    monkeypatch.setattr(locate, "locate", sam_box)
+    emitted.clear()
+    await s._where("cat")
+    result = next(data for kind, data in emitted if kind == "where")
+    assert result["via"] == "sam-3.1"
+    assert result["boxes"] == [[0.2, 0.2, 0.3, 0.3]]
+    assert result["frame_t"] > 0
 
 
 def test_an_idle_nvidia_card_is_pointed_out(monkeypatch):
