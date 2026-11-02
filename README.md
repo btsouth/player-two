@@ -282,6 +282,7 @@ uv run pytest -q
 uv run python scripts/self_check.py
 ```
 
+[Validation notes](docs/validation.md) record clean-install and model checks with their limits.
 CI runs Linux lint/tests and Windows tests. Frame-dependent tests skip when private recordings
 are absent; a green public run does not prove the full live-game claims. `tests/test_nav.py`
 and the synthetic walker tests exercise geometry without a model or game. Bench tools under
