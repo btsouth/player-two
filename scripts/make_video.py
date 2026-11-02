@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import demo_captions
 
 W, H, FPS = 1920, 1080, 60
+CODE = hashlib.sha1(Path(__file__).read_bytes()).hexdigest()  # a new layout redoes the pieces
 FONT_DIRS = ("/usr/share/fonts/liberation", "/usr/share/fonts/truetype/liberation")
 BLUR = 45
 TOTAL_LIMIT = 180.0
@@ -692,8 +693,8 @@ def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], 
     inputs: list[str] = []
     chain, last = "", "v0"
     for i, o in enumerate(p.overlays):
-        png = work / ("ov-" + hashlib.sha1(f"{o.text}|{o.size}|{o.where}".encode()).hexdigest()[:12]
-                      + ".png")
+        png = work / ("ov-" + hashlib.sha1(f"{CODE}|{o.text}|{o.size}|{o.where}".encode())
+                      .hexdigest()[:12] + ".png")
         if not png.exists():
             label_png(png, o)
         inputs += ["-i", str(png)]
@@ -774,7 +775,7 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
 
     def one(p: Piece) -> Path:
         dest = work / f"{p.id}.mp4"
-        key = dataclasses.asdict(p)
+        key = {**dataclasses.asdict(p), "code": CODE}
         if p.kind == "clip" and p.take in asses:
             key["ass"] = hashlib.sha1(asses[p.take].read_bytes()).hexdigest()
         stamp = work / f"{p.id}.key"
