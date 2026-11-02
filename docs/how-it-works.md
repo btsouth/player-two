@@ -25,8 +25,8 @@ See [game data](game-data.md).
   danger, each said once when it changes. Chrono Trigger on Steam is the only profile so far.
 - **Narrator** (`narrator.py`): says what the reader read. Screens the reader can't make sense of,
   and every screen in games without a profile, go to Muse Spark, whose answer streams into the
-  voice sentence by sentence, so speech starts before the model has finished. It suppresses automatic narration
-  while the agent is acting.
+  voice sentence by sentence, so speech starts before the model has finished. It suppresses
+  automatic narration while the agent is acting.
 - **Hearing the game** (`gameaudio.py`): a blind player can still hear, so Player Two aims not to
   talk over the game's own voices. It listens to the game's own sound stream on PipeWire or
   PulseAudio (found from the game window's process, so Player Two's own voice is never in
@@ -85,8 +85,8 @@ See [game data](game-data.md).
   Then one Muse Spark call finds the target and a way around anything in the way. At the same
   time SAM 3.1 looks for the target by name (and as "person", for someone to talk to): Muse
   Spark's boxes are often a sprite off, and the walk stops and faces by them, so when SAM finds
-  the same thing its box is used. SAM gets no longer than the model took plus a moment, so
-  it adds no wait, and without a match the model's box stands. Then plain image math takes over: phase correlation follows the
+  the same thing its box is used. SAM gets no longer than the model took plus a moment
+  to bound its added wait; without a match the model's box stands. Then plain image math takes over: phase correlation follows the
   scenery as it scrolls, your character is pinned down by what moves differently from the scenery and then
   followed by its colours (which hold when the sprite turns), and the stick and d-pad steer it in
   eight directions. When the character stops moving against something, it marks that spot on
@@ -104,8 +104,8 @@ See [game data](game-data.md).
   stand ("on the left", "by the bell"). The best fit wins when it's clearly ahead; when two or
   three fit about as well, it asks which one. "Who's here?" is answered the same way, nearest
   first, in steps and d-pad directions.
-- **Where is it?** (`locate.py`, `app.py`): SAM 3.1 finds every match for the thing asked
-  about and returns segmentation masks/boxes; these can be empty or wrong. At the same time Muse Spark looks for it too (SAM doesn't know many
+- **Where is it?** (`locate.py`, `app.py`): SAM 3.1 looks for the thing asked about and returns
+  segmentation masks/boxes; these can be empty or wrong. Muse Spark looks for it too (SAM doesn't know many
   game things, like a pixel-art cat) and for your character. The answer is from your character
   when it's known ("4 steps up and 2 to your left", nearest first), and each match gets a short
   sound panned to its side.

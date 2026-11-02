@@ -165,7 +165,7 @@ player-two narrate --brain meta --game "Player Two practice arena" tests/arena/s
 On Windows, from any writable folder in PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/btsouth/player-two/main/tests/arena/sample.png -OutFile sample.png
+Invoke-WebRequest https://raw.githubusercontent.com/btsouth/player-two/main/tests/arena/sample.png -OutFile sample.png -UseBasicParsing
 player-two narrate --brain meta --game "Player Two practice arena" sample.png
 ```
 
