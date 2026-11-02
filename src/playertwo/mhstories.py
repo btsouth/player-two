@@ -192,6 +192,14 @@ def wheel_has_parts(img: Image.Image) -> bool:
 DIAMONDS = {"slash": 635.5, "pierce": 670.0, "blunt": 704.0}
 
 
+def ring_is_small(img: Image.Image) -> bool:
+    """The ring around a far-off monster, about 170 wide against the big wheel's 290."""
+    c = _arr(img, 380, 60, 900, 470)
+    cyan = (c[..., 1] > 215) & (c[..., 2] > 205) & (c[..., 0] < 140)
+    cols = np.flatnonzero(cyan.sum(axis=0) >= 2)
+    return bool(cols.size) and (cols.max() - cols.min()) * 520 / c.shape[1] < 230
+
+
 def _ring_dx(img: Image.Image) -> int:
     """How far the wheel sits right of its usual place (it moves a few pixels as a fight goes
     on), from the left edge of its cyan ring."""
@@ -702,9 +710,9 @@ class Lines:
             name = who or "an ally"
             if plan.why_type == "seen":
                 return self.pick(
-                    f"It's going for {name}, and it's been hitting with "
-                    f"{view.monster_type.lower()}. I'll go {plan.type.lower()}.",
-                    f"{name} is up next. Guessing {view.monster_type.lower()} again, "
+                    f"It's going for {name}. I'm guessing {view.monster_type.lower()} again, "
+                    f"so {plan.type.lower()}.",
+                    f"{name} is up next. Probably {view.monster_type.lower()}, "
                     f"so {plan.type.lower()}.")
             if plan.why_type == "usual":
                 return self.pick(f"It's going for {name}. These usually hit with "
@@ -1180,9 +1188,12 @@ class Fight:
         return self.parts[min(scored)[1]]
 
     async def turn_wheel(self, part: Part) -> bool:
-        """Round the open wheel to this part, checking its title each step."""
+        """Round the open wheel to this part, checking its title each step. A monster up in the
+        air has only a small ring with one target: nothing to turn."""
         for _ in range(len(self.parts) + 2):
             img = await self.settled_wheel()
+            if ring_is_small(img):
+                return False
             if self.current_part(img) is part:
                 part.broken = part_broken(img)
                 part.gauge = wheel_gauge(img)
@@ -1218,6 +1229,8 @@ class Fight:
             return False
         want = 0
         if plan.do == "skill" and plan.skill:
+            await asyncio.sleep(0.2)  # the rows fade in; a half-faded one reads as greyed
+            img = await self._shot()
             skills = self.weapons[plan.weapon].skills
             wanted = [plan.skill, *sorted(
                 (x for x in skills if x.deals_damage and x.targets == "one" and x.power > 50
@@ -1327,7 +1340,7 @@ class Fight:
         a game message into account, and return at the next menu. None when the fight's over. A menu left open gets backed out of quickly: the party waits forever
         on a menu."""
         t0 = time.monotonic()
-        hits, toast_seen, toast_band = 0, False, None
+        hits, toast_band, looking = 0, None, None
         nearly_won = 0 < self.monster_share < 0.25
         last_screen, over, nudge = t0 + (3.0 if nearly_won else 9.0), 0, t0 + 14.0
         while time.monotonic() - t0 < 70 and not self.a.cancelled:
@@ -1351,19 +1364,21 @@ class Fight:
                 self.note("mh_seen", {"type": kind})
             if toast_up(img):
                 band = _arr(img, 420, 574, 860, 596).mean(axis=2)
+                # On first sight: at double speed a message is up for under a second.
                 if toast_band is None or float(np.abs(band - toast_band).mean()) > 12:
-                    if toast_seen:  # the second grab with it up: it has faded in
-                        toast_band = band
-                        self.aside(self.read_message(img))
-                    toast_seen = True
+                    toast_band = band
+                    self.aside(self.read_message(img))
             else:
-                toast_seen, toast_band = False, None
+                toast_band = None
             if self.won:
                 self.ended = "won"
                 return None
-            if now >= last_screen:
-                last_screen = now + (1.5 if nearly_won else 3.0)
-                seen = await self.screen(img)
+            if looking is None and now >= last_screen:
+                looking = asyncio.ensure_future(self.screen(img))
+            elif looking is not None and looking.done():  # Muse's look doesn't hold up the watching
+                seen = looking.result()
+                looking = None
+                last_screen = now + (1.0 if nearly_won else 2.5)
                 over = over + 1 if seen in ("results", "field") else 0
                 self.ended = seen if over else ""
                 if over >= 2 or (seen == "results" and not hud_up(img)):
@@ -1374,6 +1389,9 @@ class Fight:
     async def read_message(self, img: Image.Image) -> None:
         """The game's own message band. A change of phase means its type may change too."""
         w, h = img.size
+        fresh = await self._shot()  # it may have faded in further by now
+        if toast_up(fresh):
+            img = fresh
         crop = img.crop((330 * w // 1280, 566 * h // 720, 950 * w // 1280, 604 * h // 720))
         with contextlib.suppress(Exception):
             d = await self.ask("message", [image_part(crop, 800)], READ_TOAST, 200, 5)

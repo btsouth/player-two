@@ -251,6 +251,7 @@ def game(monkeypatch):
         "wheel_open": lambda i: i.screen == "wheel",
         "wheel_has_parts": lambda i: i.screen == "wheel",
         "wheel_title": lambda i: title(i.part[0]),
+        "ring_is_small": lambda i: False,
         "wheel_works": lambda i: [i.part[1]],
         "part_broken": lambda i: False,
         "wheel_gauge": lambda i: 0.5,
