@@ -41,14 +41,19 @@ Add measured settings to the take-B manifest entry, for example:
 
 ```json
 {
+  "take-A": {"edit": {"recording_delay": 0.4}},
   "take-B": {
-    "edit": {"reveal_at": 33.35, "reveal_duration": 0.25, "normal_until": 35.35}
+    "edit": {"recording_delay": 0.32, "reveal_at": 33.35,
+             "reveal_duration": 0.25, "normal_until": 35.35}
   },
   "edit": {"drop": ["A1", "A2", "A5"]}
 }
 ```
 
-Those values apply to the reviewed run, not to arbitrary replacement footage. Review every new
+`recording_delay` corrects the measured delay between the shell timestamp and actual recorder
+start, verified against the voice stem. It adjusts log-to-video mapping without changing any
+original timestamps. Reveal values remain absolute SOURCE VIDEO seconds, independent of that
+epoch correction. Those values apply to the reviewed run, not arbitrary replacement footage. Review every new
 reveal against its frames. Use the original full session log when a per-check log omits speech
 from before the first request. Preserve original timestamps and never synthesize a missing line.
 

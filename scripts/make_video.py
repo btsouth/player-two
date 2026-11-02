@@ -1492,6 +1492,9 @@ def load_take(folder: Path, name: str, top: bool) -> Take | None:
             raise ValueError(f"Audio stem shorter than take: {video}")
     stamp = folder / config.get("start", f"{name}.mp4.start")
     start = float(stamp.read_text().split()[0]) if stamp.exists() else None
+    if start is not None:
+        # GSR begins after the shell writes its timestamp. Measure against the voice stem.
+        start += float(config.get("edit", {}).get("recording_delay", 0.0))
     log = folder / config.get("events", f"{name}.events.jsonl")
     events: list[dict] = []
     if start is not None and log.exists():

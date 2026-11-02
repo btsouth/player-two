@@ -360,3 +360,16 @@ def test_missing_cold_sequence_keeps_its_placeholder_even_if_a_win_is_logged():
     opening,_=mv.cold_open(take)
     kept,ending=mv.reserve_win_line(opening,take)
     assert kept==opening and kept[0].kind=="slate" and ending==[]
+
+
+def test_measured_recorder_delay_aligns_captions_without_rewriting_source(tmp_path,monkeypatch):
+    import json
+    (tmp_path/"take-A.mp4").write_bytes(b"test")
+    (tmp_path/"take-A.mp4.start").write_text("1000")
+    es=[{"kind":"spoken","t":1002,"began":1001,"ended":1002,"text":"Fight."}]
+    (tmp_path/"take-A.events.jsonl").write_text(json.dumps(es[0])+"\n")
+    (tmp_path/"takes.json").write_text(json.dumps({"take-A":{"edit":{"recording_delay":.32}}}))
+    monkeypatch.setattr(mv,"probe_s",lambda _:10)
+    take=mv.load_take(tmp_path,"take-A",False)
+    assert abs(take.caps[0][0]-.68)<.001
+    assert take.events==es and (tmp_path/"take-A.mp4.start").read_text()=="1000"
