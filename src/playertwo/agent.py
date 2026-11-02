@@ -583,6 +583,19 @@ def others_of_kind(m, name: str, said: str, at: tuple[float, float]) -> list[str
     return sorted(same, key=lambda n: math.dist(m.places[n], at))
 
 
+def plain_reply(content: str) -> str:
+    """What to say from a reply in words, not a tool call. The model sometimes labels it
+    ("Finish: ...") or writes the tool's arguments out ('{"text": "..."}'), and neither
+    is for saying aloud."""
+    text = re.sub(r"^\s*(finish|say)\s*:\s*", "", content, flags=re.IGNORECASE)
+    if text.lstrip().startswith("{"):
+        with contextlib.suppress(ValueError):
+            args = json.loads(text)
+            if isinstance(args, dict) and isinstance(args.get("text"), str):
+                return args["text"]
+    return text
+
+
 class Agent:
     def __init__(self, muse: Muse, controls: Controls, grab: Callable[[], Awaitable[Frame]],
                  speak: Callable[[str], Awaitable[None]], game: str = "",
@@ -2793,7 +2806,7 @@ class Agent:
                          "tool_calls": [c.model_dump() for c in calls] or None})
             if not calls:
                 # A reply in words, not a tool call; sometimes labelled ("Finish: ...").
-                text = re.sub(r"^\s*(finish|say)\s*:\s*", "", msg.content or "", flags=re.IGNORECASE)
+                text = plain_reply(msg.content or "")
                 if text.strip() and not await self._on_topic(text):
                     if self._held >= 2:
                         await self._speak(LOST_THREAD)

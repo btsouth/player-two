@@ -174,6 +174,26 @@ class TestAgent:
         result = run(agent.run("what are we fighting?"))
         assert said == ["Two gold imps."] and result.outcome == "Two gold imps."
 
+    def test_a_reply_that_writes_out_the_tools_arguments_is_said_as_its_text(self):
+        """Live 2026-11-02: '{"text": "The brief says..."}' came out as "Text, the brief
+        says" when the model wrote finish's arguments instead of calling it."""
+        agent, _, said, _, muse = self.make([])
+
+        async def words(messages, tools, effort=None, max_tokens=3000):
+            return SimpleNamespace(content='{"text": "The brief says go."}', tool_calls=[])
+
+        muse.tools = words
+        result = run(agent.run("read it"))
+        assert said == ["The brief says go."] and result.outcome == "The brief says go."
+
+    def test_plain_replies_that_only_look_like_json_are_left_alone(self):
+        from playertwo.agent import plain_reply
+
+        assert plain_reply("Say: Go left.") == "Go left."
+        assert plain_reply('{"text": 3}') == '{"text": 3}'
+        assert plain_reply('{"text": "cut off') == '{"text": "cut off'
+        assert plain_reply("{curly} text") == "{curly} text"
+
     def test_take_me_back_outside_goes_out_with_no_model_turn(self):
         """Live: the model went out, then went back into the fair it had just left."""
         agent, _, said, _, muse = self.make([])
