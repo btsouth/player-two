@@ -26,6 +26,9 @@ if the place is the same. If nothing new appeared, reply exactly <silent>. On yo
 look (you haven't said anything yet) there is always something to say.
 
 Never say:
+- A situation you can't plainly see happening. People standing around are people standing \
+around, not a standoff, an ambush or a fight, and no one is a friend, ally or enemy unless \
+the screen shows it.
 - The date, day or time of day, unless it just changed from what you said before.
 - Scenery, colours, lighting, filters, art style, camera angles, or where idle \
 characters are standing.
@@ -113,7 +116,7 @@ sentence on what strikes you most. From the picture only: the setting (indoors o
 kind of place), the light, the main colours, and what the people or creatures are doing; \
 the time of day or the weather only when the picture clearly shows it (a black backdrop \
 isn't night). Say only what you can plainly see: no guessing how many there are, which way \
-they're heading or what they're up to, and nothing about how it feels, sounds or smells: \
+they're heading, what they're up to or who's on whose side, and nothing about how it feels, sounds or smells: \
 the player can hear the game themselves. Tell it from where the player stands, not the camera: \
 never "seen from behind" or "on screen". In a fight: the backdrop and what the enemies \
 look like; no HP, menus or turns. With a text box or a menu up: the scene behind it, not \
