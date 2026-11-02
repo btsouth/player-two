@@ -275,6 +275,38 @@ async def test_walk_to_talk_across_a_counter(tmp_path):
     assert facing == ends[tile]
 
 
+async def test_recheck_after_facing_before_confirming_across_a_counter(tmp_path):
+    """A facing tap can carry feet beyond the tile seen before it. Don't press A
+    from the stale position, or try a second confirm to compensate for that miss."""
+    from playertwo.rooms import Target, walk_out
+
+    rooms, img = two_floors(tmp_path)
+    room = rooms.rooms[2]
+    sim = Sim(img, room.walk, 172.0, 77.0)
+    target = Target(2, (152.0, 77.9), True, "the innkeeper")
+    ends = rooms.stand_by(room, target.at, True)
+    sim.answers = lambda x, y, f: ends.get((int(y) // 16, int(x) // 16)) == f
+    original = sim.steer
+    slipped = False
+
+    def delayed_stop(angle, strength=1.0):
+        nonlocal slipped
+        if angle == 270 and not slipped:
+            sim.update()
+            # Residual motion after the last captured frame, at the counter's edge.
+            sim.y = 80.25
+            slipped = True
+        original(angle, strength)
+
+    out = await walk_out(rooms, 2, sim.shoot, delayed_stop, _true, lambda _t: None,
+                         20.0, spot=target, press=sim.press, talk=True)
+    assert slipped
+    assert "pressed a to talk" in out, out
+    assert len(sim.pressed) == 1, sim.pressed
+    _, x, y, facing = sim.pressed[0]
+    assert ends[(int(y) // 16, int(x) // 16)] == facing
+
+
 async def test_running_on_the_straight_and_walking_to_line_up(tmp_path):
     """b held on a straight run (twice the speed), let go for turns, lining up and the
     press: the walk still ends lined up across the counter (SNES box: 6/6 trips with

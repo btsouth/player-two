@@ -4,52 +4,30 @@ An AI co-op partner for blind, low-vision and motor-impaired gamers: it reads th
 answers questions and presses the buttons when you ask.
 
 > **VIDEO PLACEHOLDER: final 3 minute demo goes here before submission.**
-> Final recording results below are marked `TODO-FINAL` until measured on the recorded build.
 
 For players who need a sighted friend to read a menu, find a doorway or take a turn.
 Say “take me to the fair”, “buy three potions” or “Crono, use Cyclone”. Player Two narrates,
 acts through a virtual controller, checks the result and tells you what happened.
 
-**Built during the Oct 26 to Nov 4, 2026 event window.** This project starts at commit
-`5a89075`, Oct 27, 2026 at 17:55 ET. The reader, agent, navigation, tools and tests in this
-repository were built for the Meta Global AI Developer Hackathon, Indie track.
-Dependencies and the commercial games themselves predate the event. MIT licensed code.
-**No blind player has tested it yet.** These are developer measurements, not accessibility validation.
+**No blind player has tested it yet.**
 
-## What has actually worked
+## Preliminary live results, tonight's build
 
-Historical live Steam Chrono Trigger checks, Nov 1 afternoon, ending at `3b98a99`.
-Requests were **typed**, not spoken. Times cover the whole task. These are small repeated
-trials on selected saves, with private atlas data and Battle Mode set to Wait, not general
-success rates. Newer code and the final voice recording need their own results.
+Chrono Trigger on Steam, Take A, Nov 1 evening. The lead reports three successful runs of
+each request on the merged build. These are **preliminary**; final recording results and
+the exact build commit will replace them. Times cover each task. Voice-versus-typed
+methodology has not yet been supplied for these runs.
 
-| Request | Passed | Whole task | Limit |
-|---|---:|---|---|
-| Take me to the fair | 11/11 | 3 to 4 s | From the demo world-map position |
-| Buy three potions | 11/11 | 17.6 to 63 s | Final three entrance-to-purchase runs: 18.6, 26.0, 26.7 s after map fixes |
-| What are we fighting? | 3/3 | 1.9 to 3.2 s | Fight-start enemy count had separate errors |
-| Crono, use Cyclone | 2/2 | 9.5 to 12.2 s | Only when Crono was ready |
-| Win this fight for me | 3/4 | Wins 55 to 75 s | Lost when begun with two party members knocked out |
-| Take me to the save point | 2/2 | 12.6 and 18.2 s | Walks there; does not save |
-
-The same development runs lost 3/3 boss attempts, missed moving people and once spoke an
-off-topic model answer. More recent guards have unit tests; that does not establish live reliability.
-
-| Final demo game | Intended demonstration | Final recorded-build result |
-|---|---|---|
-| Chrono Trigger (Steam) | Read, navigate, shop, fight | **TODO-FINAL:** commit, spoken k/n, timings, clip |
-| Monster Hunter Stories 3 | Read battle choices and help select actions | **TODO-FINAL:** accuracy, moves actually executed, clip; game-specific routine is experimental |
-| Red Dead Redemption | Describe a landscape; leave room for game speech | **TODO-FINAL:** description accuracy, speech overlap, clip; no autonomous 3D play claimed |
-
-Final footage must show only behavior verified in that take. No claim of beating Lavos,
-playing arbitrary games, or replacing a game's own accessibility features.
+| Request | Passed | Whole task |
+|---|---:|---|
+| Where am I? | 3/3 | 1.0 s reported |
+| Take me to the fair | 3/3 | 3.3 to 5.1 s |
+| Buy three potions | 3/3 | 14.5 to 20.3 s |
+| Take me back outside | 3/3 | 7.9 to 20 s |
 
 ## Try it
 
 A fresh install includes the generic narrator and agent, plus the Chrono Trigger pixel reader.
-**The recorded navigation/shop configuration cannot currently be reproduced from this repo alone.**
-**It does not include the private maps, room surveys, game packs, walkthroughs or saves used
-for the navigation results above.** You need your own game. See [game data](#game-data).
 
 ### Requirements
 
@@ -187,6 +165,10 @@ flowchart LR
 
 ## Limits and player control
 
+**The recorded navigation/shop configuration cannot currently be reproduced from this repo alone.**
+**It does not include the private maps, room surveys, game packs, walkthroughs or saves used
+for the navigation results above.** You need your own game. See [game data](#game-data).
+
 The strongest action support is Chrono Trigger in Wait mode. Deep support costs per-game work.
 Generic descriptions and tools can fail on other games; action games and autonomous 3D traversal
 are not supported. Moving the game between monitors can break image scale matching.
@@ -220,6 +202,42 @@ these commands, with behavior dependent on the game:
 | "pause narration" / "resume narration" | stops and restarts narration ("pause" alone pauses the game) |
 | "what's wrong?" | what it can and can't reach (game, controller, microphone, talk key) and the last problem |
 | "help" / "goodbye" | what you can say / quit |
+
+## Earlier validation and final recording status
+
+Historical live Steam Chrono Trigger checks, Nov 1 afternoon, ending at `3b98a99`.
+Requests were **typed**, not spoken. Times cover the whole task. These are small repeated
+trials on selected saves, with private atlas data and Battle Mode set to Wait, not general
+success rates. Newer code and the final voice recording need their own results.
+
+| Request | Passed | Whole task | Limit |
+|---|---:|---|---|
+| Take me to the fair | 11/11 | 3 to 4 s | From the demo world-map position |
+| Buy three potions | 11/11 | 17.6 to 63 s | Final three entrance-to-purchase runs: 18.6, 26.0, 26.7 s after map fixes |
+| What are we fighting? | 3/3 | 1.9 to 3.2 s | Fight-start enemy count had separate errors |
+| Crono, use Cyclone | 2/2 | 9.5 to 12.2 s | Only when Crono was ready |
+| Win this fight for me | 3/4 | Wins 55 to 75 s | Lost when begun with two party members knocked out |
+| Take me to the save point | 2/2 | 12.6 and 18.2 s | Walks there; does not save |
+
+The same development runs lost 3/3 boss attempts, missed moving people and once spoke an
+off-topic model answer. More recent guards have unit tests; that does not establish live reliability.
+
+| Final demo game | Intended demonstration | Final recorded-build result |
+|---|---|---|
+| Chrono Trigger (Steam) | Read, navigate, shop, fight | **TODO-FINAL:** commit, spoken k/n, timings, clip |
+| Monster Hunter Stories 3 | Read battle choices and help select actions | **TODO-FINAL:** accuracy, moves actually executed, clip; game-specific routine is experimental |
+| Red Dead Redemption | Describe a landscape; leave room for game speech | **TODO-FINAL:** description accuracy, speech overlap, clip; no autonomous 3D play claimed |
+
+Final footage must show only behavior verified in that take. No claim of beating Lavos,
+playing arbitrary games, or replacing a game's own accessibility features.
+
+## Built during the event
+
+**Built during the Oct 26 to Nov 4, 2026 event window.** This project starts at commit
+`5a89075`, Oct 27, 2026 at 17:55 ET. The reader, agent, navigation, tools and tests in this
+repository were built for the Meta Global AI Developer Hackathon, Indie track.
+Dependencies and the commercial games themselves predate the event. MIT licensed code.
+These are developer measurements, not accessibility validation.
 
 ## Game data
 

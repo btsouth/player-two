@@ -1609,6 +1609,14 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     steer(None)
                     return SAVE_POINT.format(secs=f"{time.monotonic() - t0:.0f}")
                 if tile in ends:
+                    if person and here.tile != tile:
+                        # on_tile maps feet on a counter/fence edge onto nearby ground
+                        # for routing. That is not yet a valid spot to confirm from.
+                        c = centre(tile)
+                        steer(angle_to(c[0] - here.x, c[1] - here.y))
+                        await asyncio.sleep(tap / 2)
+                        steer(None)
+                        continue
                     fx, fy = ends[tile]
                     aim, seen = at, None
                     if who is not None and fy and shot is not None:
@@ -1630,6 +1638,14 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                     steer(angle_to(fx, fy))
                     await asyncio.sleep(max(0.08, tap))
                     steer(None)
+                    if talk and press is not None and person:
+                        # Facing is a movement tap, not a rotation in place. Read again
+                        # after it stops, before A: the old frame may be a tile behind.
+                        cur = await look()
+                        if (cur is None or cur.loc != goal or cur.tile not in ends
+                                or ends[cur.tile] != (fx, fy)):
+                            settled = False
+                            continue
                     if talk and press is not None and who is not None:
                         if seen is not None and abs(seen - here.x) > 9 and waited < 24:
                             waited += 1  # not across from the player yet: wait for them
@@ -1685,6 +1701,14 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                                 steer(None)
                             await asyncio.sleep(STEAM_LEAD if here.steam else 0.1)
                             before = await shoot()
+                            if person:
+                                cur = await asyncio.to_thread(rooms.locate, before, here)
+                                if (cur is None or cur.loc != goal or cur.tile not in ends
+                                        or ends[cur.tile] != (fx, fy)):
+                                    # A retry's step nearer/sideways moved off the talking
+                                    # spot. Reposition through the checked route first.
+                                    settled = False
+                                    break
                             press("a")
                             await asyncio.sleep(0.6)
                             if await answered(before):
@@ -1692,6 +1716,8 @@ async def walk_out(rooms: Rooms, goal: int, shoot, steer, keep_going, log,
                                         f"to talk ({time.monotonic() - t0:.0f} s): read their "
                                         "line to the player word for word; a question in it "
                                         "(rest? buy?) is the player's to answer")
+                        if not settled:
+                            continue
                         return (f"arrived: at {target} ({time.monotonic() - t0:.0f} s), "
                                 "facing them, but pressing a brought nothing up: look")
                     return f"arrived: at {target} ({time.monotonic() - t0:.0f} s)"

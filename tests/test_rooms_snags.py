@@ -111,7 +111,10 @@ async def test_a_spot_by_someone_that_cant_be_stood_on_is_given_up(tmp_path):
         t = (int(y) // 16, int(x) // 16)
         return t in room.walk and t != side
 
-    sim = Ground(img, ok, 440.0, 125.0)  # row 7, column 27: coming from the right
+    # Start beside the disputed tile so the blocked approach is actually exercised.
+    # A long wall-clock approach can legitimately route round it before a stall,
+    # which does not establish that this tile should have been learned as blocked.
+    sim = Ground(img, ok, 280.0, 125.0)  # row 7, column 17: beside the blocked tile
     target = Target(2, (240.0, 116.0), True, "the item seller")
     ends = rooms.stand_by(room, target.at, True)
     assert side in ends
@@ -122,6 +125,7 @@ async def test_a_spot_by_someone_that_cant_be_stood_on_is_given_up(tmp_path):
                          spot=target, press=sim.press, talk=True)
     assert out.startswith("arrived") and "pressed a" in out, out
     assert side in room.learned
+    assert all((int(y) // 16, int(x) // 16) != side for _, x, y, _ in sim.pressed)
     _, x, y, facing = sim.pressed[-1]
     assert ends[(int(y) // 16, int(x) // 16)] == facing
 
