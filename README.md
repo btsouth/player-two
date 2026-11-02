@@ -11,19 +11,29 @@ acts through a virtual controller, checks the result and tells you what happened
 
 **No blind player has tested it yet.**
 
-## Preliminary live results, tonight's build
+## Live results
 
-Chrono Trigger on Steam, Take A, Nov 1 evening. The lead reports three successful runs of
-each request on the merged build. These are **preliminary**; final recording results and
-the exact build commit will replace them. Times cover each task. Voice-versus-typed
-methodology has not yet been supplied for these runs.
+Chrono Trigger on Steam, Nov 2, build `9c7c6f3`, Battle Mode set to Wait. Each run restarted the game
+and loaded the same save. Requests were typed into the running app. The voice path has its own
+tests: 63 of 63 synthetic spoken lines routed correctly, and real microphone runs come next. "Done" means the task finished correctly,
+checked against the game's screen.
 
-| Request | Passed | Whole task |
+| Request | Done | Whole task |
 |---|---:|---|
-| Where am I? | 3/3 | 1.0 s reported |
-| Take me to the fair | 3/3 | 3.3 to 5.1 s |
-| Buy three potions | 3/3 | 14.5 to 20.3 s |
-| Take me back outside | 3/3 | 7.9 to 20 s |
+| Where am I? | 6/6 | 1.0 s |
+| What's on the screen? | 6/6 | 21 to 28 s, first words about 1 s |
+| Take me to the fair | 6/6 | 3.8 to 4.3 s, a door press from the world map |
+| Buy three potions | 6/6 | 17.3 to 20.4 s |
+| Take me back outside | 6/6 | 8.5 to 14.9 s |
+| Crono, use Cyclone | 4/5 | 6.1 to 8.5 s when he was ready |
+| Win this fight for me, from three allies at 1 HP | 4/5 | Wins 42 to 53 s |
+
+In the one lost fight the party was wiped out right after Cyclone was picked. Player Two then went
+back through the title and loaded the last save without being asked. One more run didn't count
+because my launch script failed before the fight started. Just before these runs, on a slightly
+older build, a purchase wandered for 65 s by the seller and said nothing, so I made the walker give
+up sooner. This is a small sample on one save, not a general success rate. Earlier
+builds lost 3/3 boss attempts.
 
 ## Try it
 
@@ -158,7 +168,7 @@ flowchart LR
   values. Generic press sequences force a new look before a confirm after another button.
   This is evidence checking, not a guarantee that every arbitrary action succeeds.
 - **Game speech hold:** Linux game-audio VAD holds narration during detected speech
-  (`gameaudio.py`). It has recorded-audio tests; final live cutscene coverage is `TODO-FINAL`.
+  (`gameaudio.py`). It has recorded-audio tests and one live Red Dead cutscene with no Player Two line.
   It is not available on Windows, and detection can miss speech.
 
 [Implementation walkthrough](docs/how-it-works.md) explains the tools and failure handling.
@@ -222,11 +232,11 @@ success rates. Newer code and the final voice recording need their own results.
 The same development runs lost 3/3 boss attempts, missed moving people and once spoke an
 off-topic model answer. More recent guards have unit tests; that does not establish live reliability.
 
-| Final demo game | Intended demonstration | Final recorded-build result |
+| Game in the film | What it shows | Result |
 |---|---|---|
-| Chrono Trigger (Steam) | Read, navigate, shop, fight | **TODO-FINAL:** commit, spoken k/n, timings, clip |
-| Monster Hunter Stories 3 | Read battle choices and help select actions | **TODO-FINAL:** accuracy, moves actually executed, clip; game-specific routine is experimental |
-| Red Dead Redemption | Describe a landscape; leave room for game speech | **TODO-FINAL:** description accuracy, speech overlap, clip; no autonomous 3D play claimed |
+| Chrono Trigger (Steam) | Read, navigate, shop, fight | Table above. One recorded run also walks to Guardia Castle through a forest fight and back to the fair. |
+| Monster Hunter Stories 3 | Read battle choices, take turns with a routine written for this game | Won 8/8 Somnacanth fights in recorded takes on Nov 2. I checked lines against frames: three takes had a false line about the next attack, since fixed, and none was found in the take used in the film. Muse reads the status and the weak points. |
+| Red Dead Redemption | No code for this game, one line of notes. Describes a view, finds things, leaves dialogue alone | SAM 3.1 returned boxes on the requests in the film. A person walks John. Talking over actors on one recorded clip went from 12.7 s to 1.1 s with the speech hold. No Player Two line during 87 s of live cutscene. |
 
 Final footage must show only behavior verified in that take. No claim of beating Lavos,
 playing arbitrary games, or replacing a game's own accessibility features.
