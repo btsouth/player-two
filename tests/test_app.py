@@ -741,7 +741,7 @@ async def test_where_answers_from_the_character_even_when_sam_cant_see_it(monkey
     assert result["via"] == "sam-3.1"
     assert result["boxes"] == [[0.2, 0.2, 0.3, 0.3]]
     assert result["frame_t"] > 0
-    assert said[-1] == "Found it: on the left.", said  # from the screen, not in steps
+    assert said[-1] == "Found it: on the left near the top.", said  # the screen, not steps
 
 
 def test_an_idle_nvidia_card_is_pointed_out(monkeypatch):
