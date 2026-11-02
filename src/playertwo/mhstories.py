@@ -1286,6 +1286,10 @@ class Fight:
                 return
             if "toppled" in text:
                 self.say(self.lines.pick("It's down!", "Knocked it over again."))
+            if "double attack" in text:
+                self.say(self.lines.pick(
+                    "There's the double attack." if "zerk" in text
+                    else "Ogden and Chirpy doubled up." if "ogden" in text else "Double attack."))
             if "normal" in text or "angry" in text or "strange" in text:
                 self.seen_type = ""
                 self.note("mh_seen", {"type": "", "phase": text})
@@ -1343,7 +1347,8 @@ class Fight:
                         type=view.menu_type, weapon=view.in_hand)
         t_read = time.monotonic() - t
         # Said now, while the presses go on: all true of this moment.
-        reaction = self.lines.broke(just_broke) if just_broke else self.lines.monster_low(low)
+        reaction = self.lines.broke(just_broke) if just_broke else (
+            self.lines.monster_low(low) if self.parts else "")
         if plan.do == "item":
             first = self.lines.hurt(plan.on, view.hp.get(plan.on, 0.0))
         else:
