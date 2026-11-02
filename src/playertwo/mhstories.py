@@ -62,6 +62,14 @@ HEALTH = re.compile(r"\b(how'?s|how is|check) (my|our|the party'?s?) (health|hp)
                     r"|\bhow (am i|are we) doing\b|\bam i hurt\b")
 
 
+# The type each monster mostly attacks with, normal and angry: gamerguides.com's table, and its
+# Tetranadon and Somnacanth rows match what's on screen in saved fights. Only a first guess: what
+# the monster's actually been seen using in this fight goes first.
+KNOWN_TYPES = {"tetranadon": ("Power", "Technical"), "somnacanth": ("Technical", "Speed"),
+               "izuchi": ("Speed", "Speed"), "green bnahabra": ("Technical", "Technical"),
+               "bnahabra": ("Technical", "Technical")}
+
+
 def is_game(name: str) -> bool:
     return (name or "").lower().startswith(GAME)
 
@@ -484,6 +492,7 @@ class View:
     gauge: int = 0  # Zerk's skill gauge
     target: str = ""  # the part being worked on
     resists: list[str] = field(default_factory=list)  # elements it shrugs off (Muse, Status)
+    usual_type: str = ""  # what it usually hits with, by the guides, for the state Muse read
 
 
 @dataclass
@@ -499,7 +508,7 @@ class Plan:
     double: bool = False
 
 
-HURT = {"Zerk": 0.35, "Canyne": 0.35, "Ogden": 0.25, "Chirpy": 0.25}
+HURT = {"Zerk": 0.35, "Canyne": 0.35, "Ogden": 0.35, "Chirpy": 0.3}
 
 
 def shrugged_off(view: View, part: Part) -> bool:
@@ -523,9 +532,10 @@ def pick_part(view: View) -> Part | None:
     for p in open_parts:
         if p.name == view.target:
             return p
+    open_parts = [p for p in open_parts if not shrugged_off(view, p)] or (
+        [] if view.resists else open_parts)
     if open_parts:
-        return min(open_parts, key=lambda p: (shrugged_off(view, p), round(p.gauge, 1),
-                                              not fits_hand(view, p)))
+        return min(open_parts, key=lambda p: (round(p.gauge, 1), not fits_hand(view, p)))
     hand = view.weapons[view.in_hand].damage if view.weapons else ""
     return next((p for p in view.parts if hand in p.works), view.parts[0])
 
@@ -552,6 +562,8 @@ def choose(view: View) -> Plan:
     if view.arc in ("yellow", "blue"):
         if view.monster_type in ANSWER:
             kind, why = ANSWER[view.monster_type], "seen"
+        elif view.usual_type in ANSWER:
+            kind, why = ANSWER[view.usual_type], "usual"
         elif view.hint_type:
             kind, why = view.hint_type, "ally"
     plan = Plan("attack", type=kind, weapon=weapon, part=part, why_type=why)
@@ -618,6 +630,10 @@ class Lines:
                     f"{plan.type} beats that.",
                     f"{view.monster_type} attack on you. Countering with {plan.type.lower()}.",
                     f"You again. {plan.type} wins this one.")
+            if plan.why_type == "usual":
+                return self.pick(
+                    f"It's coming at you, and these usually hit with "
+                    f"{view.usual_type.lower()}. {plan.type} beats that.")
             if plan.why_type == "ally":
                 return self.pick(
                     f"It's coming at you. Going {plan.type.lower()}, same as {view.hint_from}.",
@@ -631,6 +647,9 @@ class Lines:
                     f"It's going for {name}, and it's been hitting with "
                     f"{view.monster_type.lower()}. I'll go {plan.type.lower()}.",
                     f"{name} is up next. {plan.type} beats what it's throwing.")
+            if plan.why_type == "usual":
+                return self.pick(f"It's going for {name}. These usually hit with "
+                                 f"{view.usual_type.lower()}, so {plan.type.lower()}.")
             if plan.why_type == "ally":
                 return self.pick(f"It's going for {name}. {view.hint_from}'s picked "
                                  f"{plan.type.lower()}, so I'll match.",
@@ -820,8 +839,10 @@ class Fight:
             w, h = img.size
             pages.append(img.crop((0, 90 * h // 720, 830 * w // 1280, 590 * h // 720)))
             rows = []
-            while skill_row(img) != 0:  # up to the plain attack, then down the skills
-                await self._press("up", 0.18)
+            for _ in range(4):  # up to the plain attack, then down the skills
+                if skill_row(img) == 0:
+                    break
+                await self._flick("up", 0.2)
                 img = await self._shot()
             for row in (1, 2, 3):
                 await self._press("down", 0.2)
@@ -1081,7 +1102,15 @@ class Fight:
                     self.seen_type, hint, hint_from, ribbon(wheel, "Canyne"),
                     {who: bar_share(wheel, who) for who in ALLIES},
                     round(bar_share(wheel, "Zerk", 698) * 100), self.target,
-                    [str(x).lower() for x in self.status.get("resists") or []])
+                    [str(x).lower() for x in self.status.get("resists") or []],
+                    self.usual())
+
+    def usual(self) -> str:
+        known = KNOWN_TYPES.get(str(self.status.get("name") or "").lower())
+        if not known:
+            return ""
+        state = str(self.status.get("state") or "normal").lower()
+        return known[0] if "normal" in state else known[1]
 
     def current_part(self, img: Image.Image) -> Part | None:
         mask = wheel_title(img)
@@ -1144,7 +1173,7 @@ class Fight:
             now = skill_row(img)
             if now == want:
                 return True
-            await self._press("down" if want > now else "up", 0.16)
+            await self._flick("down" if want > now else "up", 0.2)
             img = await self._shot()
         return skill_row(img) == want
 
@@ -1212,7 +1241,7 @@ class Fight:
             now = lit_row(img, ITEM_ROWS)
             if now == want:
                 break
-            await self._press("down" if (now or 0) < want else "up", 0.16)
+            await self._flick("down" if (now or 0) < want else "up", 0.2)
             img = await self._shot()
         if lit_row(img, ITEM_ROWS) != want:
             await self.back_out()
@@ -1376,7 +1405,7 @@ class Fight:
             "weapon": view.weapons[plan.weapon].name if view.weapons else "",
             "skill": plan.skill.name if plan.skill else "", "item": plan.item, "on": plan.on,
             "hp": {k: round(v, 2) for k, v in view.hp.items()}, "gauge": view.gauge,
-            "monster_health": round(low, 2), "seen_type": view.monster_type,
+            "monster_health": round(low, 2), "seen_type": view.monster_type, "usual": view.usual_type,
             "hint": view.hint_type, "canyne": view.canyne_type,
             # What Muse read that this turn's choice rests on, and how long each reading took.
             "muse_informed": {k: self.muse_seconds.get(k) for k in (

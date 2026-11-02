@@ -57,6 +57,8 @@ def test_a_part_being_worked_on_stays_until_it_breaks():
 def test_a_part_whose_weapon_it_resists_comes_last():
     parts = [part("Head", "pierce", gauge=0.2), part("Legs", "blunt", gauge=0.9)]
     assert m.choose(view(parts=parts, resists=["water"])).part.name == "Legs"
+    head_only = [part("Head", "pierce"), part("Legs", "blunt", broken=True)]
+    assert m.choose(view(parts=head_only, resists=["water"], in_hand=0)).part.name == "Legs"
     assert m.choose(view(parts=parts)).part.name == "Head"
 
 
@@ -64,6 +66,14 @@ def test_the_type_that_beats_the_one_it_has_been_using():
     for seen, want in (("Power", "Speed"), ("Speed", "Technical"), ("Technical", "Power")):
         plan = m.choose(view(arc="yellow", toward="Zerk", monster_type=seen))
         assert plan.type == want and plan.why_type == "seen"
+
+
+def test_what_it_usually_uses_is_said_as_usual_and_gives_way_to_what_is_seen():
+    v = view(arc="yellow", toward="Zerk", usual_type="Power")
+    plan = m.choose(v)
+    assert plan.type == "Speed" and plan.why_type == "usual"
+    assert "usually" in m.Lines().reason(v, plan)
+    assert m.choose(view(arc="yellow", usual_type="Power", monster_type="Technical")).type == "Power"
 
 
 def test_an_allys_pick_is_used_only_as_a_hint_and_said_as_one():
