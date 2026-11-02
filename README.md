@@ -128,6 +128,11 @@ laptop from public main `259ca29` completed, including setup, help, an offline c
 saved-frame Muse response on Nov 2. This was an existing Windows installation, not a clean OS.
 The deep Chrono Trigger path has only been measured on Linux.
 
+If a valid key/model returns HTTP 404 on a cloud network, see the
+[IPv4/IPv6 validation caveat](docs/validation.md#a-real-call-without-a-game). The tested Ubuntu
+VM needed an IPv4-only connection for Muse; the Windows laptop did not. Installation and offline
+checks do not detect that API routing problem.
+
 ### No key or no desktop? Run the offline checks
 
 From the Linux clone used above, run the command below. On Windows, the installer does not
@@ -294,7 +299,7 @@ and [GamePals](https://arxiv.org/html/2601.11218v1). GamerAstra tested with eigh
 low-vision users; Player Two has no such user evidence. Our tested focus is mainstream
 commercial games on real hardware, voice input and output, and reading, answering and asked-for
 button presses through a Muse tool loop and local executors. The current film uses typed
-requests; voice routing has separate synthetic-audio tests. This is not a first-or-only claim.
+requests; voice routing has separate synthetic-audio tests.
 
 ## Built during the event
 
