@@ -96,3 +96,10 @@ async def test_cancelled_status_batch_does_not_poison_the_next_line():
     await asyncio.gather(task, return_exceptions=True)
     await v.say("Fresh status.", interrupt=False)
     assert pushed == ["Fresh status."]
+
+
+async def test_voice_does_not_rewrite_a_game_line_it_was_asked_to_read():
+    v, pushed = fake_voice()
+    v.first_audio_ms = []
+    await v.say("Frog uses Heal.")
+    assert pushed == ["Frog uses Heal."]

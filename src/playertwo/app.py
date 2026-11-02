@@ -20,6 +20,7 @@ from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
+from .delivery import companion_line
 from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed, wake_match
 from .muse import Muse
@@ -426,6 +427,7 @@ class Session:
         With `wait_turn` (news nobody asked for), it waits until the player has finished
         talking instead of speaking over them.
         """
+        text = companion_line(text)
         self.events.emit("say", text=text, source="p2", status=status)
 
         async def run():
@@ -655,6 +657,7 @@ class Session:
             self.answer = None
 
     async def agent_say(self, text: str) -> None:
+        text = companion_line(text)
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
         await self.voice.say(text, interrupt=False)
@@ -1803,7 +1806,7 @@ class Session:
         # Danger it gives ("Frog's at 1 of 494") isn't the reader's to say again.
         with contextlib.suppress(Exception):
             self.reader.just_said([line])
-        await self.voice.say(line)
+        await self.voice.say(companion_line(line))
         return True
 
     async def _agent(self, text: str) -> None:
@@ -1997,6 +2000,7 @@ class Session:
                          points=[[round(m.cx, 3), round(m.cy, 3)] for m in matches[:12]],
                          boxes=[list(m.box) for m in matches[:12] if m.box is not None]
                          if how == "sam-3.1" else [], frame_t=located_frame_t)
+        text = companion_line(text)
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
         await self.voice.say(text)

@@ -14,7 +14,6 @@ import numpy as np
 
 from .audio import CUES, Mixer
 from .config import CACHE_DIR, Settings
-from .delivery import companion_line
 
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 MODEL_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
@@ -208,7 +207,7 @@ class Voice:
 
     async def say(self, text: str, interrupt: bool = True) -> None:
         """Speak text. With interrupt, anything still playing is cut off first."""
-        text = clean_for_speech(companion_line(text))
+        text = clean_for_speech(text)
         if not text:
             return
         if interrupt:
@@ -305,14 +304,14 @@ class Voice:
                 buf += delta
                 parts = _SENTENCE.split(buf)
                 for done in speech_chunks(" ".join(parts[:-1])):
-                    done = clean_for_speech(companion_line(done))
+                    done = clean_for_speech(done)
                     if speakable(done):
                         chunks = [done]
                         spoken.append(done)
                         for chunk in chunks:
                             queue(chunk)
                 buf = parts[-1]
-            tail = clean_for_speech(companion_line(buf))
+            tail = clean_for_speech(buf)
             if speakable(tail) and gen == self._gen:
                 spoken.append(tail)
                 queue(tail)
