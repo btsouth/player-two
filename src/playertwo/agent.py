@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import os
 import re
 import time
@@ -17,7 +18,7 @@ import numpy as np
 import openai
 from PIL import Image
 
-from . import ctsteam
+from . import ctsteam, ontopic
 from .ack import FIGHT, RUN
 from .areamap import AreaMap
 from .battle import (
@@ -25,6 +26,7 @@ from .battle import (
     Foes,
     Intent,
     Stop,
+    act_line,
     foe_name,
     heal_line,
     heal_plan,
@@ -64,6 +66,16 @@ STILL_TOOLS = {"where_am_i", "next_goal", "guide", "exits", "area_map", "remembe
 # Walking around by trial and error in one request stops after this long: wandering on
 # camera looks lost, and an honest "I don't know the way here yet" is better.
 FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
+# Words that add nothing to a closing line ("We're inside the Truce Inn." after "We're at
+# Truce Inn."), as ontopic.content stems them.
+FILLER = {ontopic.stem(w) for w in (
+    "inside", "outside", "here", "now", "arrived", "made", "there", "finally", "right",
+    "safely", "safe", "back", "all", "set", "done", "ready", "got", "okay", "standing")}
+# A line saying what's about to happen, not what has.
+INTENT = re.compile(r"(?i)\s*(going|heading|walking|taking|trying|let me|i'll|i will|"
+                    r"i'm going|okay|ok|on it|got it, i'll)\b")
+# Said when the model's lines were off the point twice in one request (ontopic.py).
+LOST_THREAD = "Sorry, I lost my train of thought there. Could you ask me that again?"
 WANDER_LIMIT_S = 40.0
 AGENT_BUTTONS = [b for b in BUTTONS if b != "guide"]
 
@@ -357,6 +369,7 @@ FIELD_MENU = True  # the field_menu tool is offered (menu.py)
 BATTLE_TOOLS = [*CT_TOOLS[:2], *(t for t in TOOLS if t["function"]["name"] in (
     "say", "ask_player", "remember", "wait", "finish"))]
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
+TOOL_TEXT = json.dumps([*TOOLS, *CT_TOOLS])  # the tools as the model reads them
 # Out of steps but not done: the player can say to keep going (that adds steps).
 FINISH_OR_ASK = [t for t in TOOLS if t["function"]["name"] in ("finish", "ask_player")]
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS + CT_TOOLS}
@@ -612,6 +625,9 @@ class Agent:
         self._battle_seen = 0.0
         self.foes: Foes | None = None  # the enemies as last counted, this fight
         self._counting: asyncio.Task | None = None  # a count of them in flight
+        # What the player heard lately (narration, the screen reader, answers): the screen
+        # in words, for telling the model's lines about it from unrelated ones (ontopic).
+        self.context_lines: Callable[[], list[str]] | None = None
 
     def hold(self) -> None:
         self.go.clear()
@@ -661,6 +677,9 @@ class Agent:
             return
         if self.said and SequenceMatcher(None, self.said[-1].lower(), line.lower()).ratio() > 0.6:
             return
+        grounds = getattr(self, "_grounds", None)
+        if grounds is not None and grounds.off_topic(line):
+            return  # only a progress line: not worth a second look
         self._spoke_at = now
         asyncio.get_running_loop().create_task(self._speak(line))
 
@@ -686,6 +705,48 @@ class Agent:
         if negations(now) != negations(before):
             return False
         return now <= before or len(now & before) / len(now | before) >= 0.5
+
+    def _adds_nothing(self, text: str) -> bool:
+        """Whether a closing line only says again what this request has said already
+        (live 3: "We're inside the Truce Inn." after the walk's "We're at Truce Inn.";
+        "It's set to Active." after "It's Active, closing the menu."): every word of it
+        that matters was in those lines (numbers too), and it says no "not"."""
+        if not self.said:
+            return False
+        words = [w for w in ontopic.content(text) if w not in FILLER]
+        if not words or re.search(r"\b(not|no|never|can't|couldn't|won't|isn't|didn't)\b|"
+                                  r"n't\b", text.lower().replace("\u2019", "'")):
+            return False
+        # Only what was said as done or seen counts: "Going to Leene Square." doesn't say
+        # we're there.
+        facts = [line for line in self.said if not INTENT.match(line)]
+        before = {w for line in facts for w in ontopic.content(line)}
+        return bool(before) and all(w in before for w in words)
+
+    async def _on_topic(self, text: str) -> bool:
+        """Whether a line the model wrote may be said: most are about what they were given
+        (see ontopic.py); one that isn't gets the model's quick second look, with the
+        player's request beside it, and isn't said on a no (live 3: a sentence about
+        football fouls, spoken as the answer to "what's the battle mode set to?")."""
+        grounds = getattr(self, "_grounds", None)
+        if grounds is None or not grounds.off_topic(text):
+            return True
+        verdict = await ontopic.second_look(self.muse, self.game,
+                                            getattr(self, "_request", ""), text)
+        share, loose = grounds.grounding(text)
+        ok = verdict if verdict is not None else share >= ontopic.FALLBACK_SHARE
+        if self.on_action:
+            self.on_action("off_topic", {"text": text, "share": round(share, 2),
+                                         "loose": loose[:8], "second_look": verdict,
+                                         "said": ok})
+        if not ok:
+            self._held += 1
+        return ok
+
+    def _not_on_topic(self) -> str:
+        """The tool result (or note) when a line wasn't said for being off the point."""
+        return (f'not said: that isn\'t about what the player asked ("{self._request}") or '
+                "this game. Answer that: call a tool, or finish with what to tell them.")
 
     def system(self) -> str:
         parts = [AGENT, CONFIRM.get(self.confirm, CONFIRM["important"])]
@@ -772,7 +833,7 @@ class Agent:
             if not buttons:
                 return (f"nothing pressed: {', '.join(ignored) or 'no buttons'} isn't a "
                         f"button; use {', '.join(AGENT_BUTTONS)}")
-            if str(a.get("say") or "").strip():
+            if str(a.get("say") or "").strip() and await self._on_topic(str(a["say"])):
                 await self._speak(str(a["say"]))
             held_back = ""
             skipping = a.get("skipping") is True and set(buttons) <= {"a", "b", "start"}
@@ -1189,8 +1250,9 @@ class Agent:
             if self.on_action:
                 self.on_action("battle_note", {"text": f"decide failed: {exc}"})
             return None
-        # Said once it's put in (Executor.win's chose): a pick that isn't in the list
-        # isn't said (live 3: "Marle: Arise on Crono." and no Arise to cast).
+        # Said once it's put in (Executor.win's chose, as act_line words it: "Marle uses
+        # Cure on Frog."): a pick that isn't in the list isn't said (live 3: "Marle: Arise
+        # on Crono." and no Arise to cast).
         return parse_intent(d, st.actor)
 
     async def count_foes(self, image, party: list[str] = ()) -> Foes | None:
@@ -1228,16 +1290,29 @@ class Agent:
             look = plural(next(n for n in names if n.lower() in look.lower()))
         return Foes(count, look, time.monotonic())
 
-    async def what_we_fight(self, image, st: State, known: Foes | None = None) -> str | None:
+    async def what_we_fight(self, image, st: State, known: Foes | None = None,
+                            now: Callable[[], Awaitable[State | None]] | None = None
+                            ) -> str | None:
         """"What are we fighting?" in a fight: the enemies, counted by a look, and the
-        party's HP in a few words ("Three Gargoyles. Crono's full, Frog's at 1 of 494,
-        Marle's full."). None when the look fails (the agent answers then). known: a
-        count that still holds (the fight's opening one), said with no look."""
+        party's HP in a few words ("Three Gargoyles. Frog's at 1 HP, Crono and Marle are
+        full."). None when the look fails (the agent answers then). known: a count that
+        still holds (the fight's opening one), said with no look. now: the fight as it is
+        when the count is back, for the HP: the count takes about 2 s, and a fight that
+        isn't paused goes on (live 3: "Everyone's at full health." said after an enemy
+        combo had dropped Marle to 1 HP, read from the frame the request came with). With
+        a known count nothing is waited on, so the request's own reading is fresh."""
         foes = known or await self.count_foes(image, [m.name for m in st.party])
         if foes is None:
             return None
         self.foes = foes
-        return f"{foes.line()} {party_brief(st)}".strip()
+        brief = party_brief(st)
+        if now is not None and known is None:
+            # Never the old reading: an attack drawn over the numbers says nothing of HP.
+            fresh = None
+            with contextlib.suppress(Exception):
+                fresh = await now()
+            brief = party_brief(fresh) if fresh is not None else ""
+        return f"{foes.line()} {brief}".strip()
 
     def recount(self, image, party: list[str],
                 say: Callable[[str], Awaitable[None]] | None = None) -> None:
@@ -1278,6 +1353,13 @@ class Agent:
         if line:
             await say(line)
 
+    def _put_in(self, intent: Intent) -> None:
+        """A heal or revive, said as it's put in ("Marle uses Cure on Frog."), over its
+        animation: it can wait behind what's playing for 9 s or more (live 3, 8 to 11.6 s
+        of silence)."""
+        self._spoke_at = time.monotonic()
+        asyncio.get_running_loop().create_task(self._speak(act_line(intent)))
+
     async def _heal_now(self, actor: str, who: str, run: Run, t0: float) -> str | None:
         """"Heal X" in a fight, chosen here (whoever is up with a healing tech, else an
         item) and done once: what it did, said, or None to leave it to the model."""
@@ -1290,16 +1372,12 @@ class Agent:
         if plan.say:
             await self._speak(plan.say)
             return plan.say
-        told: list[str] = []
+        told: list[Intent] = []
 
         def confirmed(done: Intent) -> None:
-            # The heal is in: said now, over its animation (it can take up to 9 s to
-            # land behind what's playing; live 3, 8 to 11.6 s of silence).
-            line = f"{done.actor}: {done.name} on {done.target}." if done.target else \
-                f"{done.actor}: {done.name}."
-            told.append(line)
-            self._spoke_at = time.monotonic()
-            asyncio.get_running_loop().create_task(self._speak(line))
+            # Then heal_line says only what it did.
+            told.append(done)
+            self._put_in(done)
 
         for intent in plan.intents[:4]:
             await self.go.wait()
@@ -1377,23 +1455,21 @@ class Agent:
                     if ex.frame is not None:
                         self.recount(ex.frame, [m.name for m in st.party])
 
-                def chose(intent: Intent) -> None:
-                    # A heal or a revive, said as it's put in ("Marle: Cure on Frog."),
-                    # over its animation.
-                    self._spoke_at = time.monotonic()
-                    line = f"{intent.actor}: {intent.name or intent.command}" + (
-                        f" on {intent.target}" if intent.target else "") + "."
-                    asyncio.get_running_loop().create_task(self._speak(line))
-
-                out = await ex.win(self._decide if getattr(getattr(ex, "t", None), "model_decides", False)
-                                   else None,
-                                   say=now_and_then, turn=turn, chose=chose)
+                decide = self._decide if getattr(getattr(ex, "t", None), "model_decides",
+                                                 False) else None
+                out = await ex.win(decide, say=now_and_then, turn=turn, chose=self._put_in)
         else:
             intent = Intent(str(a.get("actor") or ""), str(a.get("command") or "attack"),
                             str(a.get("name") or ""), str(a.get("target") or ""))
             ex.after_frame = None
-            out = await ex.act(intent)
-            if out.ok and ex.after_frame is not None and not (heals(intent) or revives(intent)):
+            healing = heals(intent) or revives(intent)
+            # Watched till it lands (up to 14 s), so said as it's put in here too.
+            ex.on_confirm = self._put_in if healing else None
+            try:
+                out = await ex.act(intent)
+            finally:
+                ex.on_confirm = None
+            if out.ok and ex.after_frame is not None and not healing:
                 self.recount(ex.after_frame, [m.name for m in out.state.party]
                              if out.state is not None else [])
         self._fought = out
@@ -1622,6 +1698,57 @@ class Agent:
             progress.went(at)
             progress.save(self.notes.folder, self.game or "")
         return f"{text} Places on this map for go_to_place: {', '.join(m.places)}."
+
+    async def world_where(self, image) -> str:
+        """Where a world-map screen is, in a few words ("World map, 1000 A.D., at Leene
+        Square"), when the atlas places it surely; '' otherwise."""
+        from . import atlas as atlas_mod
+        from .quests import where_short
+
+        atlas = await self._the_atlas()
+        spot = await self._spot(atlas, image) if atlas is not None else None
+        if spot is None or spot.margin < 0.1:
+            return ""
+        return where_short(atlas.map(spot.map), spot.x, spot.y, getattr(atlas_mod, "CELL", 8),
+                           getattr(atlas_mod, "RISE", 0))
+
+    async def _where_line(self) -> str:
+        """"Where am I?" as said to the player, from the atlas on a world map or the room
+        survey inside a place ('' when neither knows: the model answers from the screen)."""
+        from . import atlas as atlas_mod
+        from .people import PEOPLE_KINDS, THING_KINDS, directions
+        from .quests import atlas_aliases, where_said
+
+        frame = await self.grab()
+        if not self._ct_steam(frame):
+            return ""
+        atlas = await self._the_atlas()
+        spot = await self._spot(atlas, frame.image) if atlas is not None else None
+        if spot is not None and spot.margin >= 0.1:
+            m = atlas.map(spot.map)
+            line, at = where_said(m, spot.x, spot.y, getattr(atlas_mod, "CELL", 8),
+                                  getattr(atlas_mod, "RISE", 0), atlas_aliases(self.game or ""))
+            if at:
+                progress = self._progress()
+                progress.went(at)
+                progress.save(self.notes.folder, self.game or "")
+            return line
+        inside = await self._inside(frame.image, sure=True)
+        if inside is None:
+            return ""
+        rooms, here = inside
+        name = rooms.name(here.loc)
+        if name.startswith("place 0x"):
+            return ""
+        out = f"We're at {name}."
+        near = sorted((p for p in rooms.rooms[here.loc].people
+                       if p.kind in PEOPLE_KINDS + THING_KINDS),
+                      key=lambda p: math.dist(p.at, (here.x, here.y)))
+        if near and math.dist(near[0].at, (here.x, here.y)) <= 6 * 16:
+            p = near[0]
+            way = directions(p.at[0] - here.x, p.at[1] - here.y)
+            out += f" {p.name[:1].upper()}{p.name[1:]} is {way}."
+        return out
 
     async def _next_goal(self, step: int = 0, player_says: str = "") -> str:
         """What to do next, from the quest list and where the player seems to be in it."""
@@ -2403,12 +2530,27 @@ class Agent:
         self._theirs = None  # who the player's own words meant, this request
         self._theirs_done = False  # gone to them: later calls are the model's own
         self._unanswered = ""  # what to say when a question went unanswered: the end
+        self._grounds, self._held = None, 0  # (set once the model is asked; see _on_topic)
         self.cancelled = False
         self.said: list[str] = []
         self._said_before_act = 0  # how many lines were said before the last action
         self._wander_s = 0.0
         frame = frame or await self.grab()
         tried = ""
+        from .fast import try_fast, where_request
+
+        if where_request(request):
+            # "Where am I?" from the atlas or the room survey, said the same way every
+            # time and with no model turn (live 3: the model reworded it each time, once
+            # contradicting itself, in 4.6 to 5.6 s).
+            line = await self._where_line()
+            if line and not self.cancelled:
+                await self._speak(line)
+                run.steps.append(Step("where_am_i", {}, time.monotonic() - t0, line))
+                run.outcome = line
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
         trip = TRIP.fullmatch(" ".join(request.lower().split()).strip(" .!?"))
         if trip and await self._on_surveyed_map():
             # "Take me to the fair" on a world map the atlas knows: go now, without a
@@ -2432,7 +2574,13 @@ class Agent:
                                   result))
             if result.startswith("arrived") or self.cancelled:
                 if result.startswith("arrived"):
-                    await self._speak("We're outside.")
+                    # Where outside, when the atlas knows (live 3: "We're outside." then
+                    # the narrator's "World map.").
+                    where = ""
+                    with contextlib.suppress(Exception):
+                        where = await self.world_where((await self.grab()).image)
+                    await self._speak(f"We're outside: {where[:1].lower()}{where[1:]}."
+                                      if where else "We're outside.")
                 run.outcome = self.said[-1] if self.said else result
                 run.seconds = time.monotonic() - t0
                 self.history.append(f"{request} -> {run.outcome}")
@@ -2502,9 +2650,7 @@ class Agent:
                           "it is the player's to answer); don't walk again.\n")
             tried += "\n"
         # Plain requests whose words settle them ("buy three potions", "Crono, use
-        # Cyclone", "where am I?"): done and said with no model turn (fast.py).
-        from .fast import try_fast
-
+        # Cyclone"): done and said with no model turn (fast.py).
         fast_tried = ""
         if not tried:
             done, fast_tried = await try_fast(self, request, frame, run, t0)
@@ -2564,6 +2710,16 @@ class Agent:
                  + f'The player says: "{request}"'},
             ]},
         ]
+        # What the model is given this request, to tell a line about it from one that
+        # isn't (ontopic.py); tool results are added as they come.
+        heard: list[str] = []
+        if self.context_lines is not None:
+            with contextlib.suppress(Exception):
+                heard = list(self.context_lines())
+        self._grounds = ontopic.Grounds(msgs[0]["content"], self.game, request, recent, trail,
+                                        tried, self._battle_note(), TOOL_TEXT, BATTLE_CT,
+                                        *heard)
+        self._held = 0  # lines not said for being off the point, this request
         # The player's answer to a question sets a new course: it gets turns of its own.
         budget, _turn, out_of_turns = self.max_turns, -1, True
         # A fight: as many battle commands as the player named, then only finish (live:
@@ -2598,8 +2754,17 @@ class Agent:
             if not calls:
                 # A reply in words, not a tool call; sometimes labelled ("Finish: ...").
                 text = re.sub(r"^\s*(finish|say)\s*:\s*", "", msg.content or "", flags=re.IGNORECASE)
+                if text.strip() and not await self._on_topic(text):
+                    if self._held >= 2:
+                        await self._speak(LOST_THREAD)
+                        run.outcome = LOST_THREAD
+                        out_of_turns = False
+                        break
+                    msgs.append({"role": "user", "content": self._not_on_topic()})
+                    continue
                 if text.strip():
-                    await self._speak(text)
+                    if not self._adds_nothing(text):
+                        await self._speak(text)
                     run.outcome = text
                     out_of_turns = False
                     break
@@ -2650,6 +2815,10 @@ class Agent:
                     text = str(args.get("text") or "")
                     if self._already_said(text):
                         result = "you just said that; don't say it again"
+                    elif not await self._on_topic(text):
+                        result = self._not_on_topic()
+                        if self._held >= 2:
+                            finished = LOST_THREAD
                     else:
                         await self._speak(text)
                         result = "said"
@@ -2659,6 +2828,10 @@ class Agent:
                         # An empty question would play silence and wait for nothing.
                         result = ("ask_player needs the question itself, in the "
                                   "question field. Ask again with it, or carry on.")
+                    elif not await self._on_topic(question):
+                        result = self._not_on_topic().replace("not said", "not asked")
+                        if self._held >= 2:
+                            finished = LOST_THREAD
                     elif self.ask is None:
                         await self._speak(question)
                         result = "The player can't answer right now. Don't do it; finish."
@@ -2674,8 +2847,13 @@ class Agent:
                     result = self.notes.add(self.game, str(args.get("note") or ""),
                                             str(args.get("instead_of") or ""))
                 elif c.function.name == "finish":
-                    finished = (args.get("text") or "").strip()
-                    result = "finished"
+                    text = str(args.get("text") or "").strip()
+                    if text and not await self._on_topic(text) and self._held < 2:
+                        result = self._not_on_topic().replace("not said", "not finished")
+                    else:
+                        # Twice off the point: said plainly, and done.
+                        finished = LOST_THREAD if self._held >= 2 else text
+                        result = "finished"
                 elif (self._wandering(c.function.name, args) or 0.0) >= WANDER_LIMIT_S:
                     result = (f"not done: you've walked around for {WANDER_LIMIT_S:.0f} s "
                               "by trial and error without getting there. Stop now: finish, "
@@ -2709,6 +2887,7 @@ class Agent:
                                          if c.function.name in ("keep_walking", "travel")
                                          else way(getattr(self, "_facing", None)))
                 step.result = result
+                self._grounds.add(result, json.dumps(args))
                 msgs.append({"role": "tool", "tool_call_id": c.id, "content": result})
                 if self._unanswered and finished is None:
                     finished = self._unanswered  # asked and no answer: done here
@@ -2720,7 +2899,8 @@ class Agent:
                 if not finished and last_turn and len(self.said) <= self._said_before_act:
                     finished = ("I stopped there after a lot of steps. Say describe to hear "
                                 "where things stand.")
-                if finished and not self._already_said(finished):
+                if finished and not self._already_said(finished) \
+                        and not self._adds_nothing(finished):
                     await self._speak(finished)
                 # Kept for the next request's history even when say already said it.
                 run.outcome = finished or (self.said[-1] if self.said else "done")
@@ -2771,6 +2951,7 @@ class Agent:
                     "is the screen now, the cyan line is where you walked and its dot is "
                     "you. People shown may have moved since. For walk_to_map, x and y are "
                     "on this map, 0 to 1000 each way.")}]
+            self._grounds.add(self._battle_note())
             msgs.append({"role": "user", "content": [
                 *shown,
                 image_part(frame.image, self.muse.s.image_max_side),

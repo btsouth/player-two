@@ -56,6 +56,10 @@ def test_battle_words_settle_one_command_or_none():
 
 def test_where_words():
     assert fast.where_request("where am I?") and fast.where_request("Where are we")
+    # Both ways "where am I" came in before (speed's and quality's words): one path now.
+    for words in ("so, where am I?", "Player Two, where are we now?", "where am I exactly",
+                  "tell me where we are please", "OK where are we right now"):
+        assert fast.where_request(words), words
     assert not fast.where_request("where's the inn") and not fast.where_request(
         "where am i on the map")
 
@@ -102,17 +106,38 @@ def test_a_command_said_from_what_the_screen_showed():
     after = _st(780, 1, 1)
     out = Outcome(True, "Crono: tech Cyclone", after)
     assert fast.battle_line(Intent("Crono", "tech", "Cyclone"), out, before, after, True) == (
-        "Crono used Cyclone. Frog dropped to 1 HP and Marle dropped to 1 HP.")
-    # Hits before the request aren't news; the danger still is.
+        "Crono used Cyclone. Frog and Marle dropped to 1 HP.")
+    # Hits before the request aren't news; the danger still is (low_line's words).
     out = Outcome(True, "Crono: attack on left", after)
     assert fast.battle_line(Intent("Crono", "attack", "", "left"), out, after, after, True) == (
-        "Crono attacked the one on the left. Frog and Marle are still at 1 HP.")
+        "Crono attacked the one on the left. Frog and Marle are at 1 HP.")
     assert fast.battle_line(Intent("Crono", "tech", "Cyclone"), out, after, after, False) == (
-        "Crono's Cyclone is chosen; it goes off after what's playing now. Frog and Marle "
-        "are still at 1 HP.")
+        "Crono picked Cyclone; the fight is paused, so it goes off when we go on. Frog and "
+        "Marle are at 1 HP.")
     out = Outcome(True, "Crono: attack", _st(0, 494, 430))
     assert fast.battle_line(Intent("", "attack"), out, before, None, True) == (
-        "Crono attacked. Crono is knocked out.")
+        "Crono attacked. Crono is down.")
+    # An item in act_line's words; a tech at an enemy says which side.
+    out = Outcome(True, "Crono: item Hi-Potion on Marle", _st(780, 494, 430))
+    assert fast.battle_line(Intent("Crono", "item", "Hi-Potion", "Marle"), out,
+                            _st(780, 494, 100), None, True) == (
+        "Crono gave Marle a Hi-Potion. Marle is up to 430.")
+    out = Outcome(True, "Marle: tech Ice on right", before)
+    assert fast.battle_line(Intent("Marle", "tech", "Ice", "right"), out, before, before,
+                            True) == "Marle used Ice on the one on the right."
+
+
+def test_a_command_line_takes_hp_from_the_newest_full_reading():
+    """The HP said is the newest reading with everyone's HP read: the screen once the
+    command played out, else the paused one (an attack drawn over the box hides
+    numbers; live 3 said "full health" over numbers it couldn't see)."""
+    before = _st(780, 494, 430)
+    hidden = _st(780, 494, 430)
+    hidden.party[1].hp = None
+    paused = _st(780, 1, 430)
+    out = Outcome(True, "Crono: attack", paused)
+    assert fast.battle_line(Intent("Crono", "attack"), out, before, hidden, True) == (
+        "Crono attacked. Frog dropped to 1 HP.")
 
 
 def test_stops_said_plainly_or_left_to_the_model():
@@ -130,24 +155,32 @@ def test_stops_said_plainly_or_left_to_the_model():
 
 
 def test_a_won_fight_in_a_line():
+    """As the fight's lines say it (live 3 read out "Won after 6 commands."): won, the
+    spoils that matter, and who's still low, not everyone's HP."""
     st = _st(529, 494, 430, kind="none")
-    assert fast.won_line("done: won after 9 commands. Earned 648 EXP. Earned 18 TP.", st) == (
-        "Won the fight: 648 experience. Crono's at 529 of 780, Frog's full, Marle's full.")
-    assert fast.won_line("done: won after 2 commands.", _st(780, 494, 430)) == (
-        "Won the fight. Everyone's at full health.")
+    assert fast.won_line("done: won the fight. Earned 648 EXP. Earned 18 TP. (9 commands). "
+                         "Now: ...", st) == "Won the fight: 648 experience and 18 tech points."
+    assert fast.won_line("done: won the fight. Earned 10 ExP. Crono's level increased! "
+                         "Frog's at 1 HP. (2 commands)", _st(780, 1, 430)) == (
+        "Won the fight: 10 experience. Crono went up a level. Frog is at 1 HP.")
+    assert fast.won_line("done: won the fight. (2 commands)", _st(780, 494, 430)) == (
+        "Won the fight.")
     assert fast.won_line("stopped: everyone is knocked out", st) == ""
 
 
-def test_where_on_a_world_map_in_words():
+def test_where_on_a_world_map_is_quests_where_said():
+    """One "where am I" line (fast.py's own was dropped for quests.where_said, which also
+    knows doors and rooms): the scene fast.py's test had, in its words."""
+    from playertwo.quests import where_said
+
     m = SimpleNamespace(name="1000 A.D.", places={
         "Leene Square": (424, 214), "Truce Residence (east)": (424, 256),
         "Crono's House": (446, 270), "Guardia Castle": (100, 100)})
-    line, at = fast.where_line(m, 424, 233 + 0, 8, 0)
-    assert line == ("You're on the world map in 1000 A.D., just south of Leene Square. The "
-                    "east house in Truce is just south and Crono's House southeast.")
+    line, at = where_said(m, 424, 233, 8, 0)
+    assert line == ("On the world map, 1000 A.D., just south of Leene Square. The east Truce "
+                    "Residence is south and Crono's House is southeast.")
     assert at == "Leene Square"
-    line, at = fast.where_line(m, 424, 214, 8, 0)
-    assert line.startswith("You're on the world map in 1000 A.D., right at Leene Square.")
+    assert not hasattr(fast, "where_line")
 
 
 def test_a_purchase_is_said_as_the_gold_shows_it(monkeypatch):
@@ -193,6 +226,23 @@ def test_a_purchase_is_said_as_the_gold_shows_it(monkeypatch):
                                "item": "Potion", "count": 3})]
     assert said == ["Three Potions, 30 gold.", "Bought. You have 370 gold left."]
     assert run.outcome == said[-1]
+
+    # The seller's goodbye left up over the place (Shop.leave tells it by its window):
+    # not done here, or no one would close it. The model gets it, and what was said.
+    async def act_box_left(name, a):
+        price, bought = agent._shop_hooks
+        await price(3, "Potion", 30)
+        await bought(3, "Potion", 30, 370)
+        return ("Bought 3 Potion for 30 G (funds 400 G to 370 G). Out of the shop; the "
+                "seller said: \"Thanks!\". A text box is still up over the place: read it "
+                "and press a to close it.")
+
+    agent._act = act_box_left
+    said.clear()
+    run = Run("buy three potions")
+    done, tried = asyncio.run(fast._shop(agent, (3, "Potion"), run, 0.0))
+    assert not done and "text box is still up" in tried and "the player heard" in tried
+    assert said == ["Three Potions, 30 gold.", "Bought. You have 370 gold left."]
 
 
 def test_someones_line_said_with_the_name_the_player_used():

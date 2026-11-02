@@ -564,6 +564,49 @@ def test_a_two_line_box_at_the_bottom_is_read_whole():
     assert text.startswith("Mother: ") and text.count("!") == 2 and len(text.split()) == 9
 
 
+GOODBYE = LIVE.parent / "night-2026-11-01" / "steam-frames" / \
+    "dialogue-fair-seller-goodbye-two-lines.png"
+GUARDS = LIVE.parent / "night-2026-11-01" / "steam-frames" / \
+    "interior-guardia-castle-hall-guards.png"
+ADJUST = LIVE.parent / "night-2026-11-01" / "narrator-bench" / "frames" / "175403-01.jpg"
+
+
+@pytest.mark.skipif(not GOODBYE.exists(), reason="no goodbye frame")
+def test_a_line_starting_with_j_is_read_and_specks_by_the_frame_are_not():
+    """Live 3: the fair seller's goodbye lost its second line ("Just..." read as "8ust",
+    no J in the font library), and once J read, specks on the box's frame either side
+    ("-t T", ".t .") made it unsure."""
+    lk = ctscreen.look(cv2.imread(str(GOODBYE)), PARTY)
+    assert lk.kind == "text" and not lk.unsure, lk.parts
+    assert lk.parts["text"] == ("Lucca's device is all set up now, you know. Just go "
+                                "straight, to the back of the square.")
+
+
+@pytest.mark.skipif(not GOODBYE.exists(), reason="no goodbye frame")
+def test_a_box_is_up_by_its_window_even_closing_and_not_over_the_place():
+    """Live 3: the shop said "no box is up" with the goodbye on screen."""
+    frames = GOODBYE.parent
+    assert ctscreen.box_up(cv2.imread(str(GOODBYE)))
+    assert ctscreen.box_up(cv2.imread(str(frames / "dialogue-fair-seller-goodbye-closing.png")))
+    assert ctscreen.box_up(cv2.imread(str(frames / "dialogue-box-top-frog-woe-summit.png")))
+    for name in ("leene-square-stalls-fountain.png", "interior-cronos-room-upstairs.png",
+                 "battle-woe-gargoyles-mist.png", "interior-truce-inn-bedroom.png"):
+        assert not ctscreen.box_up(cv2.imread(str(frames / name))), name
+
+
+@pytest.mark.skipif(not GUARDS.exists(), reason="no castle guards frame")
+def test_specks_after_a_short_line_are_not_words():
+    lk = ctscreen.look(cv2.imread(str(GUARDS)), PARTY)
+    assert lk.parts["text"] == "Soldier: Stop right there!" and not lk.unsure
+
+
+@pytest.mark.skipif(not ADJUST.exists(), reason="no settings help frame")
+def test_a_small_j_reads():
+    """Live 3: "Ad,ust game settings." was read out on the menu."""
+    lk = ctscreen.look(cv2.imread(str(ADJUST)), PARTY)
+    assert lk.parts["desc"].startswith("Adjust game sett")
+
+
 TITLE = LIVE.parent / "night-2026-11-01" / "steam-frames" / "title-menu.png"
 
 
@@ -625,7 +668,7 @@ def test_hp_changes_while_player_two_acted_are_not_said_after_it():
     assert r.update(fight(101), now=10.3) == ""
     assert r.update(fight(101), now=10.6) == ""
     r.update(fight(500), now=11.0)
-    assert r.update(fight(500), now=11.3) == "Crono healed 399."  # news again after that
+    assert r.update(fight(500), now=11.3) == "Crono got 399 HP back."  # news again after that
 
 
 @needs_frames
@@ -800,8 +843,9 @@ async def test_what_are_we_fighting_is_answered_from_a_count_and_the_party_box(m
     s.grab_now = grab_now
     asked = []
 
-    async def what_we_fight(image, st, known=None):
+    async def what_we_fight(image, st, known=None, now=None):
         asked.append(([m.name for m in st.party], known))
+        assert now is not None and (await now()) is not None  # HP as it is when it's said
         return "Three Gargoyles. Everyone's at full health."
 
     s.agent = SimpleNamespace(_ct_steam=lambda f: True, history=[], what_we_fight=what_we_fight,

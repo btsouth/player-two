@@ -429,11 +429,13 @@ def field_look(img: np.ndarray, party: list[str] = ()) -> Look:
     if hands:
         return lk  # a menu whose highlighted entry doesn't read: the model sees it
     if rows and sum(len(r.text) for row in rows for r in row) >= 12:
-        # Specks on the box's frame, far left or right of the words: not words.
+        # Specks on the box's frame, far left or right of the words: not words, however
+        # long they read ("-t T" and ".t ." either side of the fair seller's second
+        # line). A word that misreads sits among the others.
         ok = [r for row in rows for r in row if plausible(r)]
         lo, hi = min(r.x0 for r in ok), max(r.x1 for r in ok)
-        rows = [[r for r in row if plausible(r) or len(r.text.strip()) > 3
-                 or lo - 60 <= r.x0 <= hi + 200] for row in rows]
+        rows = [[r for r in row if plausible(r) or lo - 60 <= r.x0 <= hi + 60]
+                for row in rows]
         text = clean(" ".join(r.text for row in rows for r in row))
         lk.kind = "text"
         lk.parts["text"] = text
@@ -536,6 +538,31 @@ def look(image, party: list[str] = ()) -> Look:
     lk = battle_look(st) if st.in_battle or st.paused else field_look(img, party)
     lk.ms = round((time.perf_counter() - t0) * 1e3)
     return lk
+
+
+def box_up(image) -> bool:
+    """Whether a dialogue box is up, by its window alone (no reading: a line half typed,
+    or one the font can't read, is still a box over the place). The window is a dark grey
+    gradient across most of the screen's width, at the top or the bottom: a few hundred
+    rows almost without colour. 17 of 17 labelled dialogue frames (one closing), none of
+    the 30 field, fight and dark-room ones."""
+    img = to_canvas(image if isinstance(image, np.ndarray) else ctsteam._bgr(image), CANVAS)
+    band = img[:, 400:2160].astype(np.int16)
+    sat = band.max(axis=2) - band.min(axis=2)
+    lum = band.mean(axis=2)
+    rows = ((sat < 24).mean(axis=1) > 0.97) & ((lum < 140).mean(axis=1) > 0.6) & (
+        lum.mean(axis=1) > 18)  # (black isn't a window)
+    for y0, y1 in ((0, 440), (1020, CANVAS[1])):
+        run = best = 0
+        for on in rows[y0:y1]:
+            run = run + 1 if on else 0
+            best = max(best, run)
+        if best >= BOX_ROWS:
+            return True
+    return False
+
+
+BOX_ROWS = 220  # a dialogue window's grey rows in a row (about 270 to 370; a menu's fewer)
 
 
 def finished(text: str) -> bool:
@@ -644,7 +671,7 @@ class Reader:
                 if low:
                     covered.add(name)
             else:
-                out.append(f"{name} healed {hp - old}")
+                out.append(f"{name} got {hp - old} HP back")  # ("Marle healed 429": who did?)
         return ", ".join(out), covered, set()
 
     def _danger_news(self, lk: Look, now: float, covered: set[str], moving: set[str]) -> str:

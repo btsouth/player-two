@@ -3,10 +3,11 @@
 Each model turn costs one to three seconds, and a request with a tool call has at least
 two (the call, then a sentence from its result), plus a settle look between them. For a
 request whose words already say exactly what to do ("buy three potions", "Crono, use
-Cyclone", "attack the one on the left", "where am I?"), the tool runs at once and its
-result is said from a template: the same facts the model would have phrased, read off
-the same screen. Anything the words or the result don't settle goes to the model as
-before, with what was tried.
+Cyclone", "attack the one on the left"), the tool runs at once and its result is said
+from a template: the same facts the model would have phrased, read off the same screen,
+in the same words as battle.py's lines. Anything the words or the result don't settle
+goes to the model as before, with what was tried. ("Where am I?" is Agent._where_line's,
+from the atlas or the room survey.)
 
 Live 3 (2026-11-01, Steam): buy three potions 18.6 to 26.7 s, Crono's Cyclone 9.5 to
 12.2 s, attack the one on the left 6.1 to 9.2 s, where am I 4.6 to 5.6 s; the model's
@@ -29,7 +30,12 @@ from .battle import (
     Intent,
     Outcome,
     _hp,
-    party_brief,
+    act_line,
+    heal_line,
+    heals,
+    low_line,
+    read_hp,
+    revives,
 )
 from .ctsteam import State
 
@@ -255,44 +261,51 @@ def _target_words(target: str) -> str:
 
 def battle_line(intent: Intent, out: Outcome, before: State | None, after: State | None,
                 went_off: bool) -> str:
-    """One command done, in a sentence, from what the screen showed: who did what, and
-    what happened to the party while it played ("Crono used Cyclone. Frog dropped to 1
-    HP."). Enemy HP isn't on the screen, so nothing is said about it."""
+    """One command done, in a sentence, from what the screen showed, in the fight's own
+    words (battle.act_line, low_line): who did what, and what happened to the party while
+    it played ("Crono used Cyclone. Frog and Marle dropped to 1 HP."). Enemy HP isn't on
+    the screen, so nothing is said about it. The HP is the newest reading with everyone's
+    read: the one when the command had played out, else the paused screen's."""
     actor = intent.actor or (out.text.split(":")[0].strip() if ":" in out.text else "")
     who = actor or "We"
     cmd = intent.command.lower()
+    ally = intent.target if intent.target in ctsteam.NAMES else ""
     if cmd == "attack":
         lead = f"{who} attacked{_target_words(intent.target)}."
     elif went_off:
-        on = f" on {intent.target}" if intent.target in ctsteam.NAMES else ""
-        lead = f"{who} used {intent.name}{on}."
+        lead = act_line(Intent(who, cmd, intent.name, ally), done=True)
+        if intent.target and not ally:
+            lead = f"{lead[:-1]} on{_target_words(intent.target)}."
     else:
-        lead = (f"{actor + chr(39) + 's ' if actor else ''}{intent.name} is chosen; it goes "
-                "off after what's playing now.")
-    st = after if after is not None and after.party else out.state
+        # (As heal_line says a heal that hasn't landed: the executor leaves it paused.)
+        lead = f"{who} picked {intent.name}; the fight is paused, so it goes off when we go on."
+    st = read_hp(after, out.state)
     b, a = _hp(before), _hp(st)
-    hit, healed, low = [], [], []
+    down: list[str] = []
+    dropped: dict[int, list[str]] = {}
+    up: list[str] = []
     for m in (st.party if st is not None else []):
         old, hp = b.get(m.name), a.get(m.name)
-        if old is None or hp is None:
+        if old is None or hp is None or hp == old:
             continue
-        if hp < old:
-            hit.append(f"{m.name} is knocked out" if hp == 0 else f"{m.name} dropped to {hp} HP")
-        elif hp > old:
-            healed.append(f"{m.name} is back up to {hp}" if old == 0 else f"{m.name} is up to {hp}")
-        elif m.hp_max and 0 < hp < m.hp_max / 3:
-            low.append((m.name, hp))
+        if hp == 0:
+            down.append(m.name)
+        elif hp < old:
+            dropped.setdefault(hp, []).append(m.name)
+        else:
+            up.append(f"{m.name} is back up, at {hp} HP" if old == 0
+                      else f"{m.name} is up to {hp}")
+    news = [f"{_join(down)} {'is' if len(down) == 1 else 'are'} down"] if down else []
+    news += [f"{_join(names)} dropped to {hp} HP" for hp, names in dropped.items()]
+    news += up
     parts = [lead]
-    news = hit + healed
     if news:
         parts.append(_cap(_join(news)) + ".")
+    changed = {n for n in a if a.get(n) is not None and b.get(n) is not None
+               and a[n] != b[n]}
+    low = low_line(st, skip=changed) if st is not None else ""
     if low:
-        if len({hp for _n, hp in low}) == 1:
-            names = _join([n for n, _hp in low])
-            verb = "is" if len(low) == 1 else "are"
-            parts.append(f"{names} {verb} still at {low[0][1]} HP.")
-        else:
-            parts.append(_cap(_join([f"{n} is at {hp} HP" for n, hp in low])) + ".")
+        parts.append(low)  # still in danger from before
     return " ".join(parts)
 
 
@@ -321,17 +334,23 @@ def stopped_line(intent: Intent, out: Outcome) -> str:
 
 
 def won_line(result: str, st: State | None) -> str:
-    """A won fight from the executor's result and the screen after it: "Won the fight:
-    648 experience. Everyone's at full health."; "" when it doesn't read as won."""
+    """A won fight from the executor's result and the screen after it, as the fight's
+    lines say it: "Won the fight: 648 experience. Frog's at 1 HP." (who's still low, not
+    everyone's HP); "" when it doesn't read as won."""
     if result.startswith("done: the fight ended"):
         line = "The fight's over."
     elif result.startswith("done: won"):
         exp = re.search(r"Earned (\d+) EXP", result, re.IGNORECASE)
-        line = "Won the fight" + (f": {exp.group(1)} experience." if exp else ".")
+        tp = re.search(r"Earned (\d+) TP", result, re.IGNORECASE)
+        got = _join([*([f"{exp.group(1)} experience"] if exp else []),
+                     *([f"{tp.group(1)} tech points"] if tp else [])])
+        line = "Won the fight" + (f": {got}." if got else ".")
+        for who in dict.fromkeys(re.findall(r"(\w+)'s level increased", result)):
+            line += f" {who} went up a level."
     else:
         return ""
-    brief = party_brief(st) if st is not None else ""
-    return f"{line} {brief}".strip()
+    low = low_line(st) if st is not None and st.party else ""
+    return f"{line} {low}".strip()
 
 
 def ran_line(result: str) -> str:
@@ -350,11 +369,14 @@ def talk_line(who: str, line: str) -> str:
 
 # -- where am I ------------------------------------------------------------------------
 
-WHERE = re.compile(rf"^{_POLITE}(?:where am i|where are we|where are we now|where am i now|"
-                   rf"tell me where (?:i am|we are))(?: right now)?{_TAIL}$")
+WHERE = re.compile(rf"^(?:(?:hey|so|okay|ok|and|um),? )?{_POLITE}(?:where am i|where are we|"
+                   rf"tell me where (?:i am|we are))(?: (?:now|right now|exactly|again))?"
+                   rf"{_TAIL}$")
 
 
 def where_request(text: str) -> bool:
+    """"Where am I?", "where are we now", "tell me where we are": answered from the atlas
+    or the room survey with no model turn (Agent._where_line)."""
     return bool(WHERE.match(plain(text)))
 
 
@@ -368,58 +390,12 @@ def _join(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def where_line(m, x: float, y: float, step: float = 8.0, rise: float = 0.0) -> tuple[str, str]:
-    """Where a spot on a world map is, as said to the player: "You're on the world map in
-    1000 A.D., just north of the east house in Truce. Leene Square is north and Crono's
-    House southeast." (the same facts as quests.where_text, in words to say). Also the
-    nearest place's name when the character is at it, for the places visited."""
-    from .atlas import compass
-    from .rooms import plain_place
-
-    px, py = x, y - rise
-    era = m.name
-    on = (f"on the world map in {era}" if re.search(r"\b(A\.?D|B\.?C)\b|\d", era)
-          else f"on the {era} map")
-    if not m.places:
-        return f"You're {on}.", ""
-    near = sorted(m.places.items(), key=lambda kv: (kv[1][0] - px) ** 2 + (kv[1][1] - py) ** 2)
-    name, (nx, ny) = near[0]
-    steps = ((nx - px) ** 2 + (ny - py) ** 2) ** 0.5 / step
-    if steps < 1:
-        out = f"You're {on}, right at {plain_place(name)}."
-    else:
-        side = compass(px - nx, py - ny)
-        close = "just " if steps <= 4 else ""
-        out = f"You're {on}, {close}{side} of {plain_place(name)}."
-    others = []
-    for n, (ox, oy) in near[1:3]:
-        d = ((ox - px) ** 2 + (oy - py) ** 2) ** 0.5 / step
-        if d <= 40:
-            others.append((plain_place(n), compass(ox - px, oy - py),
-                           "just " if d <= 4 else ""))
-    if others:
-        first = f"{others[0][0]} is {others[0][2]}{others[0][1]}"
-        out += " " + (first[0].upper() + first[1:]) + (
-            f" and {others[1][0]} {others[1][1]}." if len(others) > 1 else ".")
-    return out, name if steps <= 3 else ""
-
-
 # -- the agent side ----------------------------------------------------------------------
 
 async def try_fast(agent: Agent, request: str, frame, run: Run, t0: float) -> tuple[bool, str]:
     """Do the request here if its words settle it. (done, what was tried): done means
     said and finished; else what was tried goes to the model with the request."""
-    from .agent import Step
-
     said = " ".join(request.lower().split())
-    if where_request(request):
-        line = await _where(agent)
-        if line:
-            await agent._speak(line)
-            run.steps.append(Step("where_am_i", {}, time.monotonic() - t0, line))
-            run.outcome = line
-            return True, ""
-        return False, ""
     battle = await agent._battle_on(frame)
     if battle is not None:
         agent._battle = battle
@@ -429,26 +405,6 @@ async def try_fast(agent: Agent, request: str, frame, run: Run, t0: float) -> tu
     if buy is not None or rest_request(request):
         return await _shop(agent, buy, run, t0)
     return False, ""
-
-
-async def _where(agent: Agent) -> str:
-    """On a world map the atlas knows: where, from the places round the player."""
-    atlas = await agent._the_atlas()
-    if atlas is None:
-        return ""
-    from . import atlas as atlas_mod
-
-    spot = await agent._spot(atlas, (await agent.grab()).image)
-    if spot is None or spot.margin < 0.1:
-        return ""
-    m = atlas.map(spot.map)
-    line, at = where_line(m, spot.x, spot.y, getattr(atlas_mod, "CELL", 8),
-                          getattr(atlas_mod, "RISE", 0))
-    if at:
-        progress = agent._progress()
-        progress.went(at)
-        progress.save(agent.notes.folder, agent.game or "")
-    return line
 
 
 async def _fight(agent: Agent, said: str, battle: State, run: Run,
@@ -478,6 +434,9 @@ async def _fight(agent: Agent, said: str, battle: State, run: Run,
                        "it went in a sentence, from that result, and finish.\n\n")
     heal = HEAL.fullmatch(said.strip(" .!?"))
     if heal:
+        # Who needs what, and "Frog is at full health already", from the HP as it is now:
+        # the request's frame can be a moment old, and the fight isn't paused here.
+        agent._battle = await agent._battle_on(await agent.grab()) or battle
         line = await agent._heal_now(heal.group("actor") or "", heal.group("who"), run, t0)
         if line is not None:
             run.outcome = line
@@ -492,7 +451,14 @@ async def _fight(agent: Agent, said: str, battle: State, run: Run,
     ex = agent.executor()
     before = ex.held if battle.paused and ex.held is not None else battle
     ex.after = ex.after_frame = None
-    out = await ex.act(intent)
+    # A heal named outright ("Marle, use Cure on Frog") is watched till it lands, as "heal
+    # Frog" is: said as it's put in, not after up to 14 s of silence.
+    healing = heals(intent) or revives(intent)
+    ex.on_confirm = agent._put_in if healing else None
+    try:
+        out = await ex.act(intent)
+    finally:
+        ex.on_confirm = None
     args = {"actor": intent.actor, "command": intent.command, "name": intent.name,
             "target": intent.target}
     now = ctsteam.describe(out.state) if out.state is not None else "unreadable"
@@ -502,10 +468,11 @@ async def _fight(agent: Agent, said: str, battle: State, run: Run,
         run.outcome = "cancelled"
         return True, ""
     if out.ok:
-        if ex.after_frame is not None and intent.command != "item":
+        if ex.after_frame is not None and intent.command != "item" and not healing:
             agent.recount(ex.after_frame, [m.name for m in out.state.party]
                           if out.state is not None else [])
-        line = battle_line(intent, out, ex.before or before, ex.after, ex.went_off)
+        line = heal_line(intent, out, ex.before or before, ex.after, told=True) if healing \
+            else battle_line(intent, out, ex.before or before, ex.after, ex.went_off)
     else:
         line = stopped_line(intent, out)
     if line:
@@ -564,13 +531,16 @@ async def _shop(agent: Agent, buy: tuple[int, str] | None, run: Run,
     if agent.cancelled:
         run.outcome = "cancelled"
         return True, ""
-    if not rest and run.outcome and BOUGHT.search(result):
+    # The seller's goodbye left up over the place (Shop.leave tells it by its window):
+    # the model reads it and closes it, after what was said already.
+    box_left = "text box is still up" in result
+    if not rest and run.outcome and BOUGHT.search(result) and not box_left:
         return True, ""
     if rest and (line := rested_line(result)):
         await agent._speak(line)
         run.outcome = line
         return True, ""
-    if not rest and (line := not_sold_line(result, buy[1])):
+    if not rest and not box_left and (line := not_sold_line(result, buy[1])):
         await agent._speak(line)
         run.outcome = line
         return True, ""

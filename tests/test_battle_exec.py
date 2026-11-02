@@ -633,7 +633,7 @@ async def test_a_won_fight_is_said_from_its_result_with_no_model_turn(monkeypatc
     run = await ag.run("win this fight for me")
     assert run.steps[0].tool == "fight" and run.steps[0].result.startswith("done: won")
     assert muse.tools_seen == []
-    assert said == ["Won the fight: 648 experience. Crono's at 653 of 780."]
+    assert said == ["Won the fight: 648 experience."]  # (no one low: nothing on HP)
     assert run.outcome == said[0]
     # Not won: the model says how it went, from the result.
     ex.won = False
@@ -813,7 +813,7 @@ async def test_win_with_nothing_to_heal_with_attacks_without_asking_each_turn():
         return Intent(st.actor, "item", "Potion", "Crono")
 
     out = await executor(game).win(decide)
-    assert out.ok and "won after 6 commands" in out.text, out.text
+    assert out.ok and "won the fight" in out.text and "(6 commands)" in out.text, out.text
     # Once each (Crono's items, Marle's techs): then it knows there's nothing to use.
     assert len(asked) <= 2
 
@@ -849,10 +849,13 @@ def test_a_heal_is_said_from_the_hp_it_gave():
     after = State(party=[Member("Frog", 126, 494, 58, 65, "white")])
     out = battle.Outcome(True, "Frog: tech Slurp on Frog. Seen: Frog HP 1 to 126", after)
     assert battle.heal_line(Intent("Frog", "tech", "Slurp", "Frog"), out, before) == \
-        "Frog's Slurp healed Frog: 126 of 494."
+        "Slurp healed Frog to 126 of 494."
+    assert battle.heal_line(Intent("Marle", "tech", "Aura", "Frog"), out, before) == \
+        "Marle's Aura healed Frog to 126 of 494."
     out = battle.Outcome(True, "Frog: tech Slurp on Frog.", before)
+    # Live 3: "Marle's Cure is on its way to Marle." (the fight was left paused)
     assert battle.heal_line(Intent("Frog", "tech", "Slurp", "Frog"), out, before) == \
-        "Frog's Slurp is on its way to Frog."
+        "Frog picked Slurp for Frog; the fight is paused, so it lands when we go on."
 
 
 def _muse(replies):
@@ -913,7 +916,7 @@ async def test_heal_x_in_a_fight_is_one_command_and_no_model_turn(monkeypatch):
     assert muse.tools_seen == []  # no model call at all
     assert p[1].hp == 400
     # Who heals whom as it's put in (over its animation), then what it did.
-    assert said == ["Marle: Cure on Frog.", "Frog is up to 400 of 494."]
+    assert said == ["Marle uses Cure on Frog.", "It healed Frog to 400 of 494."]
     assert run.outcome == said[-1]
     assert [s.tool for s in run.steps] == ["battle"]
     run = await ag.run("heal Marle")
@@ -1020,10 +1023,57 @@ async def test_what_are_we_fighting_counts_them_and_gives_the_partys_hp(monkeypa
     assert foe_name(st) == "Gargoyle"
     ag.note_battle(st)  # the reader saw the glove name one
     line = await ag.what_we_fight(PIC, game.read(None))
-    assert line == "Three Gargoyles. Crono's full, Frog's at 1 of 494, Marle's full."
+    assert line == "Three Gargoyles. Frog's at 1 HP, Crono and Marle are full."
     assert "Gargoyle" in muse.prompts[0]  # the name the screen showed, for the look's words
     st.top = "Frog"
     assert foe_name(st) == ""  # the glove on an ally
+
+
+async def test_what_are_we_fighting_gives_hp_as_it_is_once_counted(monkeypatch):
+    """Live 3: "Three golden winged imps. Everyone's at full health." was said 2 s after
+    the request's frame, once an enemy combo had dropped Marle to 1 HP: the HP is read
+    again when the count is back, and an unreadable reading says nothing of HP."""
+    game = FakeCT(party(), enemies(), ready=(0,))
+    ag, _said = _agent(monkeypatch, game, _counting_muse([3, 3]))
+    asked_with = game.read(None)
+    later = game.read(None)
+    later.party[2].hp = 1
+
+    async def now():
+        return later
+
+    line = await ag.what_we_fight(PIC, asked_with, now=now)
+    assert line == "Three golden winged imps. Marle's at 1 HP, Crono and Frog are full."
+
+    async def unreadable():
+        st = game.read(None)
+        st.party[0].hp = None
+        return st
+
+    line = await ag.what_we_fight(PIC, asked_with, now=unreadable)
+    assert line == "Three golden winged imps."
+
+
+async def test_the_opening_count_answers_at_once_from_the_requests_own_reading(monkeypatch):
+    """Speed's fight-start count (nothing waited on) and quality's re-read (only for a
+    reading a count look made old): with a known count there's no look, and the HP is
+    the request's own reading, said in the same words."""
+    from playertwo.battle import Foes
+
+    game = FakeCT(party(), enemies(), ready=(0,))
+    muse = _counting_muse([])
+    ag, _said = _agent(monkeypatch, game, muse)
+    asked_with = game.read(None)
+    asked_with.party[1].hp = 1
+    reread = []
+
+    async def now():
+        reread.append(1)
+        return game.read(None)
+
+    line = await ag.what_we_fight(PIC, asked_with, known=Foes(3, "Gargoyles"), now=now)
+    assert line == "Three Gargoyles. Frog's at 1 HP, Crono and Marle are full."
+    assert muse.prompts == [] and reread == []
 
 
 def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
@@ -1031,11 +1081,28 @@ def test_turn_lines_name_who_acted_and_who_is_in_danger_only():
 
     p = party()
     st = FakeCT(p, enemies()).read(None)
-    assert progress(st, Intent("Crono", "attack")) == "Crono attacks."
+    assert progress(st, Intent("Crono", "attack")) == "Crono attacked."
     p[1].hp, p[2].hp = 1, 0
     st = FakeCT(p, enemies()).read(None)
-    assert progress(st, Intent("Crono", "attack")) == "Crono attacks. Frog 1 HP, Marle is down."
-    assert party_brief(st) == "Crono's full, Frog's at 1 of 494, Marle's down."
+    assert progress(st, Intent("Crono", "attack")) == "Crono attacked. Marle is down, Frog is at 1 HP."
+    assert party_brief(st) == "Frog's at 1 HP, Marle's down, Crono's full."
+    p[2].hp = 1
+    st = FakeCT(p, enemies()).read(None)
+    # Live 3: "Marle uses Cure on Frog. Frog 1 HP, Marle 1 HP."
+    assert progress(st, Intent("Marle", "tech", "Cure", "Frog")) == (
+        "Marle used Cure on Frog. Frog and Marle are at 1 HP.")
+
+
+def test_commands_in_words_a_friend_would_use():
+    from playertwo.battle import Intent, act_line
+
+    # Live 3: "Frog: Heal.", "Crono: Hi-Potion on Marle."
+    assert act_line(Intent("Frog", "tech", "Heal")) == "Frog uses Heal."
+    assert act_line(Intent("Crono", "item", "Hi-Potion", "Marle")) == "Crono gives Marle a Hi-Potion."
+    assert act_line(Intent("Marle", "tech", "Cure", "Marle")) == "Marle uses Cure on herself."
+    assert act_line(Intent("Crono", "item", "Ether"), done=True) == "Crono used an Ether."
+    assert act_line(Intent("Frog", "item", "Athenian Water", "Crono")) == (
+        "Frog gives Crono Athenian Water.")
 
 
 async def test_a_plain_command_needs_no_model_turn(monkeypatch):
@@ -1069,7 +1136,7 @@ async def test_a_tech_by_name_and_what_hit_the_party_meanwhile(monkeypatch):
     ag, said = _agent(monkeypatch, game, muse)
     run = await ag.run("Crono, use Cyclone")
     assert muse.tools_seen == []
-    assert said == ["Crono used Cyclone. Frog dropped to 1 HP and Marle dropped to 1 HP."]
+    assert said == ["Crono used Cyclone. Frog and Marle dropped to 1 HP."]
     assert run.steps[0].args == {"actor": "Crono", "command": "tech", "name": "Cyclone",
                                  "target": ""}
 
@@ -1117,3 +1184,149 @@ async def test_win_meets_a_surprise_with_the_fallbacks_and_says_the_heal():
     out = await ex.win(None, say=said.append, chose=chosen.append)
     assert chosen and chosen[0] == Intent("Marle", "tech", "Cure", "Frog")
     assert out.ok or "commands" in out.text
+
+
+async def test_a_heal_said_as_its_put_in_is_watched_till_it_lands(monkeypatch):
+    """Live 3: Marle's Cure landed 9.1 s after it was picked, behind the enemies' combo,
+    just past the 9 s watch, and was said as "on its way". "Who heals whom" is said at the
+    confirm (speed), and the watch (14 s; here scaled to 1 s, the HP showing at 9.1/14 of
+    it) still waits for the HP, so what follows says what it did."""
+    assert Tuning().heal_playout_s >= 14.0
+    p = party()
+    p[1].hp = 100
+    game = FakeCT(p, enemies(), ready=(0,))
+    read, lands = game.read, []
+
+    def late(frame, full=True):
+        st = read(frame, full)
+        if p[1].hp != 100 and not lands:
+            lands.append(time.monotonic() + 9.1 / 14)
+        for m in st.party:
+            if lands and m.name == "Marle":
+                m.mp -= 2  # the Cure went off (its MP spent): its name needn't show
+            if lands and m.name == "Frog" and time.monotonic() < lands[0]:
+                m.hp = 100  # behind what's playing: not shown yet
+        return st
+
+    game.read = late
+    ag, said = _agent(monkeypatch, game, _muse([]))
+    ag.note_battle(new=True)
+    ag.note_battle(game.read(None))
+    game.ready, game.hand_col = [2], 2
+    run = await ag.run("heal Frog")
+    assert said == ["Marle uses Cure on Frog.", "It healed Frog to 400 of 494."]
+    assert run.outcome == said[-1] and lands and time.monotonic() >= lands[0]
+
+
+def test_a_heal_said_as_its_put_in_then_only_what_it_did():
+    before = State(party=[Member("Frog", 1, 494, 60, 65, "white"),
+                          Member("Marle", 30, 430, 60, 65, "white")])
+    after = State(party=[Member("Frog", 126, 494, 58, 65, "white"),
+                         Member("Marle", 430, 430, 60, 65, "white")])
+    out = battle.Outcome(True, "Frog: tech Heal", after)
+    assert battle.heal_line(Intent("Frog", "tech", "Heal"), out, before, told=True) == (
+        "It healed Frog to 126 and Marle to 430.")
+    assert battle.heal_line(Intent("Frog", "tech", "Heal"), out, before) == (
+        "Frog's Heal healed Frog to 126 and Marle to 430.")
+    out = battle.Outcome(True, "Marle: tech Cure on Frog", before)
+    assert battle.heal_line(Intent("Marle", "tech", "Cure", "Frog"), out, before,
+                            told=True) == (
+        "It hasn't landed yet; the fight is paused, so it lands when we go on.")
+
+
+async def test_fight_lines_from_the_screen_skip_the_on_topic_check(monkeypatch):
+    """Lines made from screen reads (a heal put in, a turn, a result) are on topic by
+    construction: never held or slowed by ontopic's second look. The model's own lines
+    in the same request still get it."""
+    from playertwo import ontopic
+
+    looks = []
+
+    async def second_look(muse, game, request, text):
+        looks.append(text)
+        return False
+
+    monkeypatch.setattr(ontopic, "second_look", second_look)
+    # Every line the model writes looks unrelated, but its closing one.
+    monkeypatch.setattr(ontopic.Grounds, "off_topic", lambda self, text: text != "We won.")
+    p = party()
+    p[1].hp = 100  # Frog low: the standing plan heals him first
+    game = FakeCT(p, enemies(), ready=(0,))
+    muse = _muse([("fight", {"mode": "win"}),
+                  ("say", {"text": "Serious foul play must be sanctioned."}),
+                  ("finish", {"text": "We won."})])
+    ag, said = _agent(monkeypatch, game, muse)
+    ag.note_battle(new=True)
+    ag.note_battle(game.read(None))  # Crono's turn seen: where he stands
+    game.ready, game.hand_col = [2], 2
+    await ag.run("do your thing")
+    assert "Marle uses Cure on Frog." in said  # said as it was put in, unchecked
+    assert "Serious foul play must be sanctioned." not in said
+    assert looks == ["Serious foul play must be sanctioned."]
+    assert said[-1] == "We won."
+    # A plain command: done and said with no model turn and no check at all.
+    looks.clear()
+    p2 = party()
+    game2 = FakeCT(p2, enemies(), ready=(0, 2))
+    muse2 = _muse([])
+    ag2, said2 = _agent(monkeypatch, game2, muse2)
+    await ag2.run("Attack the one on the left.")
+    assert said2 == ["Crono attacked the one on the left."]
+    assert looks == [] and muse2.tools_seen == []
+
+
+async def test_a_heal_named_outright_is_said_as_its_put_in_too(monkeypatch):
+    """Speed's one-command path and quality's 14 s watch would otherwise leave "Marle, use
+    Cure on Frog" silent until it lands, then say the whole of it."""
+    p = party()
+    p[1].hp = 100
+    game = FakeCT(p, enemies(), ready=(0,))
+    muse = _muse([])
+    ag, said = _agent(monkeypatch, game, muse)
+    ag.note_battle(new=True)
+    ag.note_battle(game.read(None))
+    game.ready, game.hand_col = [2], 2
+    run = await ag.run("Marle, use Cure on Frog")
+    assert muse.tools_seen == []
+    assert said == ["Marle uses Cure on Frog.", "It healed Frog to 400 of 494."]
+    assert run.outcome == said[-1]
+
+
+async def test_heal_x_goes_by_the_hp_now_not_the_requests_frame(monkeypatch):
+    """The request's frame can be a moment old and "heal X" no longer pauses first: a combo
+    since it was taken isn't answered with "at full health already"."""
+    from PIL import Image
+
+    from playertwo import agent as agent_mod
+    from playertwo.screen import Frame
+
+    p = party()
+    shown = FakeCT(party(), enemies(), ready=(0,)).read(None)  # as the request's frame has it
+    p[1].hp = 100
+    game = FakeCT(p, enemies(), ready=(0,))
+    ag, said = _agent(monkeypatch, game, _muse([]))
+    ag.note_battle(new=True)
+    ag.note_battle(game.read(None))
+    game.ready, game.hand_col = [2], 2
+    old = Image.new("RGB", (1280, 720))
+    monkeypatch.setattr(agent_mod.ctsteam, "read",
+                        lambda img, full=True: shown if img is old else game.read(img, full))
+    await ag.run("heal Frog", Frame(old, 0))
+    assert said == ["Marle uses Cure on Frog.", "It healed Frog to 400 of 494."]
+
+
+async def test_a_heal_the_model_sends_is_said_as_its_put_in_and_not_said_again(monkeypatch):
+    """Two commands in one request are the model's; the heal's up to 14 s watch isn't a
+    silent one there either, and a closing line that only repeats it is dropped."""
+    p = party()
+    p[1].hp = 100
+    game = FakeCT(p, enemies(), ready=(0,))
+    muse = _muse([("battle", {"actor": "Marle", "command": "tech", "name": "Cure",
+                              "target": "Frog"}),
+                  ("finish", {"text": "Marle used Cure on Frog."})])
+    ag, said = _agent(monkeypatch, game, muse)
+    ag.note_battle(new=True)
+    ag.note_battle(game.read(None))
+    game.ready, game.hand_col = [2], 2
+    await ag.run("do your thing")
+    assert said == ["Marle uses Cure on Frog."]

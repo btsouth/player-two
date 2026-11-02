@@ -102,6 +102,23 @@ async def test_a_place_not_surveyed_gets_the_models_line_once_by_its_colours():
     assert await s._arrival(frame((200, 40, 40)), True) == ("", "", False)  # a fade
 
 
+async def test_a_world_map_the_atlas_knows_is_said_by_where_on_it():
+    """Live 3: slot 4 loaded on the world map with "1000 A.D." or a line about the woods,
+    and "take me back outside" ended on "World map.": never where."""
+    s = session([None, None, None], {}, {})
+    wheres = iter(["World map, 1000 A.D., at Leene Square",
+                   "World map, 1000 A.D., at Leene Square", ""])
+
+    async def world_where(image):
+        return next(wheres)
+
+    s.agent.world_where = world_where
+    f = frame((20, 120, 30))
+    assert await s._arrival(f, True) == ("World map, 1000 A.D., at Leene Square", "", False)
+    assert await s._arrival(f, True) == ("", "", False)  # still there: said once
+    assert await s._arrival(frame((90, 80, 90)), True) == ("", "", True)  # not a map: as before
+
+
 async def test_a_stretch_not_surveyed_of_a_place_just_painted_gets_no_second_line():
     s = session([0x189, None, None], {0x189: "Mountain of Woe"}, {0x189: "High ledges."})
     mist, cave = frame((230, 230, 200)), frame((60, 40, 30))
