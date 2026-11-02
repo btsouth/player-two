@@ -76,9 +76,8 @@ CARRY_S = 3.0  # a line this far along as a request starts is kept whole
 LOWER_A4 = "Code on the PC walks there, presses the buttons and checks the gold."
 LOWER_B = ("In a fight, it reads the menus, HP and turns from the screen's pixels in about a "
            "tenth of a second, and checks every press.")
-META_SPARK = ("Muse Spark understands free-form requests, decides what to do about them and "
-              "describes scenes.")
-META_READER = "A pixel reader on the PC handles menus, HP and gold. It's there for speed."
+META_SPARK = "Muse understands scenes and open-ended requests."
+META_READER = "Local readers and routines handle common actions, including default fight choices."
 NEXT_LINE = "It hasn't beaten Lavos yet, and no blind player has tried it yet. That's next."
 DRAFT_RATES = ["DRAFT RATES: the run sheet's, from older builds. Not for the final cut.",
                "“Take me to the fair” 22/22", "“Buy three potions” 23/23",

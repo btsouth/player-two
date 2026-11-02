@@ -9,8 +9,9 @@ tiles can be walked and where each way out goes, and stitches the whole place in
 picture. Here the screen is found on those pictures by plain image matching (the screen
 is a window onto the place), the character on it by its look, the way to the chosen way
 out planned on the walkable tiles (through other places when it's further), and walking
-checks where it is several times a second. Pictures only: it works on any copy of the
-game, the emulator's memory is only for making the survey. The Steam port's redrawn
+checks where it is several times a second. Runtime localization uses pictures; emulator
+memory assists survey preparation. Matching has been measured on the SNES and Steam
+versions. The Steam port's redrawn
 screens are found on the same pictures (see STEAM_VIEW).
 
 <atlas folder>/rooms/:

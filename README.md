@@ -47,6 +47,7 @@ playing arbitrary games, or replacing a game's own accessibility features.
 ## Try it
 
 A fresh install includes the generic narrator and agent, plus the Chrono Trigger pixel reader.
+**The recorded navigation/shop configuration cannot currently be reproduced from this repo alone.**
 **It does not include the private maps, room surveys, game packs, walkthroughs or saves used
 for the navigation results above.** You need your own game. See [game data](#game-data).
 
@@ -131,7 +132,7 @@ speech-dispatcher and NVDA; JAWS is implemented but untested.
 
 | Model | Exact role and implementation |
 |---|---|
-| Muse Spark 1.3 | Scene narration streams to speech (`narrator.py`, `muse.py`); tool-calling plans in `agent.py`; visual grounding and fallback reads. Offline tools label maps/rooms and build walkthrough steps. |
+| Muse Spark 1.3 | Scene narration streams to speech (`narrator.py`, `muse.py`); tool-calling plans in `agent.py`; visual grounding and fallback reads. Offline tools label maps/rooms and build walkthrough steps. The default Chrono Trigger fight loop uses local rules, not model-selected turns. |
 | Muse Voice Transcribe | Live speech-to-text in `listen.py`, with game keywords. It is not the speaking voice. |
 | SAM 3.1 | Segmentation/boxes for “where is it?” and optional walking target refinement (`locate.py`, `walk.py`). No-match falls back to Spark; it is not required for each press. |
 | Muse Spark Open | `brain = "open"` switches narration and tool calls to a hosted OpenAI-compatible provider. A saved-frame narration on Baseten returned the visible result text in 6.0 s on Nov 1; this is not a new live agent benchmark. SAM and transcription remain on Meta's API. |
@@ -170,8 +171,11 @@ flowchart LR
 - **Atlas navigation:** survey once, locate the view by image matching, route with A*, then check
   position as the character moves (`atlas.py`, `rooms.py`). Emulator RAM is survey/test ground truth;
   live Steam navigation uses pixels, not RAM. Private atlas images are not shipped.
-- **Fast path:** common supported Chrono Trigger commands go straight to local executors
-  (`fast.py`), with no model planning turn. Other requests use the tool loop.
+- **Who decides:** common supported Chrono Trigger commands go straight to local executors
+  (`fast.py`), with no model planning turn. “Win this fight” uses local attack/heal/revive rules:
+  `battle.py` defaults `model_decides=False` and `agent.py` supplies no model decision callback.
+  An optional model-decision path exists but is off by default. Muse handles scenes and
+  open-ended requests through the tool loop; do not attribute default fight choices to it.
 - **Checks after actions:** battle, shop and menu executors check highlights and before/after
   values. Generic press sequences force a new look before a confirm after another button.
   This is evidence checking, not a guarantee that every arbitrary action succeeds.
@@ -195,12 +199,12 @@ No blind player has used this build. No outreach or user-benefit outcome is clai
 
 ## What you can say
 
-In Chrono Trigger on Steam, everything in the [results table](#measured-on-live-steam). In any
-game:
+In Chrono Trigger on Steam, see the measured results above. The generic interface offers
+these commands, with behavior dependent on the game:
 
 | Say | What happens |
 |---|---|
-| anything about the game | Player Two looks and answers, or does it |
+| a question or request about the game | Player Two attempts to answer or act using the available tools |
 | "Player Two, ..." (hands-free) | the same, with no key |
 | "what's on the screen?" / "look around" | a spoken tour: what it's like, who and what is around you, the ways out |
 | "what does it look like?" / "what's the mood?" | a few sentences on the setting, light, colours and mood |
@@ -229,8 +233,11 @@ What Player Two knows about a game lives in `~/.config/player-two/`, not in this
   in an emulator with the game's memory as ground truth (`scripts/survey.py`,
   `scripts/survey_rooms.py`). They contain game art, so they aren't shared here.
 
-Without these, Player Two still narrates, answers and plays, and walks to what it can see; finding
-a place it hasn't seen yet is slow.
+Without these, a judge gets the generic narration/question interface, generic control tools,
+the packaged pixel reader and synthetic test scenes. Named map trips, surveyed-room routes,
+people matching and the demonstrated seller approach are not reproducible from a fresh clone.
+Visual walking can attempt a visible target, with no equivalent map coverage or success claim.
+[Game-data requirements and distribution limits](docs/game-data.md) explain what is missing.
 
 **`src/playertwo/data/ct_steam/`** is the one piece of Chrono Trigger data in the repo, about
 100 KB. It's what the pixel reader reads with: 2,544 letter shapes from the game's font, each a
