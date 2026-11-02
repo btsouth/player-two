@@ -235,7 +235,11 @@ def part_broken(img: Image.Image) -> bool:
     r, g, b = c[..., 0], c[..., 1], c[..., 2]
     gold = ((r > 170) & (g > 140) & (b < 140) & (r - b > 45)).mean()
     cyan = ((b > 140) & (g > 120) & (r < 120)).mean()
-    return bool(gold > 0.05 and cyan < 0.12)  # the letters flicker cyan from the ring behind them
+    # Any cyan here is the ring flickering behind the word, unless it's solid at the left of the
+    # gauge's own band: an almost empty gauge, not the word Broken.
+    h, w = c.shape[:2]
+    fill = ((b > 140) & (g > 120) & (r < 120))[h // 3:2 * h // 3, :w // 6].mean()
+    return bool(gold > 0.05 and cyan < 0.12 and fill < 0.35)
 
 
 def wheel_gauge(img: Image.Image) -> float:
