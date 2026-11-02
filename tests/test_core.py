@@ -186,6 +186,17 @@ class TestAgent:
         result = run(agent.run("read it"))
         assert said == ["The brief says go."] and result.outcome == "The brief says go."
 
+    def test_a_reply_labelled_as_finishing_is_said_without_the_label(self):
+        """Live: "Finished with the message: Paused. Map is selected." was said aloud."""
+        from playertwo.agent import plain_reply
+
+        assert plain_reply("Finished with the message: Paused. Map is selected.") == (
+            "Paused. Map is selected.")
+        assert plain_reply("Finished with message: Paused.") == "Paused."
+        assert plain_reply("Finished: Paused.") == "Paused."
+        assert plain_reply("Finish: Paused.") == "Paused."
+        assert plain_reply("Finished the quest, it says.") == "Finished the quest, it says."
+
     def test_plain_replies_that_only_look_like_json_are_left_alone(self):
         from playertwo.agent import plain_reply
 

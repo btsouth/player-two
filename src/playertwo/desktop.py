@@ -292,9 +292,17 @@ def install_gnome_talk_key() -> str:
 
 def bind_lines(cmd: str, lua: bool) -> str:
     if lua:
+        # o.bind_hold isn't in every Omarchy (4.0.6 has only o.bind), and calling a helper
+        # that isn't there stops the whole Hyprland config from loading.
+        start, stop = f'"{cmd} ctl talk-start"', f'"{cmd} ctl talk-stop"'
         return (f"\n{BIND_MARK}\n"
-                f'o.bind_hold("{TALK_KEY}", "Player Two: talk", "{cmd} ctl talk-start",\n'
-                f'            "Player Two: done talking", "{cmd} ctl talk-stop")\n')
+                f"if o.bind_hold then\n"
+                f'  o.bind_hold("{TALK_KEY}", "Player Two: talk", {start},\n'
+                f'              "Player Two: done talking", {stop})\n'
+                f"else\n"
+                f'  o.bind("{TALK_KEY}", "Player Two: talk", {start})\n'
+                f'  o.bind("{TALK_KEY}", "Player Two: done talking", {stop}, {{ release = true }})\n'
+                f"end\n")
     return (f"\n# Player Two: hold to talk\n"
             f"bind = , {TALK_KEY}, exec, {cmd} ctl talk-start\n"
             f"bindr = , {TALK_KEY}, exec, {cmd} ctl talk-stop\n")

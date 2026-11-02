@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import json
 import math
 import os
@@ -583,11 +584,24 @@ def others_of_kind(m, name: str, said: str, at: tuple[float, float]) -> list[str
     return sorted(same, key=lambda n: math.dist(m.places[n], at))
 
 
+TOOL_MARKUP = re.compile(r'<(?:\w+:)?invoke name="(?:\w+\.)?(\w+)">(.*?)</(?:\w+:)?invoke>', re.S)
+TEXT_MARKUP = re.compile(r'<(?:\w+:)?parameter name="text">(.*?)</(?:\w+:)?parameter>', re.S)
+
+
 def plain_reply(content: str) -> str:
     """What to say from a reply in words, not a tool call. The model sometimes labels it
-    ("Finish: ...") or writes the tool's arguments out ('{"text": "..."}'), and neither
-    is for saying aloud."""
-    text = re.sub(r"^\s*(finish|say)\s*:\s*", "", content, flags=re.IGNORECASE)
+    ("Finish: ...", "Finished with the message: ...") or writes the tool's arguments out
+    ('{"text": "..."}'), and neither is for saying aloud."""
+    if TOOL_MARKUP.search(content):
+        # The tool call itself, written out as markup. Its words, if it was for saying;
+        # otherwise nothing, and the model is asked again.
+        for name, body in TOOL_MARKUP.findall(content):
+            words = TEXT_MARKUP.search(body)
+            if name in ("finish", "say") and words:
+                return html.unescape(words.group(1)).strip()
+        return ""
+    text = re.sub(r"^\s*(finish(ed)?( with( the)? (message|text))?|say)\s*:\s*", "",
+                  content, flags=re.IGNORECASE)
     if text.lstrip().startswith("{"):
         with contextlib.suppress(ValueError):
             args = json.loads(text)
@@ -745,6 +759,8 @@ class Agent:
         football fouls, spoken as the answer to "what's the battle mode set to?")."""
         if ontopic.about_itself(text):
             self._held = getattr(self, "_held", 0) + 1
+            if self.on_action:
+                self.on_action("off_topic", {"text": text, "about_itself": True, "said": False})
             return False
         grounds = getattr(self, "_grounds", None)
         if grounds is None or not grounds.off_topic(text):

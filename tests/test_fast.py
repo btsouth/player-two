@@ -280,3 +280,13 @@ def test_repeated_spoken_goodbye_only_quits_for_the_whole_request():
     assert local_action("goodbye. goodbye.") == "quit"
     assert local_action("goodbye, don't quit") is None
     assert local_action("say goodbye goodbye") is None
+
+
+def test_where_question_survives_how_speech_to_text_ends_it():
+    """Live: "where's my horse," wasn't seen as a question and missed SAM."""
+    from playertwo.locate import where_request
+
+    assert where_request("where's my horse,") == "horse"
+    assert where_request("where’s my horse?") == "horse"
+    assert where_request("Where's my horse?") == "horse"
+    assert where_request("where's my horse;") == "horse"

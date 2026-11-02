@@ -110,7 +110,10 @@ def test_talk_key_bind_is_added_once_with_a_backup(home):
     assert said.startswith("Done.")
     text = (hypr / "bindings.lua").read_text()
     assert text.startswith('o.bind("SUPER + R"')
-    assert text.count("ctl talk-start") == 1 and "o.bind_hold(\"F8\"" in text
+    # Omarchy 4.0.6 has no o.bind_hold; calling it there stops the whole config loading.
+    assert text.count("ctl talk-start") == 2 and text.count("ctl talk-stop") == 2
+    assert "if o.bind_hold then\n  o.bind_hold(\"F8\"" in text
+    assert "ctl talk-start\")\n" in text and "ctl talk-stop\", { release = true })\nend\n" in text
     assert len(list(hypr.glob("bindings.lua.bak.player-two-*"))) == 1
     assert desktop.talk_key_bound()
     assert "already" in desktop.install_talk_key()
@@ -755,6 +758,16 @@ def test_an_idle_nvidia_card_is_pointed_out(monkeypatch):
     assert voice.gpu_hint("gpu") == "" and voice.gpu_hint("screen reader") == ""
     monkeypatch.setattr(voice, "nvidia_card", lambda: False)
     assert voice.gpu_hint("cpu") == ""
+
+
+def test_a_true_or_false_setting_from_the_environment_takes_true(tmp_path, monkeypatch):
+    from playertwo.config import Settings
+
+    p = tmp_path / "config.toml"
+    for word, value in (("true", True), ("1", True), ("YES", True), ("on", True),
+                        ("false", False), ("0", False), ("", False)):
+        monkeypatch.setenv("PLAYER_TWO_HANDS_FREE", word)
+        assert Settings.load(p).hands_free is value, word
 
 
 async def test_hands_free_description_acknowledges_before_waiting_for_the_scene():
