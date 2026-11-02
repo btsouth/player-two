@@ -1875,7 +1875,8 @@ class Session:
                 self.spawn(self.voice.say(words, interrupt=a.level == "critical"))
 
     def guiding(self) -> bool:
-        return self.guide_task is not None and not self.guide_task.done()
+        task = getattr(self, "guide_task", None)  # sessions that never start one
+        return task is not None and not task.done()
 
     async def guide(self, phrase: str) -> None:
         """Walk the player to a thing by ear (earguide.py). Presses nothing: their hands. Ends
