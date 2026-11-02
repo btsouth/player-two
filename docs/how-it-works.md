@@ -14,7 +14,7 @@ See [game data](game-data.md).
 - **Screen watcher** (`screen.py`): samples the game window a few times a second, learns which parts
   are always moving (a flickering TV, rain), and fires once when a new screen has stopped moving.
 - **Reader** (`glyphread.py`, with a game profile in `ctsteam.py` and `ctscreen.py`): reads a
-  game's own pixel font, cursor and HP bars with no model, in about a tenth of a second. Every
+  game's own pixel font, cursor and HP bars locally. Every
   frame is scaled to one canvas, text pixels are found as bright cores inside the font's dark
   outline, cut into glyphs and named by their nearest match in a library learned from real frames
   whose text was labelled by hand (`scripts/ct_glyph_learn.py`; a line is only learned when its
@@ -47,10 +47,10 @@ See [game data](game-data.md).
   what it's like, drafted once from the survey's picture of it (`scripts/atmos_rooms.py`).
   Never in terse or quiet mode, and never over a text box, a menu or a fight.
 - **Voice** (`voice.py`, `audio.py`, `screenreader.py`): Kokoro speaks each sentence as it
-  arrives (about 0.1 s a sentence on a GPU, and it runs on the CPU too). With
+  arrives, using a CPU or a supported GPU. With
   `output = "screen-reader"` the words go to Orca, speech-dispatcher, NVDA or JAWS instead.
   Sound cues (low health, the "where is it?" pings) always come from Player Two.
-- **Instant echo** (`ack.py`): says your request back in your own words the moment it arrives,
+- **Request acknowledgement** (`ack.py`): says your request back in your own words when it arrives,
   with no model call ("Okay, Crono will use Cyclone"), so you can notice a misheard request. It
   states what it will try, never a result.
 - **Fast path** (`fast.py`): supported Chrono Trigger commands such as buying, attacking and

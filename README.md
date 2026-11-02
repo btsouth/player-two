@@ -49,6 +49,8 @@ and loaded the same save. Requests were typed into the running app. The voice pa
 tests: 63 of 63 synthetic spoken lines matched the typed command parser's decisions and arguments
 in the same game/screen context. That checks transcription and routing, not completed actions or a
 real microphone. "Done" means the task finished correctly, checked against the game's screen.
+Action times end at logged task completion; the final spoken result can continue afterwards.
+Local-answer times include the spoken answer. First words can include an acknowledgement.
 
 | Request | Done | Whole task |
 |---|---:|---|
