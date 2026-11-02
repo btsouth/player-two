@@ -1019,10 +1019,10 @@ def make_plan(
         if vo_s.get('how',0)>how_len:raise ValueError(f"How VO exceeds its {how_len:.2f}s footage slot")
         how=Piece('c-how','games',line='how VO / general and specific',take=rdr.name,a=a,b=b,
                   captions=False,audio_mode='game',vol=.35,vo=vo.get('how',''),layout='rdr',
-                  vo_prompt='Muse understands scenes and open-ended requests. Local readers and routines handle common actions.',
+                  vo_prompt=GENERAL_LINE,
                   overlays=[Overlay(GENERAL_LINE,44,'how',0,b-a)])
     else:
-        how=Piece('c-how','games',kind='card',secs=how_len,vo=vo.get('how',''),blocks=[(GENERAL_LINE,52,True)])
+        how=Piece('c-how','games',kind='card',secs=how_len,vo=vo.get('how',''),vo_prompt=GENERAL_LINE,blocks=[(GENERAL_LINE,52,True)])
     games.append(how)
     mh=takes.get('game2')
     games+=mh_story_pieces(mh) if mh and mh.edit.get('story') else game_pieces('game2',mh,False,clips.get('game2'),warnings)

@@ -141,3 +141,5 @@ a192kHz oversampled limiter precedes48kHz/AAC. Always measure decoded ebur128 lo
 stale spoken facts, sped-up speech, missing time disclosures and duration above3:00, including
 after encoding. --accept-captions cannot bypass stale facts or sped-up speech. Inspect contact
 sheets, individual overlay states, source facts and full-speed sound before submission.
+
+Quote source: [Archived release notes](https://web.archive.org/web/2020/https://www.libretro.com/index.php/category/accessibility/).
