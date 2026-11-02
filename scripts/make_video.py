@@ -586,7 +586,7 @@ def mh_story_pieces(take: Take) -> list[Piece]:
         if model:
             at=max(0,model['t']-take.start-a)
             words="Muse read the monster's weak points" if model['read']=='wheel' else 'Muse Spark / status read'
-            p.overlays.append(Overlay(f"{words}, {model['seconds']:.2f} s",34,"tl",at,min(at+4,b-a)))
+            p.overlays.append(Overlay(f"{words}, {model['seconds']:.2f} s",34,"mh-model",at,min(at+4,b-a)))
         if b-a>6:
             start=min(4,max(0,b-a-4))
             p.overlays.append(Overlay("Muse reads the weak points once. Code written for this game takes the turns.",34,"mh-code",start,start+4))
@@ -1034,8 +1034,10 @@ def how_bridge(takes: dict[str, Take], vo: dict[str,str], vo_s: dict[str,float])
         name=w['take'];take=takes.get(name);a,b=float(w['a']),float(w['b'])
         if not take or not 0<=a<b<=take.duration:
             raise ValueError('How bridge source window outside its real take')
+        if name=='game2' and any(max(a,x)<min(b,y) for x,y in speech_spans(take.events,take.start)):
+            raise ValueError('Monster Hunter bridge must not omit a spoken line')
         p=Piece('c-how' if i==0 else f'c-how-{i}','games',line='how VO / general and specific',
-                take=name,a=a,b=b,captions=False,audio_mode='game',vol=.35,
+                take=name,a=a,b=b,captions=False,audio_mode='mix' if name=='game2' else 'game',vol=.35,
                 vo=vo.get('how',''),vo_offset=elapsed,vo_prompt=GENERAL_LINE,layout='map',
                 overlays=[Overlay(GENERAL_LINE,44,'how',0,b-a)])
         out.append(p);elapsed+=p.out_s
@@ -1406,11 +1408,12 @@ def label_png(path: Path, o: Overlay) -> Path:
         if o.where=="how":
             x,y=640,700
         if o.where=="pause":
-            x=W-tw-64
+            x,y=W-tw-64,680
         if o.where=='nav-map':x,y=64,52
         if o.where=='nav-route':x,y=64,500
         if o.where=='bench':
             x,y=64,65
+        if o.where=='mh-model':x,y=64,170
         if o.where in ('mh-code','mh-gloss'):
             x,y=64,300
         bh = len(lines) * int(f.size * 1.35) + 28

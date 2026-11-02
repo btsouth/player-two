@@ -744,11 +744,14 @@ def test_how_bridge_keeps_one_voice_clock_and_requires_real_windows():
     ps=mv.how_bridge(takes,{'how':'voice.wav'},{'how':10})
     assert [p.take for p in ps]==['take-A','game2','rdr-sam']
     assert [p.vo_offset for p in ps]==[0,3,6] and sum(p.out_s for p in ps)==10
-    assert all(p.vo_prompt==mv.GENERAL_LINE and p.audio_mode=='game' and not p.captions for p in ps)
+    assert all(p.vo_prompt==mv.GENERAL_LINE and p.audio_mode==('mix' if p.take=='game2' else 'game') and not p.captions for p in ps)
     with pytest.raises(ValueError,match='exceeds'):
         mv.how_bridge(takes,{}, {'how':10.01})
     takes['game2'].duration=11
     with pytest.raises(ValueError,match='outside'):
+        mv.how_bridge(takes,{}, {})
+    takes['game2'].duration=100; takes['game2'].events=[_spoken('Do not hide me.',11,12)]
+    with pytest.raises(ValueError,match='must not omit'):
         mv.how_bridge(takes,{}, {})
 
 
