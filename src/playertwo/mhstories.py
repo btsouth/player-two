@@ -724,6 +724,7 @@ class Fight:
         self.muse_seconds: dict[str, float] = {}  # model time per kind of reading, for the logs
         self.turns = 0
         self.won = False
+        self.muse_agrees = True
         self.note: Callable[[str, dict], None] = (
             lambda name, args: agent.on_action and agent.on_action(name, args))
 
@@ -880,18 +881,20 @@ class Fight:
             return "a hammer (blunt), a sword (slash), a harp (pierce)"
         return ", ".join(f"{short(w.name)[4:]} ({w.damage})" for w in self.weapons)
 
-    async def settled_wheel(self, most: float = 1.2) -> Image.Image:
-        """The wheel, once its title's stopped changing: it zooms in and turns."""
+    async def settled_wheel(self, most: float = 1.4) -> Image.Image:
+        """The wheel, once its title hasn't changed for a quarter of a second: it zooms in and
+        turns, and two grabs close together can be the same frame."""
         end = time.monotonic() + most
         img = await self._shot()
-        mask = wheel_title(img)
+        mask, since = wheel_title(img), time.monotonic()
         while time.monotonic() < end:
             await asyncio.sleep(0.05)
             img = await self._shot()
             now = wheel_title(img)
-            if int(now.sum()) >= 40 and _same(now, mask):
+            if not _same(now, mask) or int(now.sum()) < 40:
+                mask, since = now, time.monotonic()
+            elif time.monotonic() - since >= 0.25:
                 return img
-            mask = now
         return img
 
     async def read_status(self, hold: bool = False) -> None:
@@ -953,15 +956,27 @@ class Fight:
         sheet = Image.new("RGB", (len(seen) * 600, 514))
         for i, entry in enumerate(seen):
             sheet.paste(entry[4].resize((600, 514)), (i * 600, 0))
+        if hold:  # a count the pixels already know, while Muse reads what each one takes
+            count = {2: "Two", 3: "Three", 4: "Four", 5: "Five"}.get(len(seen))
+            if count:
+                self.say(f"{count} parts you can break. Let me see what each one takes.")
 
         async def reading() -> None:
             d = await self.ask("wheel", [image_part(sheet, WHEEL_PX)],
                                READ_WHEEL.format(weapons=self.weapon_words()), 1500)
             said = d.get("parts") or []
+            names = [str(x.get("name") or "").lower() for x in said]
+            for i, name in enumerate(names):  # round the wheel twice: the name comes up again
+                if name and name in names[:i]:
+                    said = said[:i]
+                    break
+            if said and len(self.parts) > len(said):
+                self.parts = self.parts[:len(said)]
             for i, part in enumerate(self.parts):
                 read = said[i] if i < len(said) else {}
                 works = [str(x).lower() for x in read.get("works") or []]
                 if works != part.works:  # the diamonds are plain pixels: they win
+                    self.muse_agrees = False
                     self.note("mh_note", {"text": f"wheel: Muse {works} pixels {part.works}"})
                 part.name = str(read.get("name") or part.name)
                 part.works = part.works or works
@@ -979,22 +994,23 @@ class Fight:
         await self._press("b", 0.25)
 
     def where_weak(self) -> str:
-        """Muse's words, if they name each unbroken part with something that fits it; otherwise
-        plain ones built from the wheel."""
+        """Muse's words, if Muse read every diamond the way the pixels do and its line names each
+        unbroken part; otherwise plain ones built from the wheel."""
         left = [p for p in self.parts if not p.broken]
         low = self.weak_line.lower()
-        fits = {"slash": ("slash", "sword", "blade"), "pierce": ("pierce", "harp", "arrow", "stab"),
-                "blunt": ("blunt", "hammer", "smash")}
-        wrong = {w for p in left for w in fits.get(p.works[0] if p.works else "", ())}
-        if self.weak_line and len(self.weak_line) < 170 and left and all(
-                p.name.lower() in low and any(word in low for w in p.works
-                                              for word in fits.get(w, ())) for p in left) and wrong:
+        if self.weak_line and self.muse_agrees and len(self.weak_line) < 170 and left and all(
+                p.name.lower() in low for p in left):
             return self.weak_line
         if not left:
             return "Everything on it is broken already. Just hit it." if self.parts else \
                 "It's small: any weapon works on it."
-        said = ", ".join(f"the {p.name.lower()} {'take' if is_are(p.name) == 'are' else 'takes'} "
-                         f"{' or '.join(p.works)}" for p in left)
+        bits = []
+        for p in left:
+            fit = next((w for w in self.weapons if w.damage in p.works), None)
+            what = short(fit.name)[4:] if fit and short(fit.name).startswith("the ") else (
+                " or ".join(p.works))
+            bits.append(f"{what} on the {p.name.lower()}")
+        said = ", ".join(bits)
         return said[0].upper() + said[1:] + "."
 
     async def settle_reads(self) -> None:
@@ -1051,6 +1067,7 @@ class Fight:
         self.lines = Lines()
         self.turns = 0
         self.won = False
+        self.muse_agrees = True
 
     def view(self, img: Image.Image, wheel: Image.Image, kind_now: str) -> View:
         hint, hint_from = "", ""
@@ -1150,6 +1167,7 @@ class Fight:
             img = await self.until(lambda i: wheel_open(i) or not (
                 skills_tab(i) is not None or menu_up(i)), 1.0)
             if img is None:
+                self.keep_frame(await self._shot(), "no-wheel")
                 await self.back_out()
                 return ""
             if self.parts and not wheel_open(img):
@@ -1158,6 +1176,12 @@ class Fight:
         if plan.part is not None and not await self.turn_wheel(plan.part):
             self.note("mh_note", {"text": f"wheel never showed {plan.part.name}"})
         return "ready"
+
+    def keep_frame(self, img: Image.Image, tag: str) -> None:
+        if os.environ.get("PLAYER_TWO_FRAMES"):
+            with contextlib.suppress(OSError):
+                img.convert("RGB").save(Path(os.environ["PLAYER_TWO_FRAMES"]).expanduser()
+                                        / f"mh-{time.strftime('%H%M%S')}-{tag}.jpg", quality=85)
 
     async def back_out(self) -> None:
         for _ in range(3):

@@ -130,7 +130,11 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
     f.weak_line = "Hit the tail with the sword and the legs with the hammer."
     assert f.where_weak() == f.weak_line
     f.weak_line = "Go for the tail."
-    assert f.where_weak() == "The tail takes slash, the legs take blunt."
+    f.weapons = gear()
+    assert f.where_weak() == "Sword on the tail, hammer on the legs."
+    f.weak_line = "Hit the tail with the sword and the legs with the hammer."
+    f.muse_agrees = False
+    assert f.where_weak() == "Sword on the tail, hammer on the legs."
 
 
 # A fake game: the routine's pixel reads look at its state instead of a picture.
