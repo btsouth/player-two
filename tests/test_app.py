@@ -764,6 +764,7 @@ async def test_hands_free_description_acknowledges_before_waiting_for_the_scene(
     s = Session.__new__(Session)
     s.events = Events()
     s.hands = object()
+    s.narrating = None
     s.narrator = SimpleNamespace(language="English")
     calls = []
     async def after_local():
@@ -781,7 +782,13 @@ async def test_hands_free_description_acknowledges_before_waiting_for_the_scene(
     s.voice = SimpleNamespace(wait_idle=wait_idle)
     s.grab_now = grab
     s._start_narration = lambda frame, **kwargs: calls.append("scene")
+    import asyncio
+    old_scene = asyncio.create_task(asyncio.sleep(60))
+    s.narrating = old_scene
     await s._local("describe")
+    assert old_scene.cancelling()
+    await asyncio.gather(old_scene, return_exceptions=True)
+    s.narrating = None
     assert calls == ["Let me look.", "idle", "frame", "scene"]
     calls.clear()
     await s._local("atmosphere")

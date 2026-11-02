@@ -2138,6 +2138,10 @@ class Session:
             if getattr(self, "hands", None) is not None and "English" in self.narrator.language:
                 # VAD endpointing already took a moment. Acknowledge hearing before
                 # model-backed scene work; let the short line finish before narration.
+                if self.narrating and not self.narrating.done():
+                    # stop() clears queued audio, but a model stream can still own
+                    # Voice's lock. Release it before queuing the acknowledgement.
+                    self.narrating.cancel()
                 await self.announce(self._look_ack(), status=True)
                 await self.voice.wait_idle(3)
             try:
