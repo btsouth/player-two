@@ -19,7 +19,7 @@ from .ack import ack
 from .agent import Agent
 from .audio import Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
-from .controls import BUTTONS, ControlsError, open_controls
+from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
 from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed
 from .muse import Muse
@@ -541,6 +541,8 @@ class Session:
             self.events.emit("walk", target="", direction=way)
         elif name == "walk_note":
             self.events.emit("walk_note", text=args.get("text", ""))
+        elif name.startswith("mh_"):
+            self.events.emit("mh", name=name, **args)
 
     def current_status(self) -> str:
         if self.utt is not None or self.hands_active:
@@ -2151,11 +2153,18 @@ class Session:
             # For scripted setups (tests, a known start for a task): no model involved.
             # "start wait2 down*2 a": buttons, pauses in seconds, repeats.
             # "down:1.5" holds for 1.5 s; "down+left:0.6" holds a chord.
+            # "ls.up:1.5", "rs.left:0.4": a stick pushed that way for that long.
             plan: list[tuple[list[str], float, float]] = []  # buttons, hold s, pause s
             for token in arg.split():
                 try:
                     if token.startswith("wait"):
                         plan.append(([], 0, min(float(token[4:] or 1), 30)))
+                        continue
+                    if token[:3] in ("ls.", "rs."):
+                        way, _, held = token[3:].partition(":")
+                        if way not in DIRECTIONS:
+                            return f"unknown stick direction: {token}"
+                        plan.append(([token[:2], way], min(float(held or 0.5), 10), 0.15))
                         continue
                     if ":" in token:
                         buttons, _, held = token.partition(":")
@@ -2170,7 +2179,11 @@ class Session:
                     return f"unknown button or count: {token}"
                 plan += [(names, hold, 0.25 if hold == 0.1 else 0.15)] * n
             for names, hold, pause in plan:
-                if len(names) == 1 and hold == 0.1:
+                if names and names[0] in ("ls", "rs") and len(names) == 2:
+                    await asyncio.to_thread(
+                        self.controls.stick, "left" if names[0] == "ls" else "right", names[1],
+                        int(hold * 1000))
+                elif len(names) == 1 and hold == 0.1:
                     await asyncio.to_thread(self.controls.press, names[0])
                 elif names:
                     await asyncio.to_thread(self.controls.chord, names, int(hold * 1000))
