@@ -63,10 +63,10 @@ NO_CODE = "No code written for this game. One line of notes."
 LIMIT_LINE = "Creator-tested. No blind player has tried it yet. That's next."
 INTRO_VO = "Player Two. For players who can't see the screen or can't hold a controller. You ask. It reads, answers and presses the buttons."
 LIMIT_VO = "I've tested this myself. No blind player has tried it yet. That's next."
-GENERAL_LINE = "Muse looks at the picture, so it can follow all three. Chrono Trigger and Monster Hunter also have code written for them. Red Dead has none."
-HOW_SECONDS = 10.0
+GENERAL_LINE = "Red Dead has no code at all, just Muse looking at the picture. Chrono Trigger and Monster Hunter add code written for them."
+HOW_SECONDS = 9.0
 MAP_LINE = "Muse labelled this map. I checked it. Local code walks it."
-RETRO_QUOTE = "A blind person still cannot get Super Mario into the castle in Super Mario 64, nor defeat Lavos in Chrono Trigger."
+RETRO_QUOTE = "A blind person still cannot ... nor defeat Lavos in Chrono Trigger."
 SE_NOTICE = ("The copyright of the materials used on this page or video is owned by SQUARE ENIX CO., LTD. "
              "or its licensors. The unauthorized reproduction and distribution of the images is prohibited.\n"
              "© 1995, 2018 SQUARE ENIX\nIllustration: © 1995 BIRD STUDIO / SHUEISHA\n"
@@ -142,6 +142,7 @@ class Piece:
     audio_mode: str = "mix"
     voice_boosts: list = field(default_factory=list)
     box_until: float = 0.0
+    hold_at: float | None = None  # explicit held purchase result; original speech clock is unchanged
     freeze: bool = False
     timing_group: str = ""
     vo_prompt: str = ""
@@ -585,18 +586,24 @@ def mh_story_pieces(take: Take) -> list[Piece]:
                     and a-1<=e['t']-take.start<b),None)
         if model:
             at=max(0,model['t']-take.start-a)
-            words="Muse read the monster's weak points" if model['read']=='wheel' else 'Muse Spark / status read'
-            p.overlays.append(Overlay(f"{words}, {model['seconds']:.2f} s",34,"mh-model",at,min(at+4,b-a)))
+            request=next((t for t,_ in reversed(take.heard()) if t<=model['t']-take.start),None)
+            response=event_answer(take,request,model) if request is not None else None
+            words='Muse read the weak points' if model['read']=='wheel' else 'Muse Spark'
+            if response:
+                at=max(at,response[0]-a)
+                words+=f' · Answer {response[1]:.1f} s'
+            p.overlays.append(Overlay(words,34,'mh-model',at,min(at+4,b-a)))
+            if model['read']=='wheel':p.overlays.append(Overlay('Harp-shaped icon = piercing damage',34,'mh-gloss',at,min(at+4,b-a)))
         if b-a>6:
             start=min(4,max(0,b-a-4))
-            p.overlays.append(Overlay("Muse reads the weak points once. Code written for this game takes the turns.",34,"mh-code",start,start+4))
+            p.overlays.append(Overlay("Muse reads weak points. Code plays the turns.",34,"mh-code",start,start+4))
         for c,d,who,text in take.caps:
             if who=="Player Two" and "Speed beats that" in text and min(b,d)>max(a,c):
                 p.overlays.append(Overlay("Speed beats Power in this game's attack triangle.",34,"mh-gloss",max(0,c-a),min(b-a,d-a+.8)))
         parts.append(p)
     if not any(o.where=='mh-code' for p in parts for o in p.overlays):
         at=float(config.get('code_chip_at',max(0,sum(p.out_s for p in parts)-8)))
-        place_overlays(parts,[Overlay('Muse reads the weak points once. Code written for this game takes the turns.',34,'mh-code',at,at+4)])
+        place_overlays(parts,[Overlay('Muse reads weak points. Code plays the turns.',34,'mh-code',at,at+4)])
     steady_timing(parts,"mh-cuts" if config.get('cuts_only') else "mh")
     return parts
 
@@ -641,24 +648,21 @@ def rdr_sam_pieces(take: Take) -> list[Piece]:
     e=take.edit
     parts=[]
     keys=[("rdr-look","view"),("rdr-horse","horse"),("rdr-wagon","wagon"),("rdr-dialogue","dialogue")]
-    bench,proof=rdr_bench(take.video.parent)
     for ident,key in keys:
-        if key=="dialogue" and not bench:continue
         a,b=map(float,e[key])
         quiet=key=="dialogue"
         p=Piece(ident,"game3",line="RDR "+key,take=take.name,a=a,b=b,layout="rdr",captions=not quiet,duck=not quiet)
         if quiet:
             if any(x.get("kind")=="spoken" and min(b,x["ended"]-take.start)>max(a,x["began"]-take.start) for x in take.events):
                 raise ValueError("RDR actors window contains Player Two speech")
-            p.proof=proof
-            p.overlays.append(Overlay("Recorded-clip benchmark\n"+bench,42,"bench",0,b-a))
         elif key!="view":
             events=[x for x in take.events if x.get("kind")=="where" and a<=x["t"]-take.start<b]
             if not events or any(x.get("via")!="sam-3.1" or not isinstance(x.get("seconds"),(float,int)) or not x.get("boxes") or not all(valid_box(z) for z in x['boxes']) for x in events):
                 raise ValueError("RDR SAM beat needs actual sam-3.1 geometry")
             p.voice_boosts=e.get("ping_boosts",{}).get(key,[])
             p.box_until=max((x[1] for x in p.voice_boosts),default=b)
-            p.overlays.append(Overlay("You walk. Player Two tells you where things are.",36,"tl",0,b-a))
+            p.overlays.append(Overlay("No 3D autopilot. You walk, it tells you where things are.",36,"tl",0,b-a))
+        if key=='view':p.overlays.append(Overlay('Description shortened',34,'trim',0,b-a))
         if key=="horse" and e.get("horse_wait_cut"):
             x,y=map(float,e["horse_wait_cut"])
             if not a<x<y<b or any(max(x,c)<min(y,d) for c,d in speech_spans(take.events,take.start)):
@@ -833,6 +837,7 @@ def cold_open(take: Take | None) -> tuple[list[Piece], list[str]]:
     spans=speech_spans(take.events,take.start)
     spans += [(t-_lead(take,t,e),t+1.8) for t,e in take.heard()]
     spans += [(reveal-0.1,first_end)]
+    spans += [tuple(w) for w in take.edit.get('action_windows',[])]
     if "gap_speed" not in take.edit:
         spans.append((a,first_end))
     gap_speed=float(take.edit.get("gap_speed",3))
@@ -860,49 +865,61 @@ def cold_open(take: Take | None) -> tuple[list[Piece], list[str]]:
                 if trimmed:
                     p.overlays.append(Overlay("Silent gap shortened",34,"gap",0,p.out_s))
                 parts.append(p)
-    elapsed=0.0
+    excluded=[(e['began']-take.start-.04,e['ended']-take.start+.04) for e in take.events
+              if e.get('kind')=='spoken' and e['text'] in take.edit.get('omit_speech',[])]
+    kept=[]
     for p in parts:
-        if elapsed<4.5:
-            p.overlays.append(Overlay("This is the game with the picture off.",34,"intro",0,
-                                      min(p.out_s,4.5-elapsed)))
+        windows=[(p.a,p.b)]
+        for lo,hi in excluded:
+            windows=[(x,y) for a,b in windows for x,y in [(a,min(b,lo)),(max(a,hi),b)] if y>x]
+        for x,y in windows:
+            kept.append(dataclasses.replace(p,id=f'cold-{len(kept)}',a=x,b=y,overlays=[dataclasses.replace(o,f0=0,f1=(y-x)/p.speed) for o in p.overlays]))
+    parts=kept
+    reveal_out=sum(p.out_s for p in parts if p.b<=reveal)
+    elapsed=0
+    for p in parts:
+        if p.black_for==999:
+            p.overlays.append(Overlay('This is the game with the picture off.',34,'intro',0,p.out_s))
+        for x,y,text in take.edit.get('action_labels',[]):
+            lo,hi=max(p.a,x),min(p.b,y)
+            if hi>lo:p.overlays.append(Overlay(text,34,'action-proof',(lo-p.a)/p.speed,(hi-p.a)/p.speed))
         elapsed+=p.out_s
+    place_overlays(parts,[Overlay('Picture on.',42,'picture-on',reveal_out,reveal_out+1.2)])
     return parts,warnings
 
 
 def timing_text(parts: list[Piece], group: str) -> str:
-    source=max(p.b for p in parts)-min(p.a for p in parts)
-    shown=sum(p.out_s for p in parts)
-    if group=="cold":
-        return f"Waits between lines cut: {source:.0f} s of play in {shown:.0f} s"
-    if group=="mh":
-        return f"{source:.0f} s fight in {shown:.0f} s. Narration muted in the fast parts."
-    if group=='mh-cuts':
-        return f"{source:.0f} s fight in {shown:.0f} s. Cuts between requests and turns."
-    if group=='nav':
-        return f"Cuts and speed-ups: {source:.0f} s of play in {shown:.0f} s"
-    if group=='fair':
-        return f"Description shortened. {source-shown:.1f} s wait cut."
-    if group=="shop":
-        return f"Cuts between steps: {source:.0f} s of play in {shown:.0f} s"
-    removed=source-shown
-    return f"Wait cut: {removed:.1f} s"
+    source=max(p.b for p in parts)-min(p.a for p in parts);shown=sum(p.out_s for p in parts)
+    if group=='mh':return f'{source:.0f} s shown in {shown:.0f} s · Fast narration muted'
+    if group in ('horse','fair'):return f'{source-shown:.1f} s wait cut'
+    suffix='Cuts + speed-ups' if any(p.speed>1 for p in parts) else 'Cuts'
+    return f'{source:.0f} s shown in {shown:.0f} s · {suffix}'
+
+
+def timing_starts(parts: list[Piece], group: str) -> list[float]:
+    delay=0
+    if group=='cold' and any(p.black_for==999 for p in parts):
+        delay=sum(p.out_s for p in itertools.takewhile(lambda p:p.black_for==999,parts))+1.2
+    at=0;starts=[]
+    for p in parts:
+        starts.append(max(0,min(p.out_s,delay-at)));at+=p.out_s
+    return starts
 
 
 def steady_timing(parts: list[Piece], group: str) -> None:
-    if not parts or any(p.kind!="clip" for p in parts):return
-    text=timing_text(parts,group)
-    for p in parts:
+    if not parts or any(p.kind!='clip' for p in parts):return
+    for p,start in zip(parts,timing_starts(parts,group),strict=True):
         p.timing_group=group
-        p.overlays=[o for o in p.overlays if o.where not in ("speed","gap")]
-        p.overlays.append(Overlay(text,34,"time-"+group,0,p.out_s))
+        p.overlays=[o for o in p.overlays if o.where not in ('speed','gap')]
+        if start<p.out_s:p.overlays.append(Overlay(timing_text(parts,group),34,'time-'+group,start,p.out_s))
 
 
 def valid_timing_group(parts: list[Piece], group: str) -> bool:
     selected=[p for p in parts if p.timing_group==group]
-    return bool(selected) and len({p.take for p in selected})==1 and all(
-        a.b<=b.a+.0001 for a,b in itertools.pairwise(selected)) and all(
-        any(o.where=="time-"+group and o.text==timing_text(selected,group)
-            and o.f0<=.001 and o.f1>=p.out_s-.001 for o in p.overlays) for p in selected)
+    return bool(selected) and len({p.take for p in selected})==1 and all(a.b<=b.a+.0001 for a,b in itertools.pairwise(selected)) and all(
+        (not any(o.where=='time-'+group for o in p.overlays) if start==p.out_s else
+         any(o.where=='time-'+group and o.text==timing_text(selected,group) and abs(o.f0-start)<.001 and o.f1>=p.out_s-.001 for o in p.overlays))
+        for p,start in zip(selected,timing_starts(selected,group),strict=True))
 
 
 def reserve_win_line(opening: list[Piece], take: Take | None) -> tuple[list[Piece], list[Piece]]:
@@ -969,7 +986,7 @@ def shop_scene_layouts(pieces: list[Piece], take: Take | None) -> list[Piece]:
                 continue
             bounds=[o.f0]+[t for t in (a,b) if o.f0<t<o.f1]+[o.f1]
             for x,y in itertools.pairwise(bounds):
-                where="trace-shop-menu" if a<=(x+y)/2<b else "trace-shop"
+                where="trace-shop-menu" if p.freeze or a<=(x+y)/2<b else "trace-shop"
                 placed.append(dataclasses.replace(o,f0=x,f1=y,where=where))
         p.overlays=placed
     return pieces
@@ -998,10 +1015,15 @@ def map_walk(take: Take | None, folder: Path) -> list[Piece]:
                 p=Piece(f'nav-{index}-{j}','ct',line='castle and fair',take=take.name,a=x,b=y,speed=rate,
                         captions=rate==1,layout='fight' if role in ('interrupt','fight','fight-win') else 'map',audio_mode='live')
                 if role=='fight' and rate>1:
-                    p.overlays.append(Overlay('Muse Spark chooses the route and fight. Local code executes.',34,'nav-route',0,p.out_s))
+                    p.overlays.append(Overlay('Muse picks the tool. Code finds the path and plays the turns.',34,'nav-route',0,p.out_s))
                 if role=='walk' and p.out_s>=2:p.overlays.append(Overlay(MAP_LINE,40,'nav-map',0,p.out_s))
                 if role=='exit':p.overlays.append(Overlay('Muse Spark planned the forest exit. Local code moves and takes turns.',34,'nav-route',0,p.out_s))
-                if role=='summary':p.overlays.append(Overlay('Description shortened',34,'trim',0,p.out_s))
+                if role=='summary':
+                    steps=resume.get('steps',[])
+                    if not any(q.get('tool')=='walk_to' and 'not_found' in q.get('result','') for q in steps) or not any(q.get('tool')=='remember' and q.get('result')=='updated that note' for q in steps):
+                        raise ValueError('Recovery needs the logged wrong guess and saved note')
+                    count=len(resume['turns'])
+                    p.overlays.append(Overlay(f'Not scripted. Muse took {count} turns, recovered from a wrong guess and saved a note for next time.',34,'nav-recovery',0,p.out_s))
                 parts.append(p)
         steady_timing(parts,'nav')
         return parts
@@ -1095,6 +1117,14 @@ def make_plan(
             for x,y in [(p.a,min(p.b,lo)),(max(p.a,hi),p.b)]:
                 if y>x:new.append(dataclasses.replace(p,id=p.id+f'-cut-{len(new)}',a=x,b=y,overlays=[]))
         steady_timing(new,'shop');lines['A4']=new
+    if take and take.edit.get('shop_hold') and lines.get('A4'):
+        start,frame=map(float,take.edit['shop_hold']);new=[]
+        for p in lines['A4']:
+            if p.b<=start:new.append(p);continue
+            if p.a<start:new.append(dataclasses.replace(p,id=p.id+'-live',b=start,overlays=[]))
+            q=dataclasses.replace(p,id=p.id+'-held',a=max(p.a,start),freeze=True,hold_at=frame,overlays=[])
+            q.overlays=[Overlay('Purchase result held',34,'trim',0,q.out_s)];new.append(q)
+        steady_timing(new,'shop');lines['A4']=new
     maps=[*lines.get('A1',[]),*map_walk(takes.get('nav'),folder),*lines.get('A3b',[]),*lines.get('A4',[])]
     for p in maps:
         p.sharp_at=None
@@ -1103,7 +1133,7 @@ def make_plan(
     for i,p in enumerate(intro):
         if p.id=='identity' and fight:
             at=float(fight.edit.get('identity_at',max(x.b for x in opening)))
-            intro[i]=Piece('identity','hook',line='founder intro',take=fight.name,a=at,b=at+p.secs,
+            intro[i]=Piece('identity','hook',line='founder intro',take=take.name if take else fight.name,a=0 if take else at,b=p.secs if take else at+p.secs,
                 freeze=True,captions=False,audio_mode='game',vol=.3,vo=vo.get('intro',''),vo_prompt=INTRO_VO,
                 layout='fight',overlays=[Overlay(INTRO_VO,58,'identity',0,p.secs)])
         elif p.id=='lavos' and take:
@@ -1148,6 +1178,8 @@ def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
     for p in parts:
         if (p.id.startswith("c-how") or p.id in ("identity","limit")) and not p.vo:
             out.append(f"missing voice-over audio: {p.id}")
+        if p.hold_at is not None and not (p.freeze and p.line=='A4' and 0<=p.a-p.hold_at<=3 and any(o.text=='Purchase result held' for o in p.overlays)):
+            out.append(f'unsupported held result: {p.id}')
         if any(o.text == VO_LABEL for o in p.overlays):
             out.append(f"no voice-over for {p.id} (vo-why.* in the folder)")
         if any(DRAFT_MARK in str(b[0]) for b in p.blocks):
@@ -1171,9 +1203,9 @@ def round2_cards(folder: Path) -> list[Piece]:
     return [Piece('identity','hook',kind='card',secs=8.5,blocks=[
                 ('Player Two.',80,True),("For players who can't see the screen or can't hold a controller.",58,True),
                 ('You ask. It reads, answers and presses the buttons.',44,False)]),
-            Piece('lavos','hook',kind='card',secs=5,blocks=[
-                (RETRO_QUOTE,48,True),('RetroArch 1.8.2 release notes, December 2019',34,False),
-                ("Lavos is the game's final boss.",42,True),("Lavos is still ahead. Here's how far we've got.",44,True)])]
+            Piece('lavos','hook',kind='card',secs=6,blocks=[
+                (RETRO_QUOTE,48,True),('libretro, 2019',34,False),
+                ("Lavos is the final boss. Not beaten yet. Here's how far we've got.",44,True)])]
 
 
 def sample_plan(takes: dict[str, Take], folder: Path) -> tuple[list[Piece], list[str]]:
@@ -1298,6 +1330,13 @@ def label_png(path: Path, o: Overlay) -> Path:
             font=_font(True, 20),
             fill=(200, 166, 190),
         )
+    elif o.where.startswith('context'):
+        f=_font(True,34);lines=[]
+        for row in o.text.splitlines():lines+=_wrap(d,row,f,600)
+        x,y=(W-664,330) if o.where=='context-shop-menu' else (W-664,600) if o.where=='context-dialogue' else (W-664,52)
+        h=len(lines)*46+26
+        d.rounded_rectangle((x-16,y-10,x+616,y+h),radius=16,fill=(9,15,25,225))
+        for i,ln in enumerate(lines):d.text((x,y+i*46),ln,font=f,fill='white')
     elif o.where.startswith('time-'):
         f=_font(True,34)
         lines=_wrap(d,o.text,f,600)
@@ -1374,8 +1413,8 @@ def label_png(path: Path, o: Overlay) -> Path:
             texts=[("Player Two.",80),("For players who can't see the screen or can't hold a controller.",58),
                    ("You ask. It reads, answers and presses the buttons.",44)]
         else:
-            texts=[(RETRO_QUOTE,48),("RetroArch 1.8.2 release notes, December 2019",34),
-                   ("Lavos is the game's final boss.",42),("Lavos is still ahead. Here's how far we've got.",44)]
+            texts=[(RETRO_QUOTE,48),("libretro, 2019",34),
+                   ("Lavos is the final boss. Not beaten yet. Here's how far we've got.",44)]
         y=175
         for text,size in texts:
             f=_font(True,size)
@@ -1426,11 +1465,34 @@ def label_png(path: Path, o: Overlay) -> Path:
     return path
 
 
+def answer_after(take: Take, request: float, text: str) -> tuple[float,float] | None:
+    """Recorded heard -> actual content speech, excluding acknowledgement/generation time."""
+    clean=lambda x:re.sub(r'[^a-z0-9]+','',x.lower())
+    target=clean(text)
+    if not target:return None
+    next_request=next((t for t,_ in take.heard() if t>request),take.duration)
+    candidates=[]
+    for e in take.events:
+        if e.get('kind')!='spoken':continue
+        at=e['began']-take.start;words=clean(e['text'])
+        if request<=at<next_request and words and (target.startswith(words) or words.startswith(target)):
+            candidates.append(at)
+    return (min(candidates),min(candidates)-request) if candidates else None
+
+
+def event_answer(take: Take, request: float, event: dict) -> tuple[float,float] | None:
+    text=event.get('outcome') or event.get('text') or event.get('reply',{}).get('say','')
+    prefix=take.edit.get('scene_prefix','')
+    if event.get('source')=='atmosphere' and prefix and text.startswith(prefix):text=text[len(prefix):].lstrip()
+    if event.get('kind')=='where':text='Found it' if len(event.get('boxes',[]))==1 else 'I see'
+    return answer_after(take,request,text)
+
+
 def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dict]:
     """Completion badges: explicit logged model work only, never guessed from request words.
 
-    Durations are labelled by scope. A local action's seconds include walking/animation;
-    model_s is inference time, not end-to-end response time. Badges start at completion.
+    Raw computation durations remain in the evidence report. Visible durations are
+    heard-to-content-speech from spoken.began; without a matched answer, show only the layer.
     """
     report = []
     for p in parts:
@@ -1480,14 +1542,17 @@ def _evidence_for_window(parts: list[Piece], takes: dict[str, Take]) -> list[dic
         state = {}
         cur = heard_at
         for e, layer, timing in facts:
-            at = max(cur, (e['t']-take.start-p.a)/p.speed)
+            response=event_answer(take,t,e)
+            at = max(cur, (e['t']-take.start-p.a)/p.speed, (response[0]-p.a)/p.speed if response else 0)
+            if response and response[0]>=p.b:continue
             text = base + "".join(f"\n{k}\n{v}" for k,v in state.items())
             if at > cur:
                 p.overlays.append(Overlay(text, 30, "trace", cur, at))
-            state[layer] = timing
+            display=f'Answer {response[1]:.1f} s' if response else ''
+            state[layer] = display
             cur = at
             report.append({"piece": p.id, "request": request['text'], "layer": layer,
-                           "timing": timing, "event_t": e['t'], "badge_from": at})
+                           "timing": timing, "answer_seconds": response[1] if response else None, "display_timing":display, "event_t": e['t'], "badge_from": at})
         text = base + "".join(f"\n{k}\n{v}" for k,v in state.items())
         if cur < p.out_s:
             p.overlays.append(Overlay(text, 30, "trace", cur, p.out_s))
@@ -1586,10 +1651,40 @@ def _esc(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
+def render_overlays(p: Piece) -> list[Overlay]:
+    """One request, one context panel and the real spoken caption, with no stacked chips."""
+    contextual=('time-','nav-','mh-')
+    kinds={'tl','tl2','tr','trl','trim','pause','metric','action-proof','picture-on'}
+    raw=[];keep=[]
+    for o in p.overlays:
+        if o.where.startswith('trace'):
+            rows=o.text.splitlines();keep.append(dataclasses.replace(o,text='\n'.join(rows[:2])))
+            if len(rows)>2:
+                layer,value=list(zip(rows[2::2],rows[3::2],strict=False))[-1]
+                raw.append(Overlay((layer.replace('Local action','Local')+' '+value).strip(),34,'metric',o.f0,o.f1))
+        elif o.where.startswith(contextual) or o.where in kinds:raw.append(o)
+        else:keep.append(o)
+    points=sorted({v for o in raw for v in (o.f0,o.f1)})
+    for a,b in itertools.pairwise(points):
+        active=[o for o in raw if o.f0<=(a+b)/2<o.f1]
+        if not active:continue
+        # Timing is a compact first line. Other facts share its surface, rather than piling up.
+        active.sort(key=lambda o:not o.where.startswith('time-'))
+        texts=list(dict.fromkeys(o.text for o in active))
+        where='context'
+        if p.line=='A4' and (p.freeze or any(o.where=='trace-shop-menu' and o.f0<=(a+b)/2<o.f1 for o in keep)):
+            where='context-shop-menu'
+        elif p.take=='nav' and 102<=p.a<112:where='context-dialogue'
+        if where=='context-shop-menu' and 'Purchase result held' in texts:
+            texts=[next(t.split(' · ')[0] for t in texts if 'shown in' in t)+' · Result held']
+        keep.append(Overlay('\n'.join(texts),34,where,a,b))
+    return keep
+
+
 def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], str, str]:
     inputs: list[str] = []
     chain, last = "", "v0"
-    for i, o in enumerate(p.overlays):
+    for i, o in enumerate(render_overlays(p)):
         if p.layout in ("shop","shop-menu") and re.fullmatch(r"\d+(?:\.\d+)?x",o.text):
             o=dataclasses.replace(o,where="speed-shop")
         if o.where == "trace":
@@ -1622,7 +1717,7 @@ def encode_card(p: Piece, work: Path, out: Path, vcodec: str) -> None:
 def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: Path, out: Path,
                 vcodec: str) -> None:
     take = takes[p.take]
-    inputs = ["-ss", f"{p.a}", "-to", f"{p.b}", "-i", str(take.video)]
+    inputs = ["-ss", f"{p.hold_at if p.hold_at is not None else p.a}", "-t", f"{p.b-p.a}", "-i", str(take.video)]
     n = 1
     if p.vo:
         inputs += ["-ss", f"{p.vo_offset}", "-i", p.vo]
@@ -1630,6 +1725,7 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
     game_audio = take.video.with_suffix(".game.wav")
     voice_audio = take.video.with_suffix(".voice.wav")
     stems = game_audio.exists() and voice_audio.exists()
+    if p.hold_at is not None and not stems:raise ValueError('Held purchase result needs its original separate stems')
     stem_n = n
     if stems:
         for stem in (game_audio, voice_audio):

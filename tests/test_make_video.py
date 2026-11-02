@@ -201,9 +201,9 @@ def test_the_quote_and_the_honest_lines_are_on_cards():
     parts, _dropped, _warnings = _plan(_events())
     words = " ".join([str(b[0]) for p in parts for b in p.blocks]+[o.text for p in parts for o in p.overlays])
     assert "nor defeat Lavos in Chrono Trigger" in words
-    assert "Lavos is still ahead" in words and "No blind player has tried it yet" in words
+    assert "Not beaten yet" in words and "No blind player has tried it yet" in words
     assert mv.GENERAL_LINE in words and mv.RETRO_QUOTE in words
-    assert "..." not in mv.RETRO_QUOTE
+    assert mv.RETRO_QUOTE == "A blind person still cannot ... nor defeat Lavos in Chrono Trigger."
     assert "works out what you want" not in " ".join(
         o.text for p in parts for o in p.overlays)
 
@@ -516,7 +516,7 @@ def test_mh_story_is_one_run_with_false_narration_only_in_muted_uncaptioned_gap(
     assert all(a.b==b.a for a,b in itertools.pairwise(parts))
     assert len(parts)==3 and parts[1].speed==28 and not parts[1].captions
     assert parts[1].a<=12 and parts[1].b>=14
-    assert any("3.94" in o.text for o in parts[0].overlays)
+    assert not any("3.94" in o.text for o in parts[0].overlays)  # compute time is not response latency
     assert not any(mv.NO_CODE in o.text for p in parts for o in p.overlays)
     take.edit["story"]["normal"]=[[2,15],[20,23]]
     with pytest.raises(ValueError,match="False MH line"):
@@ -659,7 +659,7 @@ def test_steady_time_summary_is_mathematical_and_guards_reject_tampering():
     ps=[mv.Piece('one','hook',take='t',a=0,b=2),mv.Piece('two','hook',take='t',a=4,b=8,speed=2)]
     mv.steady_timing(ps,'cold')
     assert mv.valid_timing_group(ps,'cold')
-    assert all(any(o.text=='Waits between lines cut: 8 s of play in 4 s' for o in p.overlays) for p in ps)
+    assert all(any(o.text=='8 s shown in 4 s · Cuts + speed-ups' for o in p.overlays) for p in ps)
     assert mv.final_refusals(ps,[])==[]
     ps[1].overlays[0].f1-=.1
     assert any('no 2x label' in x for x in mv.final_refusals(ps,[]))
@@ -740,13 +740,13 @@ def test_how_bridge_keeps_one_voice_clock_and_requires_real_windows():
     import pytest
     takes={n:_take([],n,100) for n in ('take-A','game2','rdr-sam')}
     takes['rdr-sam'].edit={'bridge':[{'take':n,'a':10,'b':10+d} for n,d in
-                                    [('take-A',3),('game2',3),('rdr-sam',4)]]}
-    ps=mv.how_bridge(takes,{'how':'voice.wav'},{'how':10})
+                                    [('take-A',3),('game2',3),('rdr-sam',3)]]}
+    ps=mv.how_bridge(takes,{'how':'voice.wav'},{'how':9})
     assert [p.take for p in ps]==['take-A','game2','rdr-sam']
-    assert [p.vo_offset for p in ps]==[0,3,6] and sum(p.out_s for p in ps)==10
+    assert [p.vo_offset for p in ps]==[0,3,6] and sum(p.out_s for p in ps)==9
     assert all(p.vo_prompt==mv.GENERAL_LINE and p.audio_mode==('mix' if p.take=='game2' else 'game') and not p.captions for p in ps)
     with pytest.raises(ValueError,match='exceeds'):
-        mv.how_bridge(takes,{}, {'how':10.01})
+        mv.how_bridge(takes,{}, {'how':9.01})
     takes['game2'].duration=11
     with pytest.raises(ValueError,match='outside'):
         mv.how_bridge(takes,{}, {})
@@ -776,3 +776,55 @@ def test_bridge_uses_the_later_voice_samples_instead_of_restarting(tmp_path):
     decoded=np.frombuffer(raw,np.float32)[2400:19200];phase=np.arange(len(decoded))/48000
     power=lambda hz:abs(np.mean(decoded*np.exp(-2j*np.pi*hz*phase)))
     assert power(880)>10*power(440)
+
+
+def test_answer_clock_excludes_compute_and_acknowledgement():
+    take=_take([{'kind':'heard','t':1,'text':'Where am I?','typed':True},
+                _spoken('Let me look.',1.1,1.7),_spoken('On the world map,',2,3),
+                {'kind':'agent','t':1.44,'seconds':.44,'turns':[],'steps':[{'tool':'where_am_i'}],
+                 'outcome':'On the world map, near the fair.'}])
+    ps=[mv.Piece('p','ct',take='take-A',a=0,b=4)]
+    proof=mv.evidence_overlays(ps,{'take-A':take})
+    assert proof[0]['answer_seconds']==1 and proof[0]['badge_from']==2
+    assert any('Answer 1.0 s' in o.text for o in ps[0].overlays)
+    assert not any('0.44' in o.text for o in mv.render_overlays(ps[0]))
+
+
+def test_black_opening_keeps_its_explanation_clear_and_marks_the_reveal():
+    take=_choice_take();ps,_=mv.cold_open(take);mv.steady_timing(ps,'cold')
+    assert mv.valid_timing_group(ps,'cold')
+    for p in ps:
+        if p.black_for==999:
+            assert any(o.text=='This is the game with the picture off.' for o in p.overlays)
+            assert not any(o.where.startswith('time-') for o in p.overlays)
+    assert any(o.text=='Picture on.' for p in ps for o in p.overlays)
+    last=ps[-1];last.overlays=[o for o in last.overlays if not o.where.startswith('time-')]
+    assert not mv.valid_timing_group(ps,'cold')
+
+
+def test_context_panel_keeps_request_separate_without_stacking_text():
+    p=mv.Piece('p','ct',take='t',a=0,b=5,overlays=[
+        mv.Overlay('You: typed\nGo.\nMuse Spark\nAnswer 1.0 s',34,'trace',0,5),
+        mv.Overlay('155 s shown in 29 s',34,'time-nav',0,5),
+        mv.Overlay('Not scripted.',34,'nav-recovery',1,4)])
+    shown=mv.render_overlays(p)
+    assert len([o for o in shown if o.where.startswith('trace')])==1
+    for at in [.5,2,4.5]:
+        assert len([o for o in shown if o.f0<=at<o.f1 and not o.where.startswith('trace')])==1
+    assert any('Answer 1.0 s' in o.text and 'Not scripted.' in o.text for o in shown)
+
+
+def test_purchase_hold_must_be_explicit_and_from_the_same_nearby_result():
+    p=mv.Piece('held','ct',line='A4',take='t',a=10,b=12,freeze=True,hold_at=9,
+               overlays=[mv.Overlay('Purchase result held',34,'trim',0,2)])
+    assert mv.final_refusals([p],[])==[]
+    p.hold_at=0
+    assert 'unsupported held result: held' in mv.final_refusals([p],[])
+
+
+def test_muse_latency_does_not_credit_a_local_place_prefix():
+    take=_take([{'kind':'heard','t':1,'text':'What does it look like?','typed':True},
+                _spoken('Town Square.',1.5,2),_spoken('A busy market.',3,4)])
+    take.edit={'scene_prefix':'Town Square.'}
+    e={'kind':'say','source':'atmosphere','text':'Town Square. A busy market.'}
+    assert mv.event_answer(take,1,e)==(3,2)
