@@ -22,3 +22,15 @@ def test_selection_preserves_originals_and_other_takes(tmp_path):
     assert data['take-A']['edit']=={'recording_delay':.44,'shop_menu':[20,24]}
     assert (takes/data['take-A']['video']).resolve()==source/'run.mp4'
     assert all((source/n).read_text()=='original '+n for n in names)
+
+    (source/'run.mp4.start').write_text('1000')
+    session=tmp_path/'session.jsonl'
+    session.write_text(json.dumps({'kind':'ready','t':999,'brain':'muse-spark-1.3'})+'\n')
+    before={n:(source/n).read_bytes() for n in names}
+    subprocess.run([sys.executable,str(script),str(takes),'take-A',str(source),
+                    '--delay','0.42','--shop-menu','21','25','--session-log',str(session)],check=True)
+    data=json.loads((takes/'takes.json').read_text())
+    derived=(takes/data['take-A']['events']).read_bytes()
+    assert json.loads(derived.splitlines()[0])['brain']=='muse-spark-1.3'
+    assert derived.split(b'\n',1)[1]==before['events.jsonl']
+    assert all((source/n).read_bytes()==before[n] for n in names)

@@ -13,6 +13,7 @@ def main():
     p.add_argument('source',type=Path)
     p.add_argument('--delay',type=float,required=True,help='Measured recording launch delay in seconds')
     p.add_argument('--shop-menu',nargs=2,type=float,help='Measured source-video menu interval for A')
+    p.add_argument('--session-log',type=Path,help='Original session log supplying missing ready metadata')
     a=p.parse_args()
     source=a.source.resolve()
     for name in ['run.mp4','run.mp4.start','events.jsonl','run.game.wav','run.voice.wav']:
@@ -20,6 +21,14 @@ def main():
             p.error(f'Missing source file: {source/name}')
     if a.name=='take-A' and (not a.shop_menu or a.shop_menu[0]>=a.shop_menu[1]):
         p.error('A selection requires a measured --shop-menu START END')
+    prefix=b''
+    if a.session_log:
+        epoch=float((source/'run.mp4.start').read_text())
+        ready=[line for line in a.session_log.read_text().splitlines()
+               if (e:=json.loads(line)).get('kind')=='ready' and e.get('t',0)<=epoch]
+        if not ready:
+            p.error('No original ready record before this recording')
+        prefix=(ready[-1]+'\n').encode()
     manifest=a.takes/'takes.json'
     data=json.loads(manifest.read_text()) if manifest.exists() else {}
     selected='selected-'+a.name
@@ -33,6 +42,10 @@ def main():
     os.replace(temp,alias)
     config=data.setdefault(a.name,{})
     config.update(video=selected+'/run.mp4',start=selected+'/run.mp4.start',events=selected+'/events.jsonl')
+    if prefix:
+        derived=selected+'.events.jsonl'
+        (a.takes/derived).write_bytes(prefix+(source/'events.jsonl').read_bytes())
+        config['events']=derived
     edit=config.setdefault('edit',{})
     edit['recording_delay']=a.delay
     if a.shop_menu:

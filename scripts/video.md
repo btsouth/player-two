@@ -174,3 +174,7 @@ python3 scripts/select_video_take.py TAKES take-A REVIEWED_FOLDER \
 It requires video/start/events/both stems, records the measured clock/menu values in takes.json,
 and makes a relative source alias so the existing dereferencing rsync remains portable. Original
 files are unchanged. Review the new plan and frames after rebuilding; do not reuse old source times.
+
+If the recorder's excerpt omitted the model identity, `--session-log ORIGINAL_EVENTS` prepends the
+last actual `ready` record before recording into a derived sidecar. Original event bytes and source
+files remain unchanged. No model identity is inferred from the wording of a request.
