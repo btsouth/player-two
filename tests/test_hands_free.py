@@ -533,3 +533,12 @@ async def test_talk_key_audio_waits_in_order_while_the_socket_connects(monkeypat
     connected.set()
     assert await u.text() == ''
     assert sent[1:3] == [b'first word', b'rest of request']
+
+
+async def test_a_damaged_named_stop_uses_the_real_local_cancel_route(monkeypatch):
+    s = session(monkeypatch)
+    s.handle = Session.handle.__get__(s, Session)
+    await heard(s, 'Two, stop.')
+    assert s.handled == ['local:stop']
+    event = next(e for e in s.events.recent if e['kind'] == 'heard')
+    assert event['wake_form'] == 'Two' and event['wake_damaged'] is True
