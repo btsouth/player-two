@@ -142,9 +142,11 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
     f.weak_line = "Go for the tail."
     f.weapons = gear()
     assert f.where_weak() == "Sword on the tail, hammer on the legs."
-    f.weak_line = "Hit the tail with the sword and the legs with the hammer."
-    f.muse_agrees = False
+    f.weak_line = "Hit the tail with the hammer and the legs with the sword."
     assert f.where_weak() == "Sword on the tail, hammer on the legs."
+    f.weak_line = "Hit the tail with the sword and the legs with the hammer."
+    f.muse_agrees = False  # its list of diamonds was off, but the sentence is right
+    assert f.where_weak() == f.weak_line
 
 
 # A fake game: the routine's pixel reads look at its state instead of a picture.
@@ -361,7 +363,7 @@ def test_a_whole_turn_says_why_then_what_in_order(game):
     plan = run(go())
     assert plan.type == "Speed"
     assert game.screen == "playing"
-    assert "so speed" in said[0] and "last hit was power" in said[0]
+    assert "so speed" in said[0] and "guessing power" in said[0]
     assert len(said) == 2
 
 
@@ -442,3 +444,30 @@ def test_a_part_muse_never_named_is_not_said():
     plan = m.Plan("attack", type="Speed", part=part)
     line = m.Lines().choice(m.View([part], [], 0, "Speed"), plan, False)
     assert "part" not in line
+
+
+def test_muse_words_are_used_only_when_each_weapon_fits_its_part():
+    def part(n, w):
+        return m.Part(n, [w], False, 0.5, "", title(n))
+
+    parts = [part("Head", "pierce"), part("Legs", "blunt"), part("Tail", "slash")]
+    weapons = [m.Weapon("Cluster Hammer", "blunt"), m.Weapon("Frozen Speartuna", "slash"),
+               m.Weapon("Seahorse Harp", "pierce")]
+    good = "hit the head with the harp, the legs with the hammer, and the tail with the sword."
+    assert m.muse_line_fits(good, parts, weapons)
+    assert m.muse_line_fits("use the seahorse harp on its head, cluster hammer on its legs and "
+                            "ice spear on its tail", parts, weapons)
+    assert not m.muse_line_fits("hit the head with the hammer, the legs with the harp, and the "
+                                "tail with the sword.", parts, weapons)
+    assert not m.muse_line_fits("hit the legs with the hammer.", parts, weapons)
+
+
+def test_a_line_is_not_said_twice_however_long_the_fight():
+    lines = m.Lines()
+    assert lines.pick("Sleep Chaser.") == "Sleep Chaser."
+    assert lines.pick("Sleep Chaser.") == ""
+
+
+def test_health_names_who_is_a_bit_hurt():
+    said = m.Lines().health({"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.7, "Chirpy": 0.97})
+    assert "Ogden" in said and "full health" in said
