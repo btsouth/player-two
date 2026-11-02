@@ -361,7 +361,7 @@ def test_a_whole_turn_says_why_then_what_in_order(game):
     plan = run(go())
     assert plan.type == "Speed"
     assert game.screen == "playing"
-    assert "Speed beats" in said[0] and "power" in said[0]
+    assert "so speed" in said[0] and "last hit was power" in said[0]
     assert len(said) == 2
 
 

@@ -658,11 +658,13 @@ class Lines:
             return ""
         if view.arc == "yellow":
             if plan.why_type == "seen":
+                # A guess from its last typed hit: it can change, so it isn't said as fact.
                 return self.pick(
-                    f"It's coming at you with {view.monster_type.lower()}. "
-                    f"{plan.type} beats that.",
-                    f"{view.monster_type} attack on you. Countering with {plan.type.lower()}.",
-                    f"You again. {plan.type} wins this one.")
+                    f"It's coming at you. Its last hit was {view.monster_type.lower()}, "
+                    f"so {plan.type.lower()}.",
+                    f"You again. It's been using {view.monster_type.lower()}, so going "
+                    f"{plan.type.lower()}.",
+                    f"Coming at you. Sticking with {plan.type.lower()}.")
             if plan.why_type == "usual":
                 return self.pick(
                     f"It's coming at you, and these usually hit with "
@@ -679,7 +681,7 @@ class Lines:
                 return self.pick(
                     f"It's going for {name}, and it's been hitting with "
                     f"{view.monster_type.lower()}. I'll go {plan.type.lower()}.",
-                    f"{name} is up next. {plan.type} beats what it's throwing.")
+                    f"{name} is up next. Going {plan.type.lower()} again.")
             if plan.why_type == "usual":
                 return self.pick(f"It's going for {name}. These usually hit with "
                                  f"{view.usual_type.lower()}, so {plan.type.lower()}.")
