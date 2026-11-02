@@ -89,7 +89,7 @@ def test_an_untyped_attack_changes_no_type_and_claims_none():
     plan = m.choose(v)
     assert plan.type == "Technical" and plan.why_type == "none"
     line = m.Lines().reason(v, plan)
-    assert "counter" in line and "Power" not in line and "Speed" not in line
+    assert "counter" not in m.Lines().reason(view(arc="red", toward="Ogden"), m.Plan("attack"))
 
 
 def test_no_arc_claims_nothing_about_who_gets_hit():
@@ -142,9 +142,11 @@ def test_where_weak_takes_muses_words_only_when_they_fit_the_wheel():
     f.weak_line = "Go for the tail."
     f.weapons = gear()
     assert f.where_weak() == "Sword on the tail, hammer on the legs."
-    f.weak_line = "Hit the tail with the sword and the legs with the hammer."
-    f.muse_agrees = False
+    f.weak_line = "Hit the tail with the hammer and the legs with the sword."
     assert f.where_weak() == "Sword on the tail, hammer on the legs."
+    f.weak_line = "Hit the tail with the sword and the legs with the hammer."
+    f.muse_agrees = False  # its list of diamonds was off, but the sentence is right
+    assert f.where_weak() == f.weak_line
 
 
 # A fake game: the routine's pixel reads look at its state instead of a picture.
@@ -249,6 +251,7 @@ def game(monkeypatch):
         "wheel_open": lambda i: i.screen == "wheel",
         "wheel_has_parts": lambda i: i.screen == "wheel",
         "wheel_title": lambda i: title(i.part[0]),
+        "ring_is_small": lambda i: False,
         "wheel_works": lambda i: [i.part[1]],
         "part_broken": lambda i: False,
         "wheel_gauge": lambda i: 0.5,
@@ -361,7 +364,7 @@ def test_a_whole_turn_says_why_then_what_in_order(game):
     plan = run(go())
     assert plan.type == "Speed"
     assert game.screen == "playing"
-    assert "so speed" in said[0] and "last hit was power" in said[0]
+    assert "so speed" in said[0] and "guessing power" in said[0]
     assert len(said) == 2
 
 
@@ -435,6 +438,7 @@ def test_jargon_and_repeats_stay_out_of_the_lines():
     assert lines.monster_low(0.1) == "It's almost done."
     plan = m.Plan("attack", type="Speed")
     assert "line" not in lines.reason(m.View([], [], 0, "Speed", arc="none"), plan)
+    assert lines.reason(m.View([], [], 0, "Speed", arc="red", toward="Canyne"), plan) == ""
 
 
 def test_a_part_muse_never_named_is_not_said():
@@ -442,3 +446,63 @@ def test_a_part_muse_never_named_is_not_said():
     plan = m.Plan("attack", type="Speed", part=part)
     line = m.Lines().choice(m.View([part], [], 0, "Speed"), plan, False)
     assert "part" not in line
+
+
+def test_muse_words_are_used_only_when_each_weapon_fits_its_part():
+    def part(n, w):
+        return m.Part(n, [w], False, 0.5, "", title(n))
+
+    parts = [part("Head", "pierce"), part("Legs", "blunt"), part("Tail", "slash")]
+    weapons = [m.Weapon("Cluster Hammer", "blunt"), m.Weapon("Frozen Speartuna", "slash"),
+               m.Weapon("Seahorse Harp", "pierce")]
+    good = "hit the head with the harp, the legs with the hammer, and the tail with the sword."
+    assert m.muse_line_fits(good, parts, weapons)
+    assert m.muse_line_fits("use the seahorse harp on its head, cluster hammer on its legs and "
+                            "ice spear on its tail", parts, weapons)
+    assert not m.muse_line_fits("hit the head with the hammer, the legs with the harp, and the "
+                                "tail with the sword.", parts, weapons)
+    assert not m.muse_line_fits("hit the legs with the hammer.", parts, weapons)
+
+
+def test_a_line_is_not_said_twice_however_long_the_fight():
+    lines = m.Lines()
+    assert lines.pick("Sleep Chaser.") == "Sleep Chaser."
+    assert lines.pick("Sleep Chaser.") == ""
+
+
+def test_health_names_who_is_a_bit_hurt():
+    said = m.Lines().health({"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.7, "Chirpy": 0.97})
+    assert "Ogden" in said and "full health" in said
+
+
+def test_one_early_top_up_a_fight_when_nothing_is_urgent():
+    hurt = {"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.72, "Chirpy": 0.97}
+    assert m.choose(view(hp=hurt)).do != "item"
+    v = view(hp=hurt)
+    v.top_up = True
+    plan = m.choose(v)
+    assert (plan.do, plan.on) == ("item", "Ogden")
+    v = view(hp={"Zerk": 0.98, "Canyne": 0.98, "Ogden": 0.0, "Chirpy": 0.97})  # riding
+    v.top_up = True
+    assert m.choose(v).do != "item"
+
+
+def test_a_change_of_state_changes_what_it_usually_hits_with():
+    f = m.Fight(types.SimpleNamespace(on_action=None))
+    f.status = {"name": "Somnacanth", "state": "Normal"}
+    assert f.usual() == "Technical"
+    f.status["state"] = "Angry"
+    assert f.usual() == "Speed"
+
+
+def test_four_fifths_of_a_bar_is_not_two_thirds():
+    assert m.amount(0.8) == "about three quarters"
+    assert m.amount(0.66) == "about two thirds"
+
+
+def test_a_broken_part_stays_broken():
+    part = m.Part("Stomach", ["blunt"], True, 0.0, "", title("Legs"))
+    tail = m.Part("Tail", ["slash"], False, 0.5, "", title("Tail"))
+    v = view()
+    v.parts, v.target = [part, tail], "Stomach"
+    assert m.pick_part(v) is tail
