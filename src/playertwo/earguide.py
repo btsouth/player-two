@@ -53,7 +53,7 @@ SIDE_LOOKS = 2  # looks on a new side before saying so
 JUMP_AREA = 2.5
 # So far off from where it was that it's another one, unless it stays.
 OTHER_DIST = 0.7
-STUCK_SEEN, STUCK_SPOT, STUCK_CHANGE = 3, 0.03, 0.04
+STUCK_SEEN, STUCK_SPOT, STUCK_CHANGE, STUCK_GROW = 3, 0.03, 0.04, 1.1
 LOST_S = 4.0  # not seen for this long: say so
 LOST_AGAIN_S = 15.0
 TIMEOUT_S = 120.0
@@ -97,10 +97,14 @@ def distance(m: Match, last: Match) -> float:
 
 
 def stuck_to_camera(seen: list[tuple[Match, float]]) -> bool:
-    """A box that stays put on screen while the view changes around it is on something the
-    camera carries, the player's own character or the game's display, not out in the world.
-    `seen`: the looks' boxes in this spot, each with how much the picture changed."""
+    """A box that stays put on screen, the same size, while the view changes around it is on
+    something the camera carries, the player's own character or the game's display, not out
+    in the world. A thing being walked straight at stays put too, but grows (live: this took
+    the wagon for one). `seen`: the looks' boxes in this spot, with how much the picture
+    changed."""
+    areas = [m.area for m, _ in seen[-STUCK_SEEN:]]
     return (len(seen) >= STUCK_SEEN
+            and max(areas) <= min(areas) * STUCK_GROW
             and sum(c for _, c in seen[-STUCK_SEEN:]) / STUCK_SEEN >= STUCK_CHANGE
             and all(abs(m.cx - seen[-1][0].cx) < STUCK_SPOT
                     and abs(m.cy - seen[-1][0].cy) < STUCK_SPOT

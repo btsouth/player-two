@@ -253,6 +253,15 @@ def test_a_box_the_camera_carries_is_dropped():
     assert guide.look([john], 4.0, 0.1).target is None
 
 
+def test_a_thing_walked_straight_at_isnt_taken_for_the_camera():
+    """Live: the wagon stayed in one spot as John walked at it, and "I don't see it. Turn
+    slowly." was said with its box on screen."""
+    guide = g.Guide(0.0)
+    for i, area in enumerate((0.02, 0.024, 0.029, 0.034, 0.04)):
+        step = guide.look([m(0.4, area)], float(i + 1), 0.1)
+        assert step.target is not None and step.say != "I don't see it. Turn slowly."
+
+
 def test_a_still_view_keeps_a_still_box():
     guide = g.Guide(0.0)
     still = m(0.5, 0.01)
