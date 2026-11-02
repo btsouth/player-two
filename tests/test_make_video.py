@@ -828,3 +828,43 @@ def test_muse_latency_does_not_credit_a_local_place_prefix():
     take.edit={'scene_prefix':'Town Square.'}
     e={'kind':'say','source':'atmosphere','text':'Town Square. A busy market.'}
     assert mv.event_answer(take,1,e)==(3,2)
+
+
+def test_menu_claim_requires_muse_turns_and_shows_its_own_keyboard_press():
+    es=[]
+    for t,text in [(10,'Read this menu.'),(22,'Open the journal.'),(34,'Read it.')]:
+        es+=[{'kind':'heard','t':t,'text':text,'typed':True},
+             {'kind':'agent','t':t+5,'request':text,'turns':[{'model_s':1}],
+              'steps':[{'tool':'press','args':{'buttons':['down','down','down']},'t':2},
+                       {'tool':'press','args':{'buttons':['a']},'t':4.5}]}]
+    take=_take(es,'rdr-menu',50)
+    take.edit={'backend':'keyboard','story':[[10,15],[26,28],[34,40]]}
+    assert len(mv.rdr_menu_pieces(take))==3
+    take.edit['story']=[[10,15],[27,28],[34,40]]
+    with pytest.raises(ValueError,match='show its own journal press'):
+        mv.rdr_menu_pieces(take)
+
+
+def test_menu_context_stays_left_of_the_page_and_above_the_request(tmp_path):
+    from PIL import Image
+    p=tmp_path/'menu.png'
+    mv.label_png(p,mv.Overlay('32 s shown in 12 s · Cuts\nNo code for this game. Muse reads the menu, presses, and reads the page.\nMuse Spark Answer 3.1 s',34,'context-menu',0,5))
+    bbox=Image.open(p).getchannel('A').getbbox()
+    assert bbox[2]<500 and bbox[3]<520
+
+
+def test_pacing_blocks_unlisted_short_shots_and_cannot_waive_partial_speech():
+    take=_take([_spoken('A complete line.',1,3)],'t',10)
+    p=mv.Piece('bad','ct',take='t',a=2,b=3)
+    _report,blocked=mv.pacing_report([p],{'t':take},{})
+    assert 'shot:bad' in blocked and any(x.startswith('partial:') for x in blocked)
+    exceptions={x:'Not a valid waiver.' for x in blocked}
+    _,blocked=mv.pacing_report([p],{'t':take},exceptions)
+    assert 'shot:bad' in blocked and any(x.startswith('partial:') for x in blocked)
+
+
+def test_paced_captions_condense_text_without_modifying_source_speech():
+    take=_take([_spoken('Head and stomach.',1,3),_spoken('Three parts you can break.',4,6)],'t',10)
+    original=list(take.events);take.edit={'paced':True}
+    rows=mv.caption_rows(take)
+    assert rows[1][2]=='Checking three parts…' and take.events==original

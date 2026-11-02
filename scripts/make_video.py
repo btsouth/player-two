@@ -142,6 +142,9 @@ class Piece:
     audio_mode: str = "mix"
     voice_boosts: list = field(default_factory=list)
     box_until: float = 0.0
+    result_at: float | None = None
+    hold_after: float = 0.0
+    dip: bool = False
     hold_at: float | None = None  # explicit held purchase result; original speech clock is unchanged
     freeze: bool = False
     timing_group: str = ""
@@ -156,7 +159,7 @@ class Piece:
 
     @property
     def out_s(self) -> float:
-        return self.secs if self.kind != "clip" else (self.b - self.a) / self.speed
+        return self.secs if self.kind != "clip" else (self.b - self.a) / self.speed + self.hold_after
 
 
 def _piece_from(d: dict) -> Piece:
@@ -676,6 +679,35 @@ def rdr_sam_pieces(take: Take) -> list[Piece]:
     return parts
 
 
+def menu_records(take: Take) -> tuple[list[float],list[dict]]:
+    """The accepted keyboard take must prove both reads and its actual journal press."""
+    if take.edit.get('backend')!='keyboard':raise ValueError('RDR menu proof needs the accepted keyboard backend')
+    requests=['Read this menu.','Open the journal.','Read it.'];times=[];agents=[]
+    for request in requests:
+        t=next((t for t,e in take.heard() if 0<=t<take.duration and e['text']==request),None)
+        e=next((e for e in take.events if e.get('kind')=='agent' and e.get('request')==request and t is not None and t<=e['t']-take.start),None)
+        if t is None or not e or not e.get('turns'):raise ValueError('RDR menu needs its real three Muse requests')
+        times.append(t);agents.append(e)
+    if times!=sorted(times):raise ValueError('RDR menu requests out of order')
+    presses=[x for x in agents[1].get('steps',[]) if x.get('tool')=='press']
+    if not any(x.get('args',{}).get('buttons')==['down','down','down'] for x in presses) or not any(x.get('args',{}).get('buttons')==['a'] for x in presses):
+        raise ValueError('RDR menu needs the real journal navigation presses')
+    at=times[1]+next(x['t'] for x in presses if x['args'].get('buttons')==['a'])
+    if not any(a<=at<b for a,b in take.edit['story']):raise ValueError('RDR menu must show its own journal press')
+    return times,agents
+
+
+def rdr_menu_pieces(take: Take) -> list[Piece]:
+    menu_records(take);parts=[]
+    for i,(a,b) in enumerate(take.edit['story']):
+        if not 0<=a<b<=take.duration:raise ValueError('RDR menu window outside its take')
+        p=Piece(f'rdr-menu-{i}','game3',line='RDR menu',take=take.name,a=a,b=b,layout='menu',proof=str(take.video.parent))
+        p.overlays=[Overlay('No code for this game. Muse reads the menu, presses, and reads the page.',34,'tl',0,p.out_s)]
+        parts.append(p)
+    steady_timing(parts,'rdr-menu')
+    return parts
+
+
 def moving_atlas(folder: Path, take: Take | None) -> list[Piece]:
     base=atlas_beat(folder)
     if not take or any(p.kind=="slate" for p in base):
@@ -1040,6 +1072,100 @@ def map_walk(take: Take | None, folder: Path) -> list[Piece]:
     return [p]
 
 
+def paced_plan(folder: Path, takes: dict[str,Take], vo: dict, vo_s: dict) -> list[Piece]:
+    config=json.loads((folder/'pacing.json').read_text());parts=[]
+    for item in config['shots']:
+        p=_piece_from(item)
+        if p.take=='rdr-menu':p.proof=str(folder)
+        if p.kind=='clip':
+            take=takes[p.take]
+            if not 0<=p.a<p.b<=take.duration:raise ValueError(f'Paced source out of range: {p.id}')
+        if p.vo_prompt:
+            key={'identity':'intro','c-how':'how','limit':'limit'}[p.id]
+            if vo_s.get(key,0)>p.out_s:raise ValueError(f'{key} VO exceeds paced slot {p.out_s}s')
+            p.vo=vo.get(key,'')
+        parts.append(p)
+    # Recheck the specific source proofs, not an invented model or game-specific macro.
+    menu_records(takes['rdr-menu'])
+    resume=next(e for e in takes['nav'].events if e.get('kind')=='agent' and e.get('request')=='Keep going to the castle.')
+    if len(resume['turns'])!=9 or not any(x.get('tool')=='walk_to' and 'not_found' in x.get('result','') for x in resume['steps']) or not any(x.get('tool')=='remember' for x in resume['steps']):raise ValueError('Paced recovery proof changed')
+    return parts
+
+
+def word_count(text: str) -> int:
+    return sum(any(c.isalnum() for c in word) for word in text.split())
+
+
+def pacing_report(parts: list[Piece], takes: dict[str,Take], exceptions: dict) -> tuple[str,list[str]]:
+    issues=[];shots=[];t=0
+    def issue(code,detail):issues.append((code,detail))
+    for p in parts:
+        shots.append((t,p));t+=p.out_s
+        if p.kind=='card':
+            words=sum(word_count(b[0]) for b in p.blocks)
+            if p.out_s<words*.4+1:issue('card:'+p.id,f'{words} words in{p.out_s:.2f}s; needs{words*.4+1:.2f}s')
+        if t>178:issue('duration:film',f'{t:.3f}s exceeds178s')
+        if p.out_s<2.5:issue('shot:'+p.id,f'{p.out_s:.2f}s shot below2.5s')
+        if p.result_at is not None and p.b-p.result_at+p.hold_after<1:issue('result:'+p.id,'Less than1s result dwell')
+        if p.speed!=1:issue('speed:'+p.id,'Paced cut must keep all selected action at1x')
+        take=takes.get(p.take)
+        if take and not p.freeze and p.audio_mode!='game':
+            for i,e in enumerate(take.events):
+                if e.get('kind')!='spoken':continue
+                a,b=e['began']-take.start,e['ended']-take.start
+                if max(a,p.a)>=min(b,p.b):continue
+                if a<p.a-.025 or b>p.b+.025:issue('partial:'+p.id+':'+str(i),e['text'])
+                if p.speed!=1:issue('speech-speed:'+p.id,e['text'])
+            selected=dataclasses.replace(take,caps=[c for c in take.caps if p.a-.025<=c[0]<p.b-.025])
+            caps=[(a,b,txt) for a,b,txt in caption_rows(selected) if p.captions and p.a<=a<p.b]
+            for i,(a,b,txt) in enumerate(caps):
+                needed=.4*word_count(txt)+1;shown=min(p.b+p.hold_after,b)-a
+                if shown+.01<needed:issue(f'caption:{p.id}:{i}',f'{txt!r}: shown{shown:.2f}s, reading rule{needed:.2f}s')
+            utter=[e for e in take.events if e.get('kind')=='spoken' and p.a<=e['began']-take.start<p.b]
+            for i,(a,b) in enumerate(itertools.pairwise(utter)):
+                gap=b['began']-a['ended']
+                if gap<.7:issue(f'cadence:{p.id}:{i}',f'Native recorded gap{gap:.3f}s: {a["text"]!r} -> {b["text"]!r}')
+        display=render_overlays(p)
+        for i,o in enumerate(display):
+            if o.where in ('draft','box'):continue
+            if o.where.startswith('trace'):
+                request=o.text.splitlines()[-1]
+                needed=.4*word_count(request)+1
+                if o.f1-o.f0+.01<needed:issue(f'request:{p.id}:{i}',f'{request!r}: {o.f1-o.f0:.2f}s / needed{needed:.2f}s')
+                continue
+            needed=.4*word_count(o.text)+1
+            if o.f1-o.f0<needed:issue(f'text:{p.id}:{i}',f'{o.text!r}: {o.f1-o.f0:.2f}s / needed{needed:.2f}s')
+        contexts=[o for o in display if o.where.startswith('context')]
+        for at in {o.f0+.001 for o in contexts}:
+            if sum(o.f0<=at<o.f1 for o in contexts)>1:issue('chips:'+p.id,'More than one context chip')
+        # Count visible onset changes, including authentic requests and captions.
+        onsets=[(o.f0,o.where,o.text) for o in display if o.where not in ('draft','box')]
+        if take and p.captions:
+            onsets += [(a-p.a,'caption',txt) for a,b,txt in caption_rows(dataclasses.replace(take,caps=[c for c in take.caps if p.a-.025<=c[0]<p.b-.025])) if p.a<=a<p.b]
+        onsets.sort()
+        for j,(left,right) in enumerate(itertools.pairwise(onsets)):
+            if 0<=right[0]-left[0]<1 and left[2]!=right[2]:issue(f'onset:{p.id}:{j}',f'{left[1]} -> {right[1]} after{right[0]-left[0]:.2f}s')
+        # Independent hard cuts; every edited gap in this plan has a visible dip.
+    for (_at,left),(_next_at,right) in itertools.pairwise(shots):
+        take=takes.get(left.take);following=takes.get(right.take)
+        if not take or not following or left.audio_mode=='game' or left.freeze:continue
+        ended=[e['ended']-take.start for e in take.events if e.get('kind')=='spoken' and left.a<=e['began']-take.start<left.b]
+        incoming=[x-right.a for x,e in following.heard() if right.a<=x<right.b]
+        incoming += [e['began']-following.start-right.a for e in following.events if e.get('kind')=='spoken' and right.a<=e['began']-following.start<right.b]
+        if ended and incoming:
+            pause=left.out_s-(max(ended)-left.a)+min(incoming)
+            if pause<.7:issue('join:'+left.id,f'Reply-to-next-ask gap{pause:.2f}s')
+    cuts=[at for at,p in shots[1:] if not p.dip and p.kind=='clip']
+    for i,x in enumerate(cuts):
+        if i and x-cuts[i-1]<6:issue(f'cut:{i}',f'Two hard cuts within{x-cuts[i-1]:.2f}s')
+    for group,needle in [('hook','Chrono Trigger'),('game2','Monster Hunter'),('game3','Red Dead')]:
+        if not any(p.section==group and any(needle in o.text and o.f1-o.f0>=2 for o in p.overlays) for p in parts):issue('name:'+group,'Missing game name for2s')
+    blocked=[code for code,_ in issues if code not in exceptions or code.startswith(('partial:','speech-speed:','duration:','speed:','shot:','result:','chips:','name:'))]
+    rows=['## Pace report',f'{len(parts)} shots / {t:.3f}s. Short shots: {sum(p.out_s<2.5 for p in parts)}. Speed-ups: {sum(p.speed!=1 for p in parts)}. All edited source gaps use visible dips.',f'Unlisted violations: {len(blocked)}. Listed exceptions: {len(issues)-len(blocked)}.']
+    for code,detail in issues:rows.append(f'- `{code}`: {detail}. '+('EXCEPTION: '+exceptions[code] if code in exceptions else 'BLOCKED'))
+    return '\n'.join(rows)+'\n',blocked
+
+
 def how_bridge(takes: dict[str, Take], vo: dict[str,str], vo_s: dict[str,float]) -> list[Piece]:
     """One continuous voice-over over three illustrative, real game shots."""
     if vo_s.get('how',0)>HOW_SECONDS:
@@ -1146,7 +1272,12 @@ def make_plan(
     games.extend(how_bridge(takes,vo,vo_s))
     mh=takes.get('game2')
     games+=mh_story_pieces(mh) if mh and mh.edit.get('story') else game_pieces('game2',mh,False,clips.get('game2'),warnings)
-    if rdr:games+=rdr_sam_pieces(rdr)
+    if rdr:
+        scenes=rdr_sam_pieces(rdr);menu=takes.get('rdr-menu')
+        if menu:
+            scenes[0].overlays.append(Overlay('Red Dead · two takes',34,'trim',0,scenes[0].out_s))
+            games += [scenes[0],*rdr_menu_pieces(menu),*[p for p in scenes[1:] if p.id!='rdr-dialogue']]
+        else:games+=scenes
     else:games+=game_pieces('game3',None,False,None,warnings)
     goodbye=takes.get('goodbye')
     ending=[goodbye_piece(goodbye)] if goodbye else [Piece('goodbye-missing','outro',kind='slate',secs=3.5,
@@ -1175,7 +1306,15 @@ def final_refusals(parts: list[Piece], warnings: list[str]) -> list[str]:
     out = [f"placeholder: {p.id}" for p in parts if p.kind == "slate"]
     for group in {p.timing_group for p in parts if p.timing_group}:
         if not valid_timing_group(parts,group):out.append(f"unsupported time summary: {group}")
+    checked_menu=False
     for p in parts:
+        if p.take=='rdr-menu' and not checked_menu:
+            try:
+                take=load_take(Path(p.proof),'rdr-menu',False)
+                if not take:raise ValueError('menu take absent')
+                menu_records(take)
+            except (OSError,ValueError,KeyError,StopIteration) as exc:out.append(f'unsupported menu proof: {exc}')
+            checked_menu=True
         if (p.id.startswith("c-how") or p.id in ("identity","limit")) and not p.vo:
             out.append(f"missing voice-over audio: {p.id}")
         if p.hold_at is not None and not (p.freeze and p.line=='A4' and 0<=p.a-p.hold_at<=3 and any(o.text=='Purchase result held' for o in p.overlays)):
@@ -1332,10 +1471,10 @@ def label_png(path: Path, o: Overlay) -> Path:
         )
     elif o.where.startswith('context'):
         f=_font(True,34);lines=[]
-        for row in o.text.splitlines():lines+=_wrap(d,row,f,600)
-        x,y=(W-664,330) if o.where=='context-shop-menu' else (W-664,600) if o.where=='context-dialogue' else (W-664,52)
+        for row in o.text.splitlines():lines+=_wrap(d,row,f,350 if o.where=='context-menu' else 600)
+        x,y=(64,110) if o.where=='context-menu' else (W-664,330) if o.where=='context-shop-menu' else (W-664,600) if o.where=='context-dialogue' else (W-664,52)
         h=len(lines)*46+26
-        d.rounded_rectangle((x-16,y-10,x+616,y+h),radius=16,fill=(9,15,25,225))
+        d.rounded_rectangle((x-16,y-10,x+(366 if o.where=='context-menu' else 616),y+h),radius=16,fill=(9,15,25,225))
         for i,ln in enumerate(lines):d.text((x,y+i*46),ln,font=f,fill='white')
     elif o.where.startswith('time-'):
         f=_font(True,34)
@@ -1353,7 +1492,7 @@ def label_png(path: Path, o: Overlay) -> Path:
         x, y = 64, (200 if o.where == "trace-black" else 60 if top else 700)
         if o.where=="trace-shop-menu":
             x,y=1000,550
-        if o.where=="trace-rdr":
+        if o.where in ("trace-rdr","trace-menu"):
             y=520
         black=o.where=="trace-black"
         f = _font(True, 64 if black else 42)
@@ -1675,10 +1814,16 @@ def render_overlays(p: Piece) -> list[Overlay]:
         if p.line=='A4' and (p.freeze or any(o.where=='trace-shop-menu' and o.f0<=(a+b)/2<o.f1 for o in keep)):
             where='context-shop-menu'
         elif p.take=='nav' and 102<=p.a<112:where='context-dialogue'
+        elif p.layout=='menu':where='context-menu'
         if where=='context-shop-menu' and 'Purchase result held' in texts:
             texts=[next(t.split(' · ')[0] for t in texts if 'shown in' in t)+' · Result held']
         keep.append(Overlay('\n'.join(texts),34,where,a,b))
-    return keep
+    merged=[]
+    for o in keep:
+        previous=next((x for x in merged if x.where==o.where and x.text==o.text and abs(x.f1-o.f0)<.001),None)
+        if previous:previous.f1=o.f1
+        else:merged.append(o)
+    return merged
 
 
 def _overlays_chain(p: Piece, work: Path, first_input: int) -> tuple[list[str], str, str]:
@@ -1747,10 +1892,17 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
                   f"[s][bl]blend=all_expr='A*{k}+B*(1-{k})'")
     v += f",pad={W}:{H}:{GAME_X}:{GAME_Y}:color=0x090f19,setsar=1"
     ass_key = p.take + ":" + (p.layout or ("fight" if take.top else "map"))
+    if take.edit.get('paced') and p.captions:
+        selected=dataclasses.replace(take,caps=[c for c in take.caps if p.a-.025<=c[0]<p.b-.025])
+        path=work/f'{p.id}-paced.ass';path.write_text(ass_text(selected,p.layout),encoding='utf-8')
+        asses=dict(asses);asses[ass_key]=path
     if p.captions and ass_key in asses:
         v += (f",setpts=PTS+{p.a}/TB,subtitles='{_esc(asses[ass_key])}':"
               f"fontsdir='{_esc(ASSETS)}',setpts=PTS-STARTPTS")
-    v += f",setpts=PTS/{p.speed:g}[v0]"
+    v += f",setpts=PTS/{p.speed:g}"
+    if p.hold_after:v+=f",tpad=stop_mode=clone:stop_duration={p.hold_after}"
+    if p.dip:v+=f",fade=t=in:d=0.25,fade=t=out:st={max(0,p.out_s-.25)}:d=0.25"
+    v+='[v0]'
     tempo = _tempo(p.speed)
     dur = p.out_s
     # Accelerated gaps are silent: no sped-up voices or frantic game music.
@@ -1784,7 +1936,7 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
              f"[game][voice]amix=inputs=2:normalize=0:duration=first,volume={gain}")
     else:
         a = f"[0:a]asetpts=PTS-STARTPTS,{tempo}volume={gain}"
-    a += f",afade=t=in:d=0.012,afade=t=out:st={max(0,dur-0.018):.3f}:d=0.018"
+    a += f",apad,atrim=duration={dur},afade=t=in:d=0.012,afade=t=out:st={max(0,dur-0.018):.3f}:d=0.018"
     if p.fade_in:
         a += ",afade=t=in:d=0.5"
     if p.fade_out:
@@ -1797,12 +1949,52 @@ def encode_clip(p: Piece, takes: dict[str, Take], asses: dict[str, Path], work: 
         "[a]", "-t", f"{dur:.3f}", *_enc(vcodec), str(out))
 
 
+def caption_rows(take: Take) -> list[tuple]:
+    source=[(a,b,txt.removeprefix('Player Two: ')) for a,b,who,txt in take.caps if who=='Player Two']
+    if not take.edit.get('paced'):return source
+    summaries={
+      "Frog's at 1 HP, Crono and Marle are full.":'Frog: 1 HP.',
+      'Crono took 779, down to 1.':'Crono: down to 1.',
+      'Frog uses Heal.':'Queued: Heal.', 'Marle uses Cure on Crono.':'Queued: Cure on Crono.',
+      'Going to Guardia Castle, through Guardia Forest.':'Going to Guardia Castle.',
+      "We're at Guardia Castle.":'Guardia Castle. Stop right there!', 'Soldier, Stop right there!':None,
+      'Marle, Where are you going?':'Check out the fair instead.', "C'mon, let's check out the fair!":None,
+      'We made it to Guardia Castle,':'The guard stopped you… Marle said: fair instead.',
+      'but the guard stopped you, and Marle said to check out the fair instead,':None,
+      "so we're back on the world map.":None,
+      'Three parts you can break.':'Checking three parts…', 'Let me see what each one takes.':None,
+      'Hit the head with the harp, the stomach with the hammer, and the tail with the sword.':'Head: pierce. Stomach: blunt. Tail: slash.',
+      "It's coming at you, and these usually hit with speed.":None,
+      'Technical beats speed.':'Technical beats speed.', 'Sleep Chaser on the stomach.':None,
+      'Another part broken!':None,"That's the fight.":None,'We won.':'We won.',
+      'Paused menu is open.':'Paused menu open.',
+      'Your Journal is open on Brief, for Can a Swindler Change His Spots.':'Journal open: Brief.',
+      'The Brief for Can a Swindler Change His Spots says: A medical breakthrough from the East!':'A medical breakthrough from the East!',
+      'Found it: on the right.':'Found it: right.'}
+    out=[]
+    for a,b,text in source:
+        if paced_caption(take,text) is None:continue
+        text=summaries.get(text,text)
+        if text is not None:out.append([a,max(b+.7,a+.4*word_count(text)+1),text])
+    for i in range(len(out)-1):out[i][1]=min(out[i][1],out[i+1][0]-.1)
+    return out
+
+
+def paced_caption(take: Take, text: str) -> str | None:
+    text=text.removeprefix('Player Two: ')
+    if not take.edit.get('paced'):return text
+    if text in {'Let me look.','On it.','One second.','Just a sec.',"Okay, I'll take this fight.","Okay, I'll open the journal.",'Okay, Crono will use Cyclone.'}:return None
+    if text=='Marle uses Cure on Crono.':return 'Queued: '+text
+    return text
+
+
 def ass_text(take: Take, layout: str = "") -> str:
     """Full-bleed captions, positioned by scene; black opening gets generous central type."""
     layout = layout or ("fight" if take.top else "map")
     size, align, ml, mr, mv = {
         "map": (52, 2, 100, 100, 60),
         "rdr": (52, 2, 100, 100, 60),
+        "menu": (52, 8, 500, 100, 650),
         "mh": (52, 8, 100, 100, 740),
         "fight": (52, 8, 100, 100, 240),
         "shop": (52, 9, 1000, 64, 420),
@@ -1822,11 +2014,8 @@ def ass_text(take: Take, layout: str = "") -> str:
         + head[events:]
     )
     rows = []
-    for a, b, who, txt in take.caps:
-        if who != "Player Two":
-            continue
+    for a,b,txt in caption_rows(take):
         txt = txt.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
-        txt=txt.removeprefix("Player Two: ")
         rows.append(
             f"Dialogue: 0,{demo_captions._ass_stamp(a)},"
             f"{demo_captions._ass_stamp(b)},P2,,0,0,0,,"
@@ -1842,7 +2031,7 @@ def build(parts: list[Piece], takes: dict[str, Take], out: Path, vcodec: str, jo
     asses: dict[str, Path] = {}
     for name, take in takes.items():
         if take.caps:
-            for layout in ("map","fight","shop","black","rdr","mh"):
+            for layout in ("map","fight","shop","black","rdr","mh","menu"):
                 text=ass_text(take,layout)
                 path=work/f"{name}-{layout}.ass"
                 path.write_text(text,encoding="utf-8")
@@ -2119,7 +2308,7 @@ def main() -> None:
     out = a.out or a.folder.parent / "video.mp4"
     tops = set(filter(None, a.top.split(",")))
     takes = {}
-    for name in ("take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", "rdr-sam", "nav", *GAMES):
+    for name in ("take-A", "take-B", "sam", "ending", "goodbye", "rdr-look", "rdr-dialogue", "rdr-sam", "rdr-menu", "nav", *GAMES):
         take = load_take(a.folder, name, name in tops)
         if take is not None:
             takes[name] = take
@@ -2138,8 +2327,11 @@ def main() -> None:
         vo = {w: v for w in ("why", "how", "intro", "limit") if (v := _vo(a.folder, w))}
         vo_s = {w: probe_s(Path(v)) for w, v in vo.items()}
         vo["_folder"]=str(a.folder)
-        parts, dropped, warnings = make_plan(takes, _picks(a.pick), no_code, rates, vo, vo_s,
-                                             _clips(a.clip), set(filter(None, a.drop.split(","))) | set(edit.get("drop",[])))
+        if (a.folder/'pacing.json').exists() and not a.sample:
+            parts=paced_plan(a.folder,takes,vo,vo_s)
+        else:
+            parts, dropped, warnings = make_plan(takes, _picks(a.pick), no_code, rates, vo, vo_s,
+                                                 _clips(a.clip), set(filter(None, a.drop.split(","))) | set(edit.get("drop",[])))
     # Remove legacy overlays before rebuilding the floating chips from source evidence.
     for piece in parts:
         if piece.kind == "clip":
@@ -2150,7 +2342,19 @@ def main() -> None:
             piece.layout = "fight" if takes[piece.take].top else "map"
         if piece.line=="A4" and piece.layout not in ("shop","shop-menu"):
             piece.layout="shop"
+    paced=(a.folder/'pacing.json').exists() and not a.sample
+    if paced:
+        for take in takes.values():take.edit['paced']=True
     evidence = evidence_overlays(parts, takes)
+    if paced:
+        for p in parts:
+            for o in p.overlays:
+                if o.where.startswith('trace'):
+                    o.text='\n'.join(o.text.splitlines()[:2])
+                    if p.id in ('cold-open','mh-weak','rdr-menu-read'):o.f0=max(o.f0,1.1)
+        for p in parts:p.overlays=[o for o in p.overlays if o.text!='You:\nRequest begins' and o.f1>o.f0 and not (p.id=='ct-castle' and o.where.startswith('trace'))]
+        weak=next(p for p in parts if p.id=='mh-weak')
+        weak.overlays.append(Overlay('You: typed\nWhere’s it weak?',42,'trace-mh',1.1,weak.out_s))
     sam_boxes(parts,takes)
     parts=shop_scene_layouts(parts,takes.get("take-A"))
     if not a.final:
@@ -2168,6 +2372,15 @@ def main() -> None:
     for piece in parts:
         if not piece.line:
             piece.line=piece.id
+    if (a.folder/'pacing.json').exists() and not a.sample:
+        config=json.loads((a.folder/'pacing.json').read_text())
+        report,blocked=pacing_report(parts,takes,config.get('exceptions',{}))
+        (a.folder.parent/'pace-report.md').write_text(report)
+        qc=a.folder.parent/'QC.md';previous=qc.read_text() if qc.exists() else '# Video QC\n'
+        previous=previous.split('<!-- PACE REPORT -->')[0]
+        qc.write_text(previous+'\n<!-- PACE REPORT -->\n'+report)
+        print(report)
+        if blocked:sys.exit('Pacing blocks render: '+', '.join(blocked))
     print(table(parts))
     if dropped:
         print("dropped for the budget:", ", ".join(dropped))

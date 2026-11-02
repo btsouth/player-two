@@ -122,8 +122,8 @@ under0.35s, and only displays the12.7s/1.1s comparison when it matches. Missing 
 ## Monday voice slots and audio
 
 Put vo-intro.wav, vo-how.wav and vo-limit.wav beside takes.json, then rebuild without --cut.
-Current slot ceilings: intro8.50s, How10.00s, limit6.00s. Longer takes are refused. The How slot is one continuous voice over real CT/MH/RDR shots (3s/3s/4s).
-Its script: "Muse looks at the picture, so it can follow all three. Chrono Trigger and Monster Hunter also have code written for them. Red Dead has none."
+Current slot ceilings: intro8.50s, How9.00s, limit6.00s. Longer takes are refused. The How slot is one continuous voice over real CT/MH/RDR shots (9s total).
+Its script: "Red Dead has no code at all, just Muse looking at the picture. Chrono Trigger and Monster Hunter add code written for them."
 Per-shot vo_offset keeps the founder voice on one clock. The exact prompts
 are stored in the cut's vo_prompt fields. Intro and How use quiet game-only illustrative footage;
 that is never used as evidence of the app's silence. The creator-testing limit remains a clean
@@ -167,3 +167,25 @@ Navigation explanations are staggered into speech-free gaps; its requests keep t
 while completed measurements remain in the evidence file. Do not restore overlapping route
 explanation, measured badge and reply captions. Shop edits refuse any cut through logged speech
 and retain a computed cuts-between-steps disclosure.
+
+## Paced edit
+
+A takes folder may supply pacing.json with a shots list of Piece fields and an exceptions
+dictionary. The paced plan uses whole source intervals at1x, visible quarter-second dips,
+and optional hold_after seconds after the last real frame. No new game action occurs in a hold.
+result_at is a manually frame-checked source timestamp; the guard requires at least1s afterward.
+The keyboard menu scene revalidates its model turns and actual journal press from the source log.
+
+Before encoding, pacing_report checks duration, shot length, hard-cut density, speed, complete
+source speech, reply gaps, text reading time, text onsets, result dwell, chip count and game names.
+It writes pace-report.md and appends the report to QC.md. An unlisted issue blocks both proxy
+and final renders. Exceptions are exact issue IDs with reasons. Partial source speech, sped
+speech, unsupported result dwell, short shots and an over178s paced film cannot be waived.
+The current exceptions retain native continuous utterance cadence, two opening text onsets,
+and the required publisher small print. They do not excuse jump-cut chains or faster footage.
+
+Paced captions are explicitly condensed summaries of the unchanged recorded speech. Short
+acknowledgements remain audible but are not captioned; some adjacent utterance chunks share
+one caption. Meaning and game facts must be checked against source frames and model results.
+Per-shot ASS excludes unselected speech, so a held final frame cannot reveal a later line.
+The original event log and audio are never rewritten. Missing founder audio still blocks final.
