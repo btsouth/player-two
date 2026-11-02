@@ -269,5 +269,5 @@ CUES = {
     "error": lambda: np.concatenate([tone(330, 120), tone(262, 160)]),
     "low": lambda: np.concatenate([tone(440, 90), np.zeros(1200, np.float32), tone(440, 90)]),
     "critical": lambda: np.concatenate([tone(392, 80), tone(392, 80), tone(392, 80)]),
-    "ping": lambda: tone(1200, 50, volume=0.35),
+    "ping": lambda: tone(1200, 120, volume=0.6),  # heard over a game, on laptop speakers too
 }

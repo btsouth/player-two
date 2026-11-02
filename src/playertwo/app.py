@@ -1741,6 +1741,9 @@ class Session:
         self.voice.cue("working")
         # Heard, in the player's words, before the model's first word seconds later.
         line = ack(text) if "English" in (self.narrator.language or "English") else None
+        if line == getattr(self, "_last_ack", None) == "Let me look.":
+            line = "One second."  # two questions in a row don't get the same words
+        self._last_ack = line
         if line:
             self.announce(line, status=True)
         ticks = self.spawn(self._working_ticks())
@@ -1818,7 +1821,9 @@ class Session:
         matches, secs = await locate(self.muse, frame.image, phrase)
         how = "sam-3.1"
         me = await self._character_on_screen(frame)
-        if matches and me is not None:
+        if matches:
+            # SAM has it: say where at once. Steps from a guess at the character only hold
+            # on a flat map; in a 3D view they'd call a far tower "2 steps up".
             looking.cancel()
         else:
             try:

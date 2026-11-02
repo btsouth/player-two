@@ -267,7 +267,7 @@ elif args[0] == "do":
         fake = launcher
     a = argparse.Namespace(p2=str(fake), log=str(log), out=str(tmp_path / "out"), frames="none",
                            monitor="DP-2", launcher="", budgets="predicted", repeats=2, take="A",
-                           skip="A2,A4,A5", add="", reload="never",
+                           skip="A2,A4,A5", add="", tight=False, reload="never",
                            report=str(tmp_path / "check-report.md"))
     assert dc.cmd_run(a) == 0
     assert sent.read_text().splitlines() == ["Where am I?", "Take me to the fair."] * 2

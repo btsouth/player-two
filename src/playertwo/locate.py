@@ -61,13 +61,15 @@ def describe(phrase: str, matches: list[Match]) -> str:
     n = len(ordered)
     if n == 1:
         return f"Found it: {where_words(ordered[0])}."
+    # "3 doors", but never "2 oil rig": a phrase asked in the singular isn't repeated.
+    head = f"{n} {phrase}" if phrase.endswith("s") else f"I see {n}"
     if n <= 3:
-        return f"{n} {phrase}: " + ", ".join(f"one {where_words(m)}" for m in ordered) + "."
+        return f"{head}: " + ", ".join(f"one {where_words(m)}" for m in ordered) + "."
     thirds = [sum(1 for m in ordered if lo <= m.cx < hi)
               for lo, hi in ((0, 1 / 3), (1 / 3, 2 / 3), (2 / 3, 1.01))]
     parts = [f"{k} {where}" for k, where in zip(thirds, ("on the left", "in the middle",
                                                         "on the right"), strict=True) if k]
-    return f"{n} {phrase}: " + ", ".join(parts) + "."
+    return f"{head}: " + ", ".join(parts) + "."
 
 
 def from_you(m: Match, me: tuple[float, float], step: tuple[float, float]) -> str:

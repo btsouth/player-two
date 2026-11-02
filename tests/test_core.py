@@ -414,6 +414,7 @@ def test_where_questions_and_wording():
     assert pan_from(Match(0.3, 0.5, 0.01), me) < 0 < pan_from(Match(0.6, 0.5, 0.01), me)
     two = [Match(0.7, 0.5, 0.01), Match(0.3, 0.5, 0.01)]
     assert describe("shadows", two) == "2 shadows: one on the left, one on the right."
+    assert describe("oil rig", two) == "I see 2: one on the left, one on the right."
     many = [Match(x, 0.5, 0.01) for x in (0.1, 0.2, 0.5, 0.9)]
     assert describe("desks", many) == "4 desks: 2 on the left, 1 in the middle, 1 on the right."
 

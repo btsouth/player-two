@@ -35,6 +35,7 @@ from .battle import (
     party_brief,
     plural,
     revives,
+    victory,
 )
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
@@ -1354,9 +1355,16 @@ class Agent:
             return
         if now.count == 0:
             return  # the fight is over: the game's own spoils say so
-        again = await self.count_foes((await self.grab()).image, party)
+        frame = await self.grab()
+        again = await self.count_foes(frame.image, party)
         if again is None or again.count != now.count or self.foes is not before:
             return
+        if self._ct_steam(frame):
+            # The counts take seconds: the fight can be won by now (live, Nov 2: "Won the
+            # fight", then "One golden winged imp down, one left.").
+            st = await asyncio.to_thread(ctsteam.read, frame.image)
+            if not st.in_battle or victory(st):
+                return
         self.foes = Foes(now.count, before.look, now.at)
         line = self.foes.since(before)
         # A hidden enemy can come back into the count and drop out again (live, Nov 1:

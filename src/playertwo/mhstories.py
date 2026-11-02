@@ -62,6 +62,14 @@ HEALTH = re.compile(r"\b(how'?s|how is|check) (my|our|the party'?s?) (health|hp)
                     r"|\bhow (am i|are we) doing\b|\bam i hurt\b")
 
 
+# The type each monster mostly attacks with, normal and angry: gamerguides.com's table, and its
+# Tetranadon and Somnacanth rows match what's on screen in saved fights. Only a first guess: what
+# the monster's actually been seen using in this fight goes first.
+KNOWN_TYPES = {"tetranadon": ("Power", "Technical"), "somnacanth": ("Technical", "Speed"),
+               "izuchi": ("Speed", "Speed"), "green bnahabra": ("Technical", "Technical"),
+               "bnahabra": ("Technical", "Technical")}
+
+
 def is_game(name: str) -> bool:
     return (name or "").lower().startswith(GAME)
 
@@ -173,8 +181,8 @@ def wheel_title(img: Image.Image) -> np.ndarray:
 def wheel_open(img: Image.Image) -> bool:
     """The target wheel or a small monster's ring is open: its cyan ring, whatever's behind."""
     c = _arr(img, 520, 115, 810, 405)
-    cyan = (c[..., 1] > 190) & (c[..., 2] > 180) & (c[..., 0] < 150)
-    return float(cyan.mean()) > 0.012 and not menu_up(img)
+    cyan = (c[..., 1] > 215) & (c[..., 2] > 205) & (c[..., 0] < 140)
+    return float(cyan.mean()) > 0.008 and not menu_up(img)
 
 
 def wheel_has_parts(img: Image.Image) -> bool:
@@ -184,11 +192,23 @@ def wheel_has_parts(img: Image.Image) -> bool:
 DIAMONDS = {"slash": 635.5, "pierce": 670.0, "blunt": 704.0}
 
 
+def _ring_dx(img: Image.Image) -> int:
+    """How far the wheel sits right of its usual place (it moves a few pixels as a fight goes
+    on), from the left edge of its cyan ring."""
+    c = _arr(img, 496, 200, 530, 320)
+    cols = np.flatnonzero(((c[..., 1] > 215) & (c[..., 2] > 205) & (c[..., 0] < 140)).mean(axis=0) > 0.05)
+    if not cols.size:
+        return 0
+    dx = round(496 + cols.min() * 34 / c.shape[1]) - 512
+    return dx if abs(dx) <= 14 else 0
+
+
 def wheel_works(img: Image.Image) -> list[str]:
     """The damage types this part takes: the diamonds with no red line through them."""
     out = []
+    dx = _ring_dx(img)
     for name, x in DIAMONDS.items():
-        c = _arr(img, x - 15, 246, x + 15, 276)
+        c = _arr(img, x + dx - 15, 246, x + dx + 15, 276)
         red = float(((c[..., 0] > 150) & (c[..., 1] < 90) & (c[..., 2] < 95)).mean())
         if red < 0.012:
             out.append(name)
@@ -197,7 +217,8 @@ def wheel_works(img: Image.Image) -> list[str]:
 
 def part_broken(img: Image.Image) -> bool:
     """The wheel's chosen part says Broken: gold letters where its blue gauge would be."""
-    c = _arr(img, 630, 284, 705, 298)
+    dx = _ring_dx(img)
+    c = _arr(img, 630 + dx, 284, 705 + dx, 298)
     r, g, b = c[..., 0], c[..., 1], c[..., 2]
     gold = ((r > 170) & (g > 140) & (b < 140) & (r - b > 45)).mean()
     cyan = ((b > 140) & (g > 120) & (r < 120)).mean()
@@ -206,7 +227,8 @@ def part_broken(img: Image.Image) -> bool:
 
 def wheel_gauge(img: Image.Image) -> float:
     """How much of this part's break gauge is left, 0 to 1."""
-    c = _arr(img, 632, 285, 708, 295)
+    dx = _ring_dx(img)
+    c = _arr(img, 632 + dx, 285, 697 + dx, 295)
     fill = (c[..., 2] > 150) & (c[..., 1] > 120) & (c[..., 0] < 130)
     cols = np.flatnonzero(fill.mean(axis=0) > 0.4)
     return float((cols.max() + 1) / c.shape[1]) if cols.size else 0.0
@@ -237,9 +259,47 @@ def ribbon(img: Image.Image, who: str) -> str:
     return "" if kind == "none" else kind
 
 
+def hud_up(img: Image.Image) -> bool:
+    """The monster's name bar is in its place: not a close-up with the HUD hidden."""
+    c = _arr(img, 575, 34, 715, 46)
+    edge = _arr(img, 575, 44, 715, 46).mean(axis=(0, 1))
+    return bool(float((c.max(axis=2) < 90).mean()) > 0.02 and edge.max() < 240)
+
+
 def monster_ribbon(img: Image.Image) -> str:
-    """The monster's move as it plays, from the ribbon under its name. One monster on screen."""
-    return _ribbon_type(_arr(img, 590, 90, 720, 101))
+    """The monster's move as it plays, from the ribbon under its name: a band darker than what's
+    just above and below it. A cut-in or sky behind the same spot has no such edge."""
+    c = _arr(img, 590, 90, 720, 101)
+    band = np.median(c.reshape(-1, 3), axis=0)
+    if band.max() > 135 or band.max() - band.min() < 45 or not hud_up(img):
+        return ""
+    for box in ((590, 70, 720, 76), (590, 104, 720, 110)):
+        if np.abs(np.median(_arr(img, *box).reshape(-1, 3), axis=0) - band).sum() < 60:
+            return ""
+    return _ribbon_type(c)
+
+
+def clash_type(img: Image.Image) -> str:
+    """The type of the monster's attack, from the Head-to-Head screen: white title at the top, two
+    name bars at the bottom, and the right hand ribbon in the colour of its attack."""
+    title = _arr(img, 440, 125, 840, 185).min(axis=2) > 225
+    left, right = _arr(img, 10, 656, 150, 676), _arr(img, 1130, 656, 1270, 676)
+    if not 0.08 < float(title.mean()) < 0.5:
+        return ""
+    if np.median(left.max(axis=2)) > 95 or np.median(right.max(axis=2)) > 95:
+        return ""
+    c = _arr(img, 960, 606, 1270, 626).reshape(-1, 3)
+    c = c[c.min(axis=1) < 150]  # not the white letters
+    if not len(c):
+        return ""
+    r, g, b = np.median(c, axis=0)
+    if r > g * 1.5 and r > b * 1.5:
+        return "Power"
+    if b > r * 1.3 and b > g * 1.05:
+        return "Speed"
+    if g > r * 1.3 and g > b * 1.2:
+        return "Technical"
+    return ""
 
 
 def bar_share(img: Image.Image, who: str, y: float = 684) -> float:
@@ -404,8 +464,6 @@ This is one skill's details from Monster Hunter Stories 3's Skills menu. JSON: {
 "power": 0, "wyvernfell": 0, "targets": "one"|"all"|"none", "part_damage": true if the words say it \
 does heavy damage to a monster part, "deals_damage": false if it only charges or coats}"""
 
-READ_MOVE = 'The name of a monster\'s move is written on this ribbon. JSON: {"name": "..."}'
-
 CHECK = """\
 Is this Monster Hunter Stories 3 picture still a fight? JSON: {"screen": "fight", "results" or \
 "field"}. "results": a big rank letter and a score bar, or rewards after a win. "field": walking \
@@ -460,6 +518,8 @@ class View:
     hp: dict[str, float] = field(default_factory=dict)
     gauge: int = 0  # Zerk's skill gauge
     target: str = ""  # the part being worked on
+    resists: list[str] = field(default_factory=list)  # elements it shrugs off (Muse, Status)
+    usual_type: str = ""  # what it usually hits with, by the guides, for the state Muse read
 
 
 @dataclass
@@ -475,7 +535,17 @@ class Plan:
     double: bool = False
 
 
-HURT = {"Zerk": 0.35, "Canyne": 0.35, "Ogden": 0.25, "Chirpy": 0.25}
+HURT = {"Zerk": 0.6, "Canyne": 0.4, "Ogden": 0.4, "Chirpy": 0.35}
+
+
+def shrugged_off(view: View, part: Part) -> bool:
+    """The only weapon that fits this part has an element the monster resists."""
+    fit = [w for w in view.weapons if w.damage in part.works]
+    return bool(fit) and all(w.element.lower() in view.resists for w in fit)
+
+
+def fits_hand(view: View, part: Part) -> bool:
+    return bool(view.weapons) and view.weapons[view.in_hand].damage in part.works
 
 
 def pick_part(view: View) -> Part | None:
@@ -489,8 +559,10 @@ def pick_part(view: View) -> Part | None:
     for p in open_parts:
         if p.name == view.target:
             return p
+    open_parts = [p for p in open_parts if not shrugged_off(view, p)] or (
+        [] if view.resists else open_parts)
     if open_parts:
-        return min(open_parts, key=lambda p: p.gauge)
+        return min(open_parts, key=lambda p: (round(p.gauge, 1), not fits_hand(view, p)))
     hand = view.weapons[view.in_hand].damage if view.weapons else ""
     return next((p for p in view.parts if hand in p.works), view.parts[0])
 
@@ -517,6 +589,8 @@ def choose(view: View) -> Plan:
     if view.arc in ("yellow", "blue"):
         if view.monster_type in ANSWER:
             kind, why = ANSWER[view.monster_type], "seen"
+        elif view.usual_type in ANSWER:
+            kind, why = ANSWER[view.usual_type], "usual"
         elif view.hint_type:
             kind, why = view.hint_type, "ally"
     plan = Plan("attack", type=kind, weapon=weapon, part=part, why_type=why)
@@ -525,10 +599,10 @@ def choose(view: View) -> Plan:
         return plan
     if view.weapons and part is not None and not part.broken:
         usable = [s for s in view.weapons[weapon].skills
-                  if s.deals_damage and s.targets == "one" and s.part_damage
+                  if s.deals_damage and s.targets == "one" and s.power > 50
                   and 0 < s.cost <= view.gauge]
         if usable:
-            plan.do, plan.skill = "skill", max(usable, key=lambda s: s.power)
+            plan.do, plan.skill = "skill", max(usable, key=lambda s: (s.part_damage, s.power))
     return plan
 
 
@@ -558,11 +632,17 @@ def is_are(part: str) -> str:
     return "are" if part.lower().endswith("s") else "is"
 
 
+def named(part: Part) -> bool:
+    """Muse gave this part its name: "part 2" is only a placeholder until then, never said."""
+    return not part.name.startswith("part ")
+
+
 class Lines:
     """What's said in a fight: short, varied, and never the same words twice in a fight."""
 
     def __init__(self) -> None:
         self.used: set[str] = set()
+        self.low_step = 0
 
     def pick(self, *options: str) -> str:
         for line in options:
@@ -578,11 +658,17 @@ class Lines:
             return ""
         if view.arc == "yellow":
             if plan.why_type == "seen":
+                # A guess from its last typed hit: it can change, so it isn't said as fact.
                 return self.pick(
-                    f"It's coming at you with {view.monster_type.lower()}. "
-                    f"{plan.type} beats that.",
-                    f"{view.monster_type} attack on you. Countering with {plan.type.lower()}.",
-                    f"You again. {plan.type} wins this one.")
+                    f"It's coming at you. Its last hit was {view.monster_type.lower()}, "
+                    f"so {plan.type.lower()}.",
+                    f"You again. It's been using {view.monster_type.lower()}, so going "
+                    f"{plan.type.lower()}.",
+                    f"Coming at you. Sticking with {plan.type.lower()}.")
+            if plan.why_type == "usual":
+                return self.pick(
+                    f"It's coming at you, and these usually hit with "
+                    f"{view.usual_type.lower()}. {plan.type} beats that.")
             if plan.why_type == "ally":
                 return self.pick(
                     f"It's coming at you. Going {plan.type.lower()}, same as {view.hint_from}.",
@@ -595,7 +681,10 @@ class Lines:
                 return self.pick(
                     f"It's going for {name}, and it's been hitting with "
                     f"{view.monster_type.lower()}. I'll go {plan.type.lower()}.",
-                    f"{name} is up next. {plan.type} beats what it's throwing.")
+                    f"{name} is up next. Going {plan.type.lower()} again.")
+            if plan.why_type == "usual":
+                return self.pick(f"It's going for {name}. These usually hit with "
+                                 f"{view.usual_type.lower()}, so {plan.type.lower()}.")
             if plan.why_type == "ally":
                 return self.pick(f"It's going for {name}. {view.hint_from}'s picked "
                                  f"{plan.type.lower()}, so I'll match.",
@@ -603,12 +692,11 @@ class Lines:
             return self.pick(f"It's going for {name}.", f"{name} is in its sights.")
         if view.arc == "red":
             name = who or "one of us"
-            return self.pick(f"Big one coming at {name}, and you can't counter it. Just hitting hard.",
+            return self.pick(f"It's going after {name}, and you can't counter this one. "
+                             "Just hitting hard.",
                              f"It's winding up on {name}. No counter for that one.",
                              "Another hit we can't counter.")
-        return self.pick("No target line this turn, so I'll just go for damage.",
-                         "Can't tell who's next. Going for damage.",
-                         "No line again, so more damage.")
+        return self.pick("I'll just go for damage.", "Going for damage again.", "More damage.")
 
     def choice(self, view: View, plan: Plan, swapped: bool) -> str:
         """What's being done, said only once the screen shows it selected."""
@@ -616,7 +704,7 @@ class Lines:
             return self.pick(f"{plan.item} on {'you' if plan.on == 'Zerk' else plan.on}.",
                              f"Another {plan.item.lower()} for "
                              f"{'you' if plan.on == 'Zerk' else plan.on}.")
-        part = plan.part.name.lower() if plan.part else ""
+        part = plan.part.name.lower() if plan.part and named(plan.part) else ""
         weapon = short(view.weapons[plan.weapon].name) if view.weapons else ""
         if plan.do == "skill" and plan.skill:
             where = f" on the {part}" if part else ""
@@ -657,13 +745,12 @@ class Lines:
         return self.pick(f"That broke the {part.lower()}.", f"{part.capitalize()} {is_are(part)} broken.")
 
     def monster_low(self, share: float) -> str:
-        if share < 0.15:
-            return self.pick("It's almost done.", "Nearly there.")
-        if share < 0.35:
-            return self.pick("It's getting weak.")
-        if share < 0.55:
-            return self.pick("It's down to about half.")
-        return ""
+        """Each step down gets said once a fight."""
+        step = 3 if share < 0.15 else 2 if share < 0.35 else 1 if share < 0.55 else 0
+        if step <= self.low_step:
+            return ""
+        self.low_step = step
+        return ("", "It's down to about half.", "It's getting weak.", "It's almost done.")[step]
 
 
 class Fight:
@@ -688,6 +775,8 @@ class Fight:
         self.pending: list[asyncio.Future] = []  # Muse readings of what's left the screen
         self.muse_seconds: dict[str, float] = {}  # model time per kind of reading, for the logs
         self.turns = 0
+        self.won = False
+        self.muse_agrees = True
         self.note: Callable[[str, dict], None] = (
             lambda name, args: agent.on_action and agent.on_action(name, args))
 
@@ -783,8 +872,10 @@ class Fight:
             w, h = img.size
             pages.append(img.crop((0, 90 * h // 720, 830 * w // 1280, 590 * h // 720)))
             rows = []
-            while skill_row(img) != 0:  # up to the plain attack, then down the skills
-                await self._press("up", 0.18)
+            for _ in range(4):  # up to the plain attack, then down the skills
+                if skill_row(img) == 0:
+                    break
+                await self._flick("up", 0.2)
                 img = await self._shot()
             for row in (1, 2, 3):
                 await self._press("down", 0.2)
@@ -844,6 +935,22 @@ class Fight:
             return "a hammer (blunt), a sword (slash), a harp (pierce)"
         return ", ".join(f"{short(w.name)[4:]} ({w.damage})" for w in self.weapons)
 
+    async def settled_wheel(self, most: float = 1.4) -> Image.Image:
+        """The wheel, once its title hasn't changed for a quarter of a second: it zooms in and
+        turns, and two grabs close together can be the same frame."""
+        end = time.monotonic() + most
+        img = await self._shot()
+        mask, since = wheel_title(img), time.monotonic()
+        while time.monotonic() < end:
+            await asyncio.sleep(0.05)
+            img = await self._shot()
+            now = wheel_title(img)
+            if not _same(now, mask) or int(now.sum()) < 40:
+                mask, since = now, time.monotonic()
+            elif time.monotonic() - since >= 0.25:
+                return img
+        return img
+
     async def read_status(self, hold: bool = False) -> None:
         """Open Status, let Muse read it, close it. With hold the panel stays up while Muse
         reads (it's on camera, and it's what's being read); otherwise it closes right away and
@@ -888,8 +995,7 @@ class Fight:
             return
         seen: list[tuple[np.ndarray, list[str], bool, float, Image.Image]] = []
         for _ in range(6):
-            await asyncio.sleep(0.12)
-            img = await self._shot()
+            img = await self.settled_wheel()
             mask = wheel_title(img)
             if seen and _same(mask, seen[0][0]):
                 break
@@ -897,22 +1003,34 @@ class Fight:
             seen.append((mask, wheel_works(img), part_broken(img), wheel_gauge(img),
                          img.crop((980 * w // 2560, 170 * h // 1440,
                                    1680 * w // 2560, 770 * h // 1440))))
-            await self._press("rb", 0.2)
+            await self._press("rb", 0.1)
         # What the pixels say is good to go on right away; Muse adds the names and the words.
         self.parts = [Part(f"part {i + 1}", works, broken, gauge, "", mask)
                       for i, (mask, works, broken, gauge, _) in enumerate(seen)]
         sheet = Image.new("RGB", (len(seen) * 600, 514))
         for i, entry in enumerate(seen):
             sheet.paste(entry[4].resize((600, 514)), (i * 600, 0))
+        if hold:  # a count the pixels already know, while Muse reads what each one takes
+            count = {2: "Two", 3: "Three", 4: "Four", 5: "Five"}.get(len(seen))
+            if count:
+                self.say(f"{count} parts you can break. Let me see what each one takes.")
 
         async def reading() -> None:
             d = await self.ask("wheel", [image_part(sheet, WHEEL_PX)],
                                READ_WHEEL.format(weapons=self.weapon_words()), 1500)
             said = d.get("parts") or []
+            names = [str(x.get("name") or "").lower() for x in said]
+            for i, name in enumerate(names):  # round the wheel twice: the name comes up again
+                if name and name in names[:i]:
+                    said = said[:i]
+                    break
+            if said and len(self.parts) > len(said):
+                self.parts = self.parts[:len(said)]
             for i, part in enumerate(self.parts):
                 read = said[i] if i < len(said) else {}
                 works = [str(x).lower() for x in read.get("works") or []]
                 if works != part.works:  # the diamonds are plain pixels: they win
+                    self.muse_agrees = False
                     self.note("mh_note", {"text": f"wheel: Muse {works} pixels {part.works}"})
                 part.name = str(read.get("name") or part.name)
                 part.works = part.works or works
@@ -930,22 +1048,23 @@ class Fight:
         await self._press("b", 0.25)
 
     def where_weak(self) -> str:
-        """Muse's words, if they name each unbroken part with something that fits it; otherwise
-        plain ones built from the wheel."""
+        """Muse's words, if Muse read every diamond the way the pixels do and its line names each
+        unbroken part; otherwise plain ones built from the wheel."""
         left = [p for p in self.parts if not p.broken]
         low = self.weak_line.lower()
-        fits = {"slash": ("slash", "sword", "blade"), "pierce": ("pierce", "harp", "arrow", "stab"),
-                "blunt": ("blunt", "hammer", "smash")}
-        wrong = {w for p in left for w in fits.get(p.works[0] if p.works else "", ())}
-        if self.weak_line and len(self.weak_line) < 170 and left and all(
-                p.name.lower() in low and any(word in low for w in p.works
-                                              for word in fits.get(w, ())) for p in left) and wrong:
+        if self.weak_line and self.muse_agrees and len(self.weak_line) < 170 and left and all(
+                p.name.lower() in low for p in left):
             return self.weak_line
         if not left:
             return "Everything on it is broken already. Just hit it." if self.parts else \
                 "It's small: any weapon works on it."
-        said = ", ".join(f"the {p.name.lower()} {'take' if is_are(p.name) == 'are' else 'takes'} "
-                         f"{' or '.join(p.works)}" for p in left)
+        bits = []
+        for p in left:
+            fit = next((w for w in self.weapons if w.damage in p.works), None)
+            what = short(fit.name)[4:] if fit and short(fit.name).startswith("the ") else (
+                " or ".join(p.works))
+            bits.append(f"{what} on the {p.name.lower()}")
+        said = ", ".join(bits)
         return said[0].upper() + said[1:] + "."
 
     async def settle_reads(self) -> None:
@@ -1001,6 +1120,8 @@ class Fight:
         self.target = self.seen_type = self.ended = ""
         self.lines = Lines()
         self.turns = 0
+        self.won = False
+        self.muse_agrees = True
 
     def view(self, img: Image.Image, wheel: Image.Image, kind_now: str) -> View:
         hint, hint_from = "", ""
@@ -1013,23 +1134,34 @@ class Fight:
         return View(self.parts, self.weapons, self.weapon, kind_now, colour, toward,
                     self.seen_type, hint, hint_from, ribbon(wheel, "Canyne"),
                     {who: bar_share(wheel, who) for who in ALLIES},
-                    round(bar_share(wheel, "Zerk", 698) * 100), self.target)
+                    round(bar_share(wheel, "Zerk", 698) * 100), self.target,
+                    [str(x).lower() for x in self.status.get("resists") or []],
+                    self.usual())
+
+    def usual(self) -> str:
+        known = KNOWN_TYPES.get(str(self.status.get("name") or "").lower())
+        if not known:
+            return ""
+        state = str(self.status.get("state") or "normal").lower()
+        return known[0] if "normal" in state else known[1]
 
     def current_part(self, img: Image.Image) -> Part | None:
         mask = wheel_title(img)
-        scored = [(int(np.logical_xor(mask, p.mask).sum()), i) for i, p in enumerate(self.parts)
+        scored = [(_title_gap(mask, p.mask), i) for i, p in enumerate(self.parts)
                   if p.mask is not None]
-        return self.parts[min(scored)[1]] if scored else None
+        if not scored or min(scored)[0] > 0.7 * max(int(mask.sum()), 1):
+            return None  # a part that only shows once another has broken, like the stomach
+        return self.parts[min(scored)[1]]
 
     async def turn_wheel(self, part: Part) -> bool:
         """Round the open wheel to this part, checking its title each step."""
-        for _ in range(len(self.parts) + 1):
-            img = await self._shot()
+        for _ in range(len(self.parts) + 2):
+            img = await self.settled_wheel()
             if self.current_part(img) is part:
                 part.broken = part_broken(img)
                 part.gauge = wheel_gauge(img)
                 return True
-            await self._press("rb", 0.2)
+            await self._press("rb", 0.1)
         return False
 
     async def set_type(self, kind: str, img: Image.Image) -> bool:
@@ -1060,18 +1192,23 @@ class Fight:
             return False
         want = 0
         if plan.do == "skill" and plan.skill:
-            names = [s.name for s in self.weapons[plan.weapon].skills]
-            want = names.index(plan.skill.name) + 1 if plan.skill.name in names else 0
-            if want and skill_greyed(img, want):
-                self.note("mh_note", {"text": f"{plan.skill.name} is greyed: plain attack"})
-                want = 0
+            skills = self.weapons[plan.weapon].skills
+            wanted = [plan.skill, *sorted(
+                (x for x in skills if x.deals_damage and x.targets == "one" and x.power > 50
+                 and x.cost > 0 and x is not plan.skill), key=lambda x: -x.power)]
+            for skill in wanted:
+                row = skills.index(skill) + 1 if skill in skills else 0
+                if row and not skill_greyed(img, row):
+                    want, plan.skill = row, skill
+                    break
+                self.note("mh_note", {"text": f"{skill.name} is greyed"})
         if not want:
             plan.do, plan.skill = "attack", None
         for _ in range(5):
             now = skill_row(img)
             if now == want:
                 return True
-            await self._press("down" if want > now else "up", 0.16)
+            await self._flick("down" if want > now else "up", 0.2)
             img = await self._shot()
         return skill_row(img) == want
 
@@ -1094,14 +1231,23 @@ class Fight:
             img = await self.until(lambda i: wheel_open(i) or not (
                 skills_tab(i) is not None or menu_up(i)), 1.0)
             if img is None:
+                self.keep_frame(await self._shot(), "no-wheel")
                 await self.back_out()
                 return ""
-            if not wheel_open(img):
+            # The list can be gone a moment before the wheel is up.
+            if self.parts and not wheel_open(img) and await self.until(wheel_open, 0.7) is None:
                 return "played"
         self.weapon = plan.weapon
         if plan.part is not None and not await self.turn_wheel(plan.part):
             self.note("mh_note", {"text": f"wheel never showed {plan.part.name}"})
+            plan.part = None  # not checked, so not named: a far-off monster's wheel is small
         return "ready"
+
+    def keep_frame(self, img: Image.Image, tag: str) -> None:
+        if os.environ.get("PLAYER_TWO_FRAMES"):
+            with contextlib.suppress(OSError):
+                img.convert("RGB").save(Path(os.environ["PLAYER_TWO_FRAMES"]).expanduser()
+                                        / f"mh-{time.strftime('%H%M%S')}-{tag}.jpg", quality=85)
 
     async def back_out(self) -> None:
         for _ in range(3):
@@ -1110,8 +1256,8 @@ class Fight:
             await self._press("b", 0.3)
 
     async def confirm(self) -> None:
-        """A on the open wheel, checked: it has to close."""
-        for _ in range(2):
+        """A on the open wheel, checked: it has to close. A small monster's ring gets one press."""
+        for _ in range(2 if self.parts else 1):
             await self._press("a")
             if await self.until(lambda i: not wheel_open(i), 0.6) is not None:
                 return
@@ -1132,7 +1278,7 @@ class Fight:
             now = lit_row(img, ITEM_ROWS)
             if now == want:
                 break
-            await self._press("down" if (now or 0) < want else "up", 0.16)
+            await self._flick("down" if (now or 0) < want else "up", 0.2)
             img = await self._shot()
         if lit_row(img, ITEM_ROWS) != want:
             await self.back_out()
@@ -1151,12 +1297,11 @@ class Fight:
         return True
 
     async def play_out(self) -> Image.Image | None:
-        """The turn plays: watch the monster's ribbon for its type, say its move if things have
-        gone quiet, take a game message into account, and return at the next menu. None when
-        the fight's over. A menu left open gets backed out of quickly: the party waits forever
+        """The turn plays: watch for the monster's type (Head-to-Head banner, its ribbon), take
+        a game message into account, and return at the next menu. None when the fight's over. A menu left open gets backed out of quickly: the party waits forever
         on a menu."""
         t0 = time.monotonic()
-        hits, named, read_toast = 0, False, False
+        hits, read_toast, toast_at = 0, False, None
         last_screen, over, nudge = t0 + 9.0, 0, t0 + 14.0
         while time.monotonic() - t0 < 70 and not self.a.cancelled:
             img = await self._shot()
@@ -1173,17 +1318,21 @@ class Fight:
             if now >= nudge:  # this long with no menu: one that no check knows may be open
                 nudge = now + 10.0
                 await self._press("b", 0.2)
-            kind = monster_ribbon(img)
-            if kind:
-                if kind in ANSWER and kind != self.seen_type:
-                    self.seen_type = kind
-                    self.note("mh_seen", {"type": kind})
-                if not named and now - self.last_said > 2.2:
-                    named = True
-                    self.aside(self.say_move(img))
-            if not read_toast and toast_up(img):
-                read_toast = True
-                self.aside(self.read_message(img))
+            kind = clash_type(img) or monster_ribbon(img)
+            if kind and kind in ANSWER and kind != self.seen_type:
+                self.seen_type = kind
+                self.note("mh_seen", {"type": kind})
+            if toast_up(img):
+                if toast_at is None:
+                    toast_at = now
+                elif not read_toast and now - toast_at >= 0.3:  # it fades in
+                    read_toast = True
+                    self.aside(self.read_message(img))
+            else:
+                read_toast, toast_at = False, None
+            if self.won:
+                self.ended = "won"
+                return None
             if now >= last_screen:
                 last_screen = now + 3.0
                 seen = await self.screen(img)
@@ -1194,17 +1343,6 @@ class Fight:
             await asyncio.sleep(0.1)
         return None
 
-    async def say_move(self, img: Image.Image) -> None:
-        """Muse reads the move's name off the ribbon, for a quiet moment."""
-        w, h = img.size
-        crop = img.crop((570 * w // 1280, 84 * h // 720, 800 * w // 1280, 104 * h // 720))
-        with contextlib.suppress(Exception):
-            d = await self.ask("move_name", [image_part(crop, 600)], READ_MOVE, 200, 4)
-            name = str(d.get("name") or "").strip()
-            if 3 <= len(name) <= 30 and name.lower() not in ("speed attack", "power attack",
-                                                            "technical attack"):
-                self.say(self.lines.pick(f"That's {name}.", f"{name}."))
-
     async def read_message(self, img: Image.Image) -> None:
         """The game's own message band. A change of phase means its type may change too."""
         w, h = img.size
@@ -1212,6 +1350,15 @@ class Fight:
         with contextlib.suppress(Exception):
             d = await self.ask("message", [image_part(crop, 800)], READ_TOAST, 200, 5)
             text = str(d.get("text") or "").lower()
+            if self.parts and any(w in text for w in ("slay", "slain", "its den", "retreating")):
+                self.won = True
+                return
+            if "toppled" in text:
+                self.say(self.lines.pick("It's down!", "Knocked it over again."))
+            if "double attack" in text:
+                self.say(self.lines.pick(
+                    "There's the double attack." if "zerk" in text
+                    else "Ogden and Chirpy doubled up." if "ogden" in text else "Double attack."))
             if "normal" in text or "angry" in text or "strange" in text:
                 self.seen_type = ""
                 self.note("mh_seen", {"type": "", "phase": text})
@@ -1238,14 +1385,14 @@ class Fight:
                 self.target = p.name
         kind_now = menu_type(img)
         await self._press("a")
-        wheel = await self.until(wheel_open, 1.2)
+        # A big monster's wheel is checked; a small one's ring is small and moves about.
+        wheel = await self.until(wheel_open if self.parts else (lambda i: not menu_up(i)), 1.2)
         if wheel is None:
             await self.back_out()
             self.note("mh_note", {"text": "wheel didn't open"})
             return None
-        await asyncio.sleep(0.15)
-        wheel = await self._shot()
-        if arc_seen(wheel)[0] == "none":  # just opened: give the streak a moment
+        wheel = await self.settled_wheel(0.9) if self.parts else await self._shot()
+        if arc_seen(wheel)[0] == "none":  # give the streak a moment
             await asyncio.sleep(0.3)
             wheel = await self._shot()
         if os.environ.get("PLAYER_TWO_FRAMES"):  # what each turn was picked from (debugging)
@@ -1269,7 +1416,8 @@ class Fight:
                         type=view.menu_type, weapon=view.in_hand)
         t_read = time.monotonic() - t
         # Said now, while the presses go on: all true of this moment.
-        reaction = self.lines.broke(just_broke) if just_broke else self.lines.monster_low(low)
+        reaction = self.lines.broke(just_broke) if just_broke else (
+            self.lines.monster_low(low) if self.parts else "")
         if plan.do == "item":
             first = self.lines.hurt(plan.on, view.hp.get(plan.on, 0.0))
         else:
@@ -1297,7 +1445,7 @@ class Fight:
             "weapon": view.weapons[plan.weapon].name if view.weapons else "",
             "skill": plan.skill.name if plan.skill else "", "item": plan.item, "on": plan.on,
             "hp": {k: round(v, 2) for k, v in view.hp.items()}, "gauge": view.gauge,
-            "monster_health": round(low, 2), "seen_type": view.monster_type,
+            "monster_health": round(low, 2), "seen_type": view.monster_type, "usual": view.usual_type,
             "hint": view.hint_type, "canyne": view.canyne_type,
             # What Muse read that this turn's choice rests on, and how long each reading took.
             "muse_informed": {k: self.muse_seconds.get(k) for k in (
@@ -1326,12 +1474,12 @@ class Fight:
                 await self.read_status(hold=True)
             return self.what_line or f"It's a {self.status.get('name') or 'monster'}."
         if mode == "weak":
-            if not self.parts:
+            if not self.parts or not all(named(p) for p in self.parts):
                 if not self.weapons:
                     await self.load_gear()
                 await self.read_wheel(hold=True)
             return self.where_weak()
-        if not self.parts or not self.status:
+        if not self.parts or not self.status or not all(named(p) for p in self.parts):
             await self.study(say_weak=mode == "fight" and not self.parts)
             img = await self.until(menu_up, 3.0) or img
         self.studied = True
@@ -1350,9 +1498,19 @@ class Fight:
             return ""
         if not self.ended:
             return "I lost track of the fight there. Say describe to hear where things stand."
+        won = self.won
         self.reset_fight()
-        await self._press("a", 1.0)  # past the rank screen
+        if not won:
+            await self._press("a", 1.0)  # past the rank screen
         return "That's the fight. We won."
+
+
+def _title_gap(a: np.ndarray, b: np.ndarray) -> int:
+    """How far apart two title masks are. The wheel can sit a few pixels off, so the best of the
+    small shifts counts."""
+    k = max(1, a.shape[1] // 180)  # the grab can be bigger than 1280 wide
+    return min(int(np.logical_xor(a, np.roll(np.roll(b, dx, axis=1), dy, axis=0)).sum())
+               for dx in range(-12 * k, 12 * k + 1, 2 * k) for dy in (-2 * k, 0, 2 * k))
 
 
 def _same(a: np.ndarray, b: np.ndarray) -> bool:
