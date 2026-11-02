@@ -563,3 +563,17 @@ def test_talk_key_ready_cue_waits_for_the_microphone(monkeypatch):
     s.spawn = lambda coro: coro.close()
     s.talk_start()
     assert calls == ['capture open', 'listening', 'socket task queued']
+
+
+async def test_its_own_quoted_named_stop_is_not_a_fresh_request(monkeypatch):
+    s = session(monkeypatch)
+    s.events.emit('say', text='You can say Player Two, stop.', source='narrator')
+    spoke(s, ago=2, length=2)
+    await heard(s, 'Player Two, stop.', ago=1.5, length=1)
+    assert s.handled == []
+    # Once the old line is over, the player's identical cancellation still works.
+    s.spans.clear()
+    s.spoke_at = 0
+    s.handle = Session.handle.__get__(s, Session)
+    await heard(s, 'Player Two, stop.')
+    assert s.handled == ['local:stop']

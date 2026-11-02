@@ -1493,7 +1493,11 @@ class Session:
             if not heard:
                 return bool(said)  # just the name, while it said its own name lately
             if len(heard) == 1 and not damaged:
-                return False
+                # A one-word interruption normally belongs to the player. Keep the
+                # explicit own-quote exclusion used by partial stop on the final too.
+                phrase = " ".join(re.findall(r"[a-z0-9']+", text.lower()))
+                return any(phrase in " ".join(re.findall(r"[a-z0-9']+", line.lower()))
+                           for line in said)
         elif not heard:
             return True
         # Function words alone must not turn a different target into an echo:
