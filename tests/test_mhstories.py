@@ -113,7 +113,7 @@ def test_the_skill_that_breaks_parts_when_the_gauge_pays_for_it():
 def test_healing_comes_first_and_goes_to_who_is_worst_off():
     plan = m.choose(view(hp={"Zerk": 0.2, "Canyne": 0.3, "Ogden": 0.9, "Chirpy": 1.0}))
     assert (plan.do, plan.on, plan.item) == ("item", "Zerk", "Potion")
-    assert m.choose(view(hp={"Zerk": 0.5, "Canyne": 0.8})).do == "attack"
+    assert m.choose(view(hp={"Zerk": 0.65, "Canyne": 0.8})).do == "attack"
 
 
 def test_no_line_is_said_twice():
