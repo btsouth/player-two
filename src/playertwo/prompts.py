@@ -100,7 +100,8 @@ stairs, paths off an edge) and which way they are; all readable text that matter
 what they can do next. Up to seven short sentences in all. No preamble, no "gameplay", and nothing about what \
 isn't there. The same rules apply: labels before meanings, highlights only when visible, \
 teams only when marked, names only when shown or clearly recognized."""
-DESCRIBE_HERE = " The room survey knows this place: it's {place}. Call it that."
+DESCRIBE_HERE = (" You've just said this place's name aloud: {place}. Don't say it again; go "
+                 "straight on with what it's like.")
 
 # "What does it look like?": the feel of the scene, not the tour. {length}: how long,
 # by verbosity.

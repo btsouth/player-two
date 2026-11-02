@@ -1306,6 +1306,10 @@ class Agent:
             return None
         self.foes = foes
         brief = party_brief(st)
+        if known is not None and brief == "Everyone's at full health.":
+            # In a fight's first seconds an enemy combo can land just after this is said
+            # (live, Nov 1: Frog down to 1 HP 2.7 s later, 3 runs of 3). Bad news is said anyway.
+            brief = ""
         if now is not None and known is None:
             # Never the old reading: an attack drawn over the numbers says nothing of HP.
             fresh = None

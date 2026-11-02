@@ -1064,6 +1064,8 @@ class Session:
             raise
         except Exception:  # noqa: BLE001  the tour without the name
             place = ""
+        if place:  # about 0.3 s in, while the model takes 2 to 4 s to start
+            yield f"{place[:1].upper()}{place[1:]}. "
         async for d in self.narrator.describe(frame, place):
             yield d
 

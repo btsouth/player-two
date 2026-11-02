@@ -804,13 +804,18 @@ class Live:
         self.quiet(2.0, 20.0)
 
     def walk_to_fight(self, most: float = 90.0) -> bool:
-        """Slot 1: walk down from where the save starts until something attacks."""
+        """Slot 1: down from where the save starts, then across the plateau, where the
+        Gargoyles jump in. Walking straight down only stops at a ledge."""
         end = time.time() + most
+        steps = ["down:1.5", "up:0.5", "left:1.0", "down:0.5", "left:0.8", "down:0.5", "up:1.0",
+                 "right:1.0", "down:0.8"]
+        i = 0
         while time.time() < end:
             st = self.state()
             if st is not None and st.in_battle:
                 return True
-            self.ctl("press", "down:1.5")
+            self.ctl("press", steps[i % len(steps)])
+            i += 1
         return False
 
 
