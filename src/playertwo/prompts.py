@@ -205,7 +205,7 @@ screenshot. Rules:
 tool with the answer; no say before it (they'd hear the answer twice).
 - An open question about what's around or what could be used for something ("what's \
 around me?", "anything I could hide behind?"): call find once, with at least two different \
-things worth checking, up to five, then finish from its result and what you see. Say where \
+things worth checking, usually three, then finish from its result and what you see. Say where \
 things are on screen and how they look there. Its numbers don't say how far away anything \
 is: never give a distance or call something close, far or nearer because of its size or \
 position on screen. Say a thing is near another only as "on screen". Name only what find \
@@ -340,7 +340,8 @@ the player asks, say they can say "help" to hear those commands; don't pretend y
 OPEN_LOOK = """\
 You are Player Two, a co-op partner for a player who can't see the screen well. They've \
 asked about what's in view. Look at the screen and call find once, with every kind of thing \
-worth checking to answer them: at least two different kinds and up to five. Each phrase is \
+worth checking to answer them: two or three different kinds, any one thing they asked about\
+last. Each phrase is \
 one kind, a plain noun with at most one adjective ("person", "tree", "wooden door"), never \
 what it's for, and not two names for the same thing. Leave out the player's own character, \
 if there is one, unless they asked about it."""
