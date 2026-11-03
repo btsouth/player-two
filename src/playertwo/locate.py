@@ -8,10 +8,13 @@ is, so they can hear the layout.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cached_property
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -37,14 +40,19 @@ class Mask:
     frame_w: int
     frame_h: int
 
-    def raster(self) -> np.ndarray:
-        """height x width array of 0 and 1. Slow for a big mask: use a thread when live."""
+    @cached_property
+    def _decoded(self) -> np.ndarray:
         from meta_sam_parser import SegmentationMask, decode_mask_to_raster
 
         raw = decode_mask_to_raster(SegmentationMask(
             encoding="lossless" if self.payload.startswith("~") else "one_bit",
             payload=self.payload, width=self.width, height=self.height))
         return np.frombuffer(raw, dtype=np.uint8).reshape(self.height, self.width)
+
+    def raster(self) -> np.ndarray:
+        """height x width array of 0 and 1. Slow the first time for a big mask (it's pure
+        Python, a few microseconds a pixel): use a thread when live."""
+        return self._decoded
 
     def full_frame(self) -> np.ndarray:
         """frame_h x frame_w array of 0 and 1, the mask where it is on the frame."""
@@ -232,6 +240,123 @@ async def segment(muse: Muse, img: Image.Image, phrase: str, side: int = 1280) -
             if event.type == "response.output_text.delta":
                 text += event.delta
     return parse_boxes(text)
+
+
+FIND_MAX = 5  # phrases in one find
+PING_MAX = 8  # things pinged after one find
+SAM_LOOK_S = 8.0  # a phrase SAM hasn't answered by then is left out, so the player isn't kept
+
+
+@dataclass
+class Found:
+    """What one phrase turned up on a frame."""
+
+    phrase: str
+    matches: list[Match] = field(default_factory=list)
+    shapes: list[Shape] = field(default_factory=list)  # one per match, measured
+    error: str = ""
+
+
+def find_phrases(value) -> list[str]:
+    """The model's phrases as it wrote them, one of each."""
+    items = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+    seen, out = set(), []
+    for item in items:
+        phrase = str(item).strip()
+        if phrase and phrase.lower() not in seen:
+            seen.add(phrase.lower())
+            out.append(phrase)
+    return out
+
+
+async def find_all(muse: Muse, img: Image.Image, phrases: list[str]) -> list[Found]:
+    """SAM 3.1 on one frame for each phrase, all at once (it takes a phrase a call), with
+    every mask measured. A phrase that fails is reported, and the others still count."""
+
+    async def one(phrase: str) -> Found:
+        try:
+            async with asyncio.timeout(SAM_LOOK_S):
+                matches = await segment(muse, img, phrase)
+            # In a thread: a big mask takes a moment, and the game's audio shouldn't wait.
+            return Found(phrase, matches, await asyncio.to_thread(lambda: [
+                measure(m) for m in matches]))
+        except TimeoutError:
+            return Found(phrase, error="no answer in time")
+        except Exception as exc:  # noqa: BLE001  the other phrases still count
+            return Found(phrase, error=str(exc)[:120] or type(exc).__name__)
+
+    return list(await asyncio.gather(*(one(p) for p in phrases)))
+
+
+def screen_words(s: Shape) -> str:
+    """Where a thing is on the screen, in words. Nothing about how far away: see found_text."""
+    across = ("far left" if s.cx < 0.2 else "left" if s.cx < 0.4 else "middle" if s.cx < 0.6
+              else "right" if s.cx < 0.8 else "far right")
+    down = "top" if s.cy < 1 / 3 else "bottom" if s.cy > 2 / 3 else "middle"
+    return f"{across} of the screen, {down} height" if across != "middle" or down != "middle" \
+        else "the middle of the screen"
+
+
+def found_text(found: list[Found]) -> str:
+    """find's result for the model: what's outlined, and where on the screen."""
+    lines = [("Outlined by SAM on one frame. Each is measured by its pixels: x runs 0 to 100 "
+              "left to right, y 0 to 100 top to bottom, and area is the share of the screen it "
+              "covers. These say where it is on screen and how big it looks there, not how far "
+              "away it is.")]
+    for f in found:
+        if f.error:
+            lines.append(f"{f.phrase}: couldn't look ({f.error})")
+            continue
+        if not f.shapes:
+            lines.append(f"{f.phrase}: none found")
+            continue
+        biggest = sorted(f.shapes, key=lambda s: -s.area)
+        each = [f"{screen_words(s)}, centre x {s.cx * 100:.0f} y {s.cy * 100:.0f}, spans x "
+                f"{s.x1 * 100:.0f}-{s.x2 * 100:.0f} y {s.y1 * 100:.0f}-{s.y2 * 100:.0f}, area "
+                f"{s.area * 100:.1f}%" for s in biggest[:6]]
+        more = f"; and {len(biggest) - 6} smaller" if len(biggest) > 6 else ""
+        lines.append(f"{f.phrase}: {len(biggest)} found, biggest first: " + "; ".join(each) + more)
+    return "\n".join(lines)
+
+
+def ping_order(found: list[Found], limit: int = PING_MAX) -> list[tuple[str, float]]:
+    """(phrase, pan) to ping, a phrase at a time and left to right within it. Past `limit`
+    the biggest of each phrase take turns, so every phrase found gets heard."""
+    queues = [sorted(f.shapes, key=lambda s: -s.area) for f in found]
+    picked: list[list[Shape]] = [[] for _ in found]
+    left = limit
+    while left > 0 and any(queues):
+        for queue, chosen in zip(queues, picked, strict=True):
+            if queue and left > 0:
+                chosen.append(queue.pop(0))
+                left -= 1
+    return [(f.phrase, s.pan) for f, chosen in zip(found, picked, strict=True)
+            for s in sorted(chosen, key=lambda s: s.cx)]
+
+
+def found_record(found: list[Found], folder: Path | None = None, stem: str = "") -> list[dict]:
+    """find's results for a log, the masks as PNGs of their boxes in `folder` when given,
+    so a log line stays a log line."""
+    out = []
+    for f in found:
+        items = []
+        for i, (m, s) in enumerate(zip(f.matches, f.shapes, strict=True)):
+            item = {"box": [round(v, 4) for v in m.box or ()], "centre": [round(s.cx, 4),
+                    round(s.cy, 4)], "pan": s.pan, "area": round(s.area, 5)}
+            if m.mask is not None:
+                item["mask_size"] = [m.mask.height, m.mask.width]
+                item["frame_size"] = [m.mask.frame_h, m.mask.frame_w]
+                item["mask_at"] = [m.mask.left, m.mask.top]
+                if folder is not None:
+                    slug = re.sub(r"[^a-z0-9]+", "-", f.phrase.lower()).strip("-") or "thing"
+                    name = f"{stem}{slug}-{i + 1}.png"
+                    folder.mkdir(parents=True, exist_ok=True)
+                    Image.fromarray(m.mask.raster() * 255).convert("1").save(folder / name)
+                    item["mask"] = name
+            items.append(item)
+        out.append({"phrase": f.phrase, "count": len(f.matches), "error": f.error,
+                    "items": items})
+    return out
 
 
 WHERE = re.compile(

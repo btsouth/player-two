@@ -41,6 +41,7 @@ from .battle import (
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
+from .locate import FIND_MAX, find_all, find_phrases, found_text
 from .muse import Muse, image_part
 from .notes import GameNotes
 from .prompts import (
@@ -64,7 +65,7 @@ PROGRESS_GAP_S = 8.0
 # (live 3: lines 8 s apart at most left silences of 4 to 14 s in a fight).
 FIGHT_LINE_GAP_S = 4.0
 # Tools that press nothing: after them the screen is looked at once, not waited on.
-STILL_TOOLS = {"where_am_i", "next_goal", "guide", "exits", "area_map", "remember"}
+STILL_TOOLS = {"where_am_i", "next_goal", "guide", "exits", "area_map", "remember", "find"}
 # Walking around by trial and error in one request stops after this long: wandering on
 # camera looks lost, and an honest "I don't know the way here yet" is better.
 FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
@@ -254,6 +255,19 @@ TOOLS = [
                        "to look for something that isn't on screen.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "find",
+        "description": "Have SAM 3.1 outline things on the screen right now, for an open "
+                       "question about what's around or what could be used for something. "
+                       "Give every thing worth checking in one call, up to five, one thing "
+                       "per phrase. For each it returns how many, where on the screen and how "
+                       "much of the screen it covers. That says how big a thing looks, not "
+                       "how far away it is. Presses nothing.",
+        "parameters": {"type": "object", "properties": {
+            "phrases": {"type": "array", "items": {"type": "string"},
+                        "description": "Up to five, each a thing to outline in a few plain "
+                                       "words, such as \"tree\" or \"wooden door\"."},
+        }, "required": ["phrases"]}}},
+    {"type": "function", "function": {
         "name": "area_map",
         "description": "See a map of this area so far, stitched from everything on "
                        "screen while walking (2D games): exits, gaps, paths and people "
@@ -381,6 +395,24 @@ WALK_ERRORS = (ValueError, TypeError, IndexError, OSError, RuntimeError, openai.
 WALK_FAILED = ("blocked", "timeout", "lost", "not_found", "walking failed")
 # A text box or a cutscene in the way: not the way being cut off, nor a walk that got there.
 WALK_PAUSED = ("didnt_move", "interrupted")
+
+
+FIND_DONE = ("Answer the player now: call finish with two short spoken sentences, no line "
+             "breaks.")
+
+
+def merge_finds(calls: list) -> list:
+    """The model tends to send one find a phrase: they become one, the first, so all its
+    phrases are looked for at once on one frame and answered once."""
+    finds = [c for c in calls if c.function.name == "find"]
+    if len(finds) < 2:
+        return calls
+    phrases = []
+    for c in finds:
+        with contextlib.suppress(json.JSONDecodeError, AttributeError):
+            phrases += find_phrases(json.loads(c.function.arguments or "{}").get("phrases"))
+    finds[0].function.arguments = json.dumps({"phrases": find_phrases(phrases)})
+    return [c for c in calls if c.function.name != "find" or c is finds[0]]
 
 
 def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
@@ -923,6 +955,8 @@ class Agent:
                 done += (". Stopped before confirming: look at what is highlighted now. If it "
                          "is what the player wants, press a on its own; if not, fix it first.")
             return done
+        if name == "find":
+            return await self._find(a)
         if self.on_action and name != "talk_to":  # its walk_to says it
             self.on_action(name, a)
         if name == "wait":
@@ -1470,6 +1504,24 @@ class Agent:
         if st is None:
             return ""
         return f"{lead}{BATTLE_CT}\nThe fight now: {ctsteam.describe(st)}\n\n"
+
+    async def _find(self, a: dict) -> str:
+        """SAM's outlines on one frame, for the model to reason over; the log and the pings
+        get them through on_action."""
+        phrases = find_phrases(a.get("phrases"))
+        if not phrases:
+            return "find needs phrases: a list of things to outline, one thing each"
+        frame = await self.grab()
+        frame_t, t = time.time(), time.monotonic()
+        found = await find_all(self.muse, frame.image, phrases[:FIND_MAX])
+        if self.on_action:
+            self.on_action("found", {"frame_t": frame_t, "phrases": phrases[:FIND_MAX],
+                                     "found": found,
+                                     "seconds": round(time.monotonic() - t, 2)})
+        text = found_text(found)
+        if phrases[FIND_MAX:]:
+            text += f"\nNot looked for, five at a time: {', '.join(phrases[FIND_MAX:])}"
+        return text
 
     def _tools(self, frame: Frame | None) -> list[dict]:
         if self._battle is not None:
@@ -2797,6 +2849,7 @@ class Agent:
         asked = len(COMMANDS.findall(" ".join(request.lower().split())))
         commanded = sum(1 for st in run.steps if st.tool == "battle"
                         and st.result.startswith("done:"))
+        calls: list = []
         while _turn + 1 < budget:
             _turn += 1
             if self.cancelled:
@@ -2806,10 +2859,14 @@ class Agent:
             t_model = time.monotonic()
             last_turn = _turn == budget - 1
             done_fighting = bool(asked) and self._battle is not None and commanded >= asked
+            # After find the looking is done: only the answer is left, and the player's
+            # waiting (live: 8 s of thinking at the usual effort, on the same picture).
+            found_it = bool(calls) and all(c.function.name == "find" for c in calls)
             msg = await self.muse.tools(trim_images(msgs), self._tools(frame)
                                         if not last_turn and not done_fighting
                                         else FINISH_ONLY if done_fighting or not self.ask
-                                        else FINISH_OR_ASK)
+                                        else FINISH_OR_ASK,
+                                        effort="minimal" if found_it else None)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
@@ -2817,7 +2874,7 @@ class Agent:
                 run.outcome = "cancelled"
                 out_of_turns = False
                 break
-            calls = msg.tool_calls or []
+            calls = merge_finds(msg.tool_calls or [])
             msgs.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": [c.model_dump() for c in calls] or None})
             if not calls:
@@ -2987,6 +3044,11 @@ class Agent:
                         "You were out of steps, so the player was asked whether to keep "
                         f'going. They said: "{answer}". Carry on.')})
             turn["act_s"] = round(time.monotonic() - t_act, 2)
+            if calls and all(c.function.name == "find" for c in calls) and not last_turn:
+                # Nothing moved for it, and its result is about the picture already seen:
+                # no second picture to wait on, the answer's all that's left.
+                msgs.append({"role": "user", "content": FIND_DONE})
+                continue
             t_look = time.monotonic()
             # After a say too: the model may be waiting for text still typing out.
             if noise is None and calls and all(c.function.name in STILL_TOOLS
