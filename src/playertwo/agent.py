@@ -1593,7 +1593,10 @@ class Agent:
             run.turns.append({"model_s": round(time.monotonic() - t, 2)})
             await sounding
         except openai.APIError as exc:
-            # They've heard what was found: a stuck second turn needn't undo that.
+            # They've heard what was found: a stuck second turn needn't undo that. Let the
+            # line and the pings finish first, even when the failure came fast.
+            with contextlib.suppress(Exception):
+                await sounding
             if self.on_action:
                 self.on_action("walk_note", {"text": f"answer after find failed: {exc}"})
             if heard:

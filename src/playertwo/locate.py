@@ -351,8 +351,11 @@ MASS = re.compile(r"\b(grass|water|sand|mud|snow|dirt|smoke|lava|ice|fog|gravel|
 
 
 def _plural(phrase: str) -> str:
-    for one, many in (("person", "people"), ("woman", "women"), ("man", "men")):
-        if phrase.endswith(one):
+    last = phrase.rsplit(" ", 1)[-1].lower()
+    for one, many in (("person", "people"), ("woman", "women"), ("man", "men"),
+                      ("wolf", "wolves"), ("elf", "elves"), ("shelf", "shelves"),
+                      ("leaf", "leaves"), ("thief", "thieves"), ("knife", "knives")):
+        if last == one:
             return phrase[:-len(one)] + many
     if phrase.endswith("s") and not phrase.endswith(("ss", "us")):
         return phrase
@@ -373,10 +376,16 @@ def found_line(found: list[Found]) -> str:
         if n and MASS.search(name):
             parts.append(f"some {name}")
         elif n == 1:
+            # One of them, whatever number the phrase came in ("rocks" with one outlined).
+            if name.endswith("s") and not name.endswith(("ss", "us", "is")):
+                name = name[:-1]
             parts.append(f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}")
         elif n > 1:
             parts.append(f"{ {2: 'two', 3: 'three'}.get(n, 'several') } {_plural(name)}")
     if not parts:
+        # An outage isn't an empty scene.
+        if found and all(f.error for f in found):
+            return "I couldn't get a look just now."
         return "I can't pick out any of those on screen."
     return "I can see " + (parts[0] if len(parts) == 1
                            else ", ".join(parts[:-1]) + " and " + parts[-1]) + "."
@@ -433,8 +442,9 @@ ACTION_WORDS = {"and", "then", "use", "open", "go", "attack", "heal", "buy", "se
 
 OPEN_REQUEST = re.compile(
     r"^(?:hey,? |so,? |okay,? |ok,? )?(?:what|what's|whats|anything|is there|are there|is anyone"
-    r"|is anybody|can i|could i|where can|where could)\b.*\b(?:around|nearby|near|cover|hide"
-    r"|behind|ahead|out there|in front|next to|beside|see from|see here)\b", re.IGNORECASE)
+    r"|is anybody|can i|could i|where can|where could)\b.*\b(?:around|nearby|near me|near us"
+    r"|cover|hide|behind|ahead|out there|in front|next to me|next to us|beside|see from"
+    r"|see here)\b", re.IGNORECASE)
 
 
 def open_request(text: str) -> bool:

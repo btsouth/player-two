@@ -114,10 +114,11 @@ See [game data](game-data.md).
   a short prompt, asks Muse Spark what to look for. Its `find` tool sends SAM 3.1 up to five
   phrases on one frame, one call each and all at once, since SAM takes a phrase a call. Each
   mask is decoded and measured (where its pixels are, what share of the screen they cover); a
-  thing two phrases outlined counts once. The player hears what was found, a ping panned to
-  each thing, then Spark's answer from the numbers and the picture. Position and area say how
+  thing two phrases outlined counts once. The player hears what was found (in English; other
+  languages skip this line), a ping panned to each thing, up to eight with one note per kind,
+  then Spark's answer from the numbers and the picture. Position and area say how
   big a thing looks, not how far away it is, so the answer doesn't claim a distance. In the full
-  agent `find` is an ordinary tool. The masks are PNGs in `<log>.masks/` beside the session log,
+  agent `find` is an ordinary tool. The masks are PNGs in a folder beside the session log, named for it (`run.jsonl`, `run.masks/`),
   and the log's `find` event has frame time, phrases and boxes.
 - **Health warnings** (`hud.py`): for real-time games, Muse Spark finds the health and stamina
   bars once; then a few lines of pixel math read them on every frame and play a sound when they

@@ -1,10 +1,12 @@
 """find: SAM 3.1's masks kept, measured, and put in front of Muse Spark."""
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from playertwo.agent import STILL_TOOLS, TOOLS, Agent, merge_finds
@@ -14,9 +16,11 @@ from playertwo.locate import (
     Shape,
     find_all,
     find_phrases,
+    found_line,
     found_record,
     found_text,
     measure,
+    open_request,
     parse_boxes,
     ping_order,
     where_request,
@@ -313,6 +317,40 @@ async def test_pings_come_after_the_found_line_and_before_the_answer():
     assert order == ["I can see a horse.", "ping", "A horse right of the middle of the screen."]
 
 
+async def test_a_failed_answer_doesnt_lose_the_found_line_or_the_pings():
+    import openai
+
+    class Busy(openai.APIError):
+        def __init__(self):
+            Exception.__init__(self, "busy")
+
+    muse = FakeMuse()
+    order = []
+    img = Image.new("RGB", (1280, 720))
+
+    async def grab():
+        return Frame(img, 1.0)
+
+    async def speak(text):
+        await asyncio.sleep(0.02)  # still rendering when the answer fails
+        order.append(text)
+
+    async def ping():
+        await asyncio.sleep(0.02)
+        order.append("ping")
+
+    async def fails(*_args, **_kwargs):
+        raise Busy
+        yield ""
+
+    muse.stream = fails
+    agent = Agent(muse, SimpleNamespace(), grab, speak, game="Some Game")
+    agent.ping_found = ping
+    run = await agent.run("What's around me?")
+    assert order == ["I can see a horse.", "ping"]
+    assert run.outcome == "I can see a horse."
+
+
 async def test_an_answer_naming_nothing_found_still_gets_the_second_look():
     muse = FakeMuse(answer="Football fouls are called by the referee on the pitch every game.")
     verdicts = []
@@ -429,12 +467,12 @@ def test_where_questions_stay_on_the_fast_path_and_open_ones_go_to_the_agent():
 
     assert where_request("Where's my horse?") == "horse"
     assert where_request("where's the door") == "door"
-    for open_request in ("What could I use for cover, and is my horse near any of it?",
+    for question in ("What could I use for cover, and is my horse near any of it?",
                          "What's around me?", "Is there anywhere to hide?",
                          "What can I see from here?"):
-        assert where_request(open_request) is None
-        assert guide_request(open_request) is None
-        assert not where_am_i(open_request)
+        assert where_request(question) is None
+        assert guide_request(question) is None
+        assert not where_am_i(question)
 
 
 def test_each_kind_of_thing_gets_its_own_note_and_every_ping_is_logged(tmp_path):
@@ -459,3 +497,31 @@ def test_each_kind_of_thing_gets_its_own_note_and_every_ping_is_logged(tmp_path)
     logged = [json.loads(line) for line in s.events.log_path.read_text().splitlines()]
     assert [(e["kind"], e["phrase"], e["note"]) for e in logged] == [
         ("ping", "rock", 0), ("ping", "rock", 0), ("ping", "horse", 1)]
+
+
+@pytest.mark.parametrize("text", [
+    "What could I use for cover, and is my horse near any of it?",
+    "What's around me?",
+    "Anything near me?",
+    "Is anyone next to me?",
+])
+def test_open_questions_about_the_view(text):
+    assert open_request(text)
+
+
+@pytest.mark.parametrize("text", [
+    "What do I do next to get past this guard?",
+    "Can I save near here?",
+])
+def test_other_questions_are_not_about_the_view(text):
+    assert not open_request(text)
+
+
+def test_found_line_grammar_and_an_outage_isnt_an_empty_scene():
+    one = [Found("rocks", shapes=[shape(0.1)], matches=[object()])]
+    assert found_line(one) == "I can see a rock."
+    humans = [Found("human", shapes=[], matches=[object(), object()]),
+              Found("wolf", shapes=[], matches=[object(), object()])]
+    assert found_line(humans) == "I can see two humans and two wolves."
+    assert found_line([Found("door", error="timed out")]) == "I couldn't get a look just now."
+    assert found_line([Found("door")]) == "I can't pick out any of those on screen."

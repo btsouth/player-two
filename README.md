@@ -38,8 +38,9 @@ flowchart LR
 ```
 
 **Muse picks the tool for requests that reach the agent. Code finds the path and plays the
-turns.** Plain requests go straight from a local router to code with no model turn: "where's
-the door?" goes to SAM 3.1, and supported Chrono Trigger commands to an executor. Its default fight routine
+turns.** Plain requests go straight from a local router to code, without the agent: "where's
+the door?" goes to SAM 3.1, with Muse Spark looking alongside in case SAM misses, and supported
+Chrono Trigger commands to an executor. Its default fight routine
 chooses attacks, healing and revives with local rules; Muse does not choose those turns.
 Kokoro runs locally. The Meta models use hosted APIs. Details and limits are below.
 
