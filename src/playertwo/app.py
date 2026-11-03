@@ -707,6 +707,7 @@ class Session:
             return
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
+        self.agent_line = True
         await self.voice.say(text, interrupt=False)
 
     # Narration
@@ -914,6 +915,8 @@ class Session:
             self.silent_streak += 1
             self.quiet_until = time.monotonic() + min(16.0, 2.0 ** self.silent_streak)
 
+    agent_line = False  # what the agent said is still playing, or about to
+
     # A settled screen this different from the last one is a new scene, back-off or not.
     SCENE_CUT = 0.3
 
@@ -935,6 +938,10 @@ class Session:
         if self.describing is not None and self.narrating is self.describing \
                 and not self.voice.idle():
             return  # the player asked: they hear the answer out, even over a new scene
+        if self.agent_line:
+            if not self.voice.idle():
+                return  # the same for what the agent said, once its turn is over
+            self.agent_line = False
         frame, change = self.pending
         if self._reads(frame):
             if self.read_t < frame.t - self.watcher.settle_s:
