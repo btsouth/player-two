@@ -506,3 +506,191 @@ def test_a_broken_part_stays_broken():
     v = view()
     v.parts, v.target = [part, tail], "Stomach"
     assert m.pick_part(v) is tail
+
+
+class FakeMuse:
+    """Answers the wheel and Status looks; `status` is what the Status look says, in turn."""
+
+    def __init__(self, status):
+        self.status = list(status)
+        self.asked = []
+
+    async def json(self, msgs, effort=None, max_tokens=0):
+        text = msgs[0]["content"][-1]["text"]
+        if "wheel" in text.lower() and "parts" in text:
+            self.asked.append("wheel")
+            return {"parts": [{"name": "Tail", "works": ["slash"]},
+                              {"name": "Head", "works": ["pierce"]},
+                              {"name": "Legs", "works": ["blunt"]}], "say": ""}
+        self.asked.append("status")
+        return self.status.pop(0) if self.status else {"name": "Tetranadon"}
+
+
+def asked_for(g, muse, said):
+    f = m.Fight(agent_for(g, said))
+    f.a.muse = muse
+    f.weapons = gear()
+    return f
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    monkeypatch.setattr(m, "WHEEL_HOLD", 0.0)
+    monkeypatch.setattr(m, "image_part", lambda img, px: {"type": "image"})
+    return monkeypatch
+
+
+def wheel_pictures(game, quick):
+    """The crops and the sheet of a round of the wheel need a real picture."""
+    picture = m.Image.new("RGB", (1280, 720))
+
+    class Shot(types.SimpleNamespace):
+        size = picture.size
+
+        def crop(self, box):
+            return picture.crop(box)
+
+    real = game.snap
+    game.snap = lambda: Shot(**vars(real()))
+
+
+def test_where_weak_then_take_this_fight_walks_the_wheel_once(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    muse = FakeMuse([{"name": "Somnacanth", "resists": ["water"]}])
+    f = asked_for(game, muse, said)
+
+    async def go():
+        answer = await f.run("Where's it weak?", "weak")
+        await f.said()
+        before = game.presses.count("rb")
+        await f.run("Take this fight for me.", "turn")
+        return answer, game.presses.count("rb") - before
+
+    answer, rounds_after = run(go())
+    assert said[0] == "You can break three parts, each with a different weapon."
+    assert "harp on the head" in answer
+    assert muse.asked.count("wheel") == 1 and muse.asked.count("status") == 1
+    assert rounds_after <= 2  # the Skills pages, never the wheel again
+    assert f.status["name"] == "Somnacanth"
+    assert game.confirmed
+
+
+def test_a_status_read_that_came_back_empty_is_tried_again_without_the_wheel(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    muse = FakeMuse([{}, {}, {"name": "Somnacanth"}])
+    f = asked_for(game, muse, said)
+
+    async def go():
+        await f.run("Where's it weak?", "weak")
+        await f.said()
+        await f.settle_reads()
+        assert not f.status
+        await f.run("Take this fight for me.", "turn")
+
+    run(go())
+    assert muse.asked.count("wheel") == 1 and muse.asked.count("status") == 3
+    assert f.status["name"] == "Somnacanth"
+
+
+def test_a_slow_status_read_doesnt_hold_up_the_fight(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    quick.setattr(m, "STATUS_WAIT", 0.05)
+    muse = FakeMuse([])
+    json = muse.json
+
+    async def slow(msgs, effort=None, max_tokens=0):
+        reply = await json(msgs, effort, max_tokens)
+        if "parts" not in reply:
+            await asyncio.sleep(60)
+        return reply
+
+    muse.json = slow
+    f = asked_for(game, muse, said)
+
+    async def go():
+        await f.run("Where's it weak?", "weak")
+        await f.said()
+        await f.run("Take this fight for me.", "turn")
+        assert not f.status and f.pending  # still reading, behind the turn just played
+        for job in f.pending:
+            job.cancel()
+
+    run(go())
+    assert game.confirmed
+    assert muse.asked.count("status") == 1
+
+
+def test_the_count_says_each_weapon_only_when_the_wheel_shows_it():
+    f = m.Fight(agent_for(Game(), []))
+    f.weapons = gear()
+    f.parts = [part("Head", "pierce"), part("Stomach", "blunt"), part("Tail", "slash")]
+    assert f.count_line() == "You can break three parts, each with a different weapon."
+    f.parts = [part("Head", "pierce"), part("Stomach", "pierce")]
+    assert f.count_line() == "You can break two parts."
+    f.parts = [part("Head", "pierce")]
+    assert f.count_line() == ""
+
+
+def test_the_first_turn_says_where_it_starts_while_the_menus_go_by():
+    lines = m.Lines()
+    v = view()
+    plan = m.Plan("skill", part=part("Stomach", "blunt"), skill=gear()[0].skills[1], weapon=0)
+    assert lines.opening(v, plan) == "The stomach first, with the hammer."
+    assert lines.choice(v, plan, False) == "Spinning Meteor."
+    assert lines.choice(v, plan, False) == "Spinning Meteor on the stomach."
+
+
+def test_a_message_read_twice_as_it_fades_in_is_said_once(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    f = fight_for(game, said)
+    quick.setattr(m, "toast_up", lambda i: False)
+
+    class Read:
+        def __init__(self):
+            self.replies = [{"text": "You broke one of its parts!"},
+                            {"text": "You broke one of its parts!"},
+                            {"text": "They got us..."}]
+
+        async def json(self, msgs, effort=None, max_tokens=0):
+            return self.replies.pop(0)
+
+    f.a.muse = Read()
+
+    async def go():
+        shot = game.snap()
+        await f.read_message(shot)
+        await f.read_message(shot)
+        await f.read_message(shot)
+        await f.said()
+
+    run(go())
+    assert said == ["That's a part broken!", "We lost a heart."]
+
+
+def test_a_broken_part_hit_to_finish_it_off_isnt_called_the_target():
+    plan = m.Plan("attack", part=part("Tail", "slash", broken=True), weapon=1)
+    assert m.Lines().choice(view(), plan, False) == "Hitting it with the sword."
+
+
+def test_where_weak_looks_again_until_a_turn_has_been_played(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    muse = FakeMuse([])
+    f = asked_for(game, muse, said)
+
+    async def go():
+        await f.run("Where's it weak?", "weak")
+        await f.settle_reads()
+        await f.run("Where's it weak?", "weak")  # run away, caught again: maybe not the same one
+        await f.settle_reads()
+        assert muse.asked.count("wheel") == 2
+        await f.run("Take this fight for me.", "turn")
+        await f.run("Where's it weak?", "weak")
+        await f.settle_reads()
+
+    run(go())
+    assert muse.asked.count("wheel") == 2

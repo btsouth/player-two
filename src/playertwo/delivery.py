@@ -9,8 +9,6 @@ def companion_line(text: str) -> str:
         return ""
     if text == "That's the fight. We won.":
         return "We've won this fight!"
-    if text == "Three parts you can break. Let me see what each one takes.":
-        return "You can break three parts."
     # Older dialogue producers put a comma after these speakers. Attribute the
     # quotation explicitly without changing a word inside it.
     m = re.fullmatch(r"(Soldier|Marle), (.+)", text)
