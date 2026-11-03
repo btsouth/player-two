@@ -606,7 +606,7 @@ class Session:
         # One thing gets three pings: a single short blip is easy to miss over a game.
         for phrase, pan in order if len(order) > 1 else order * 3:
             if phrase != before:
-                await asyncio.sleep(0.25)  # a beat between one kind of thing and the next
+                await asyncio.sleep(0.15)  # a beat between one kind of thing and the next
             before = phrase
             self.voice.cue("ping", pan=wide_pan(pan))
             await asyncio.sleep(0.28)

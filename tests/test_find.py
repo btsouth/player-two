@@ -243,6 +243,35 @@ async def test_one_phrase_failing_leaves_the_others():
     assert "boulder: couldn't look (SAM is down)" in found_text(found)
 
 
+def test_a_thing_two_phrases_outline_counts_once():
+    from playertwo.locate import Mask, drop_repeats
+
+    class Grid(Mask):
+        def __new__(cls, grid):
+            self = object.__new__(cls)
+            object.__setattr__(self, "grid", grid)
+            return self
+
+        def __init__(self, grid):
+            pass
+
+        def full_frame(self):
+            return self.grid
+
+    def at(x1, x2):
+        grid = np.zeros((10, 10), dtype=np.uint8)
+        grid[2:8, x1:x2] = 1
+        return Match(0.5, 0.5, 0.1, mask=Grid(grid))
+
+    rock, small_inside, tree = at(0, 8), at(2, 4), at(8, 10)
+    same_rock = at(0, 7)
+    found = [Found("rock", [rock, tree], [shape(0.4), shape(0.9)]),
+             Found("boulder", [same_rock, small_inside], [shape(0.35), shape(0.3)])]
+    drop_repeats(found)
+    assert [len(f.matches) for f in found] == [2, 1]
+    assert found[1].matches == [small_inside] and len(found[1].shapes) == 1
+
+
 def shape(cx, area=0.01):
     return Shape(cx, 0.5, area, cx - 0.01, 0.4, cx + 0.01, 0.6)
 

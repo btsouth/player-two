@@ -289,7 +289,29 @@ async def find_all(muse: Muse, img: Image.Image, phrases: list[str]) -> list[Fou
         except Exception as exc:  # noqa: BLE001  the other phrases still count
             return Found(phrase, error=str(exc)[:120] or type(exc).__name__)
 
-    return list(await asyncio.gather(*(one(p) for p in phrases)))
+    found = list(await asyncio.gather(*(one(p) for p in phrases)))
+    await asyncio.to_thread(drop_repeats, found)
+    return found
+
+
+def same_thing(a: Match, b: Match) -> bool:
+    """Whether two masks outline one thing: nearly the same pixels. A door in a wall's mask
+    isn't the wall."""
+    if a.mask is None or b.mask is None:
+        return False
+    x, y = a.mask.full_frame() > 0, b.mask.full_frame() > 0
+    if x.shape != y.shape:
+        return False
+    return (x & y).sum() >= 0.7 * max(1, (x | y).sum())
+
+
+def drop_repeats(found: list[Found]) -> None:
+    """A thing two phrases both outlined ("large rock", "boulder") counts under the first."""
+    for i, later in enumerate(found):
+        keep = [k for k, m in enumerate(later.matches)
+                if not any(same_thing(m, o) for f in found[:i] for o in f.matches)]
+        later.matches = [later.matches[k] for k in keep]
+        later.shapes = [later.shapes[k] for k in keep]
 
 
 def screen_words(s: Shape) -> str:

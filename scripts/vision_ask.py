@@ -84,7 +84,7 @@ async def main(a) -> int:
         async def sound() -> None:
             # As long as saying the found line and the pings take in the app.
             await asyncio.sleep(len(said[-1]["text"]) * 0.065 if said else 0)
-            await asyncio.sleep(0.28 * len(ping_order(last)) + 0.25 * len(last))
+            await asyncio.sleep(0.28 * len(ping_order(last)) + 0.15 * len(last))
 
         agent.ping_found = sound
         (a.out / "prompts.txt").write_text(f"{OPEN_LOOK}\n\n{OPEN_ANSWER}\n\n{agent.system()}")
