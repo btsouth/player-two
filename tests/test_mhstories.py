@@ -632,3 +632,40 @@ def test_the_count_says_each_weapon_only_when_the_wheel_shows_it():
     assert f.count_line() == "You can break two parts."
     f.parts = [part("Head", "pierce")]
     assert f.count_line() == ""
+
+
+def test_the_first_turn_says_where_it_starts_while_the_menus_go_by():
+    lines = m.Lines()
+    v = view()
+    plan = m.Plan("skill", part=part("Stomach", "blunt"), skill=gear()[0].skills[1], weapon=0)
+    assert lines.opening(v, plan) == "The stomach first, with the hammer."
+    assert lines.choice(v, plan, False) == "Spinning Meteor."
+    assert lines.choice(v, plan, False) == "Spinning Meteor on the stomach."
+
+
+def test_a_message_read_twice_as_it_fades_in_is_said_once(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    f = fight_for(game, said)
+    quick.setattr(m, "toast_up", lambda i: False)
+
+    class Read:
+        def __init__(self):
+            self.replies = [{"text": "You broke one of its parts!"},
+                            {"text": "You broke one of its parts!"},
+                            {"text": "They got us..."}]
+
+        async def json(self, msgs, effort=None, max_tokens=0):
+            return self.replies.pop(0)
+
+    f.a.muse = Read()
+
+    async def go():
+        shot = game.snap()
+        await f.read_message(shot)
+        await f.read_message(shot)
+        await f.read_message(shot)
+        await f.said()
+
+    run(go())
+    assert said == ["That's a part broken!", "We lost a heart."]

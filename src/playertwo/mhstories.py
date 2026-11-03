@@ -462,6 +462,7 @@ JSON: {{"parts": [{{"name": "...", "works": ["slash"|"pierce"|"blunt"], "broken"
 "bonus": "words under Break Bonus, or empty"}}], "say": "..."}}"""
 
 WHEEL_HOLD = 1.0  # seconds the wheel stays up after its round, for the camera and the count
+TOAST_AGAIN = 6.0  # seconds in which the same message is still the same message
 STATUS_WAIT = 4.0  # seconds a fight waits on a Status reading already under way
 
 READ_STATUS = """\
@@ -697,6 +698,7 @@ class Lines:
     def __init__(self) -> None:
         self.used: set[str] = set()
         self.low_step = 0
+        self.opened_on = ""  # the part the opening line just named
 
     def pick(self, *options: str) -> str:
         for line in options:
@@ -748,6 +750,14 @@ class Lines:
         # A red streak or no streak says nothing sure about what's coming, so nothing's said of it.
         return self.pick("I'll just go for damage.")
 
+    def opening(self, view: View, plan: Plan) -> str:
+        """The first turn has no streak to talk about: where it's starting, and with what, while
+        the menus go by."""
+        if plan.do == "item" or not plan.part or not named(plan.part) or not view.weapons:
+            return ""
+        self.opened_on = plan.part.name.lower()
+        return self.pick(f"The {self.opened_on} first, with {short(view.weapons[plan.weapon].name)}.")
+
     def choice(self, view: View, plan: Plan, swapped: bool) -> str:
         """What's being done, said only once the screen shows it selected."""
         if plan.do == "item":
@@ -757,7 +767,8 @@ class Lines:
         part = plan.part.name.lower() if plan.part and named(plan.part) else ""
         weapon = short(view.weapons[plan.weapon].name) if view.weapons else ""
         if plan.do == "skill" and plan.skill:
-            where = f" on the {part}" if part else ""
+            where = f" on the {part}" if part and part != self.opened_on else ""
+            self.opened_on = ""
             return self.pick(f"{plan.skill.name}{where}.", f"{plan.skill.name} again{where}.",
                              f"One more {plan.skill.name}{where}.")
         if not part:
@@ -827,6 +838,7 @@ class Fight:
         self.talking: asyncio.Task | None = None
         self.last_said = 0.0
         self.asides: set[asyncio.Future] = set()  # Muse looks that don't hold up the turn
+        self.toasts: list[tuple[str, float]] = []
         self.pending: list[asyncio.Future] = []  # Muse readings of what's left the screen
         self.muse_seconds: dict[str, float] = {}  # model time per kind of reading, for the logs
         self.turns = 0
@@ -1475,12 +1487,20 @@ class Fight:
         with contextlib.suppress(Exception):
             d = await self.ask("message", [image_part(crop, 800)], READ_TOAST, 200, 5)
             text = str(d.get("text") or "").lower()
+            # A message read twice as it fades in is one message.
+            now = time.monotonic()
+            if text and any(now - when < TOAST_AGAIN and difflib.SequenceMatcher(
+                    None, text, old).ratio() > 0.85 for old, when in self.toasts):
+                return
+            self.toasts = [*self.toasts[-3:], (text, now)]
             if self.parts and any(w in text for w in ("slay", "slain", "its den", "retreating")):
                 self.won = True
                 return
             if "broke" in text and "part" in text:  # which one, the next wheel shows
                 self.break_heard = True
                 self.say(self.lines.pick("That's a part broken!", "Another part broken!"))
+            if "got us" in text:  # a rider or partner down, and a heart with them
+                self.say(self.lines.pick("We lost a heart.", "That's another heart gone."))
             if "toppled" in text:
                 self.say(self.lines.pick("It's down!", "Knocked it over again."))
                 self.aside(self.synchro_rush())
@@ -1564,6 +1584,8 @@ class Fight:
             first = self.lines.hurt(plan.on, view.hp.get(plan.on, 0.0))
         else:
             first = self.lines.reason(view, plan)
+            if self.turns == 1 and view.arc not in ("yellow", "blue"):
+                first = self.lines.opening(view, plan) or first
         self.say(" ".join(x for x in (reaction, first) if x))
         swapped = plan.weapon != self.weapon
         if plan.do == "item":
