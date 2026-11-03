@@ -57,7 +57,7 @@ async def run(image: Path, phrases: list[str], out: Path, side: int) -> list[dic
     (out / "1080").mkdir(exist_ok=True)
     (out / "source").mkdir(exist_ok=True)
     muse = Muse(Settings.load())
-    index, preview = [], img.convert("RGBA")
+    index, layers = [], []
     for n, phrase in enumerate(phrases):
         color = COLORS[n % len(COLORS)]
         found = await segment(muse, img, phrase, side=side)
@@ -71,7 +71,7 @@ async def run(image: Path, phrases: list[str], out: Path, side: int) -> list[dic
             layer(scaled(grid, 1920, 1080), color, EDGE_PX_AT_1080).save(out / "1080" / name)
             big = layer(scaled(grid, sw, sh), color, max(1, round(EDGE_PX_AT_1080 * sh / 1080)))
             big.save(out / "source" / name)
-            preview.alpha_composite(big)
+            layers.append((s.area, big))
             x1, y1, x2, y2 = m.box
             index.append({
                 "phrase": phrase, "file": name, "color": list(color),
@@ -85,6 +85,9 @@ async def run(image: Path, phrases: list[str], out: Path, side: int) -> list[dic
     (out / "index.json").write_text(json.dumps({
         "image": str(image), "source_size": [sw, sh], "sam_input_side": side,
         "phrases": phrases, "masks": index}, indent=1))
+    preview = img.convert("RGBA")
+    for _area, big in sorted(layers, key=lambda p: -p[0]):  # small things stay on top
+        preview.alpha_composite(big)
     preview.convert("RGB").save(out / "preview.png")
     return index
 

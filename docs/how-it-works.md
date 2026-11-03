@@ -105,10 +105,20 @@ See [game data](game-data.md).
   three fit about as well, it asks which one. "Who's here?" is answered the same way, nearest
   first, in steps and d-pad directions.
 - **Where is it?** (`locate.py`, `app.py`): SAM 3.1 looks for the thing asked about and returns
-  segmentation masks/boxes; these can be empty or wrong. Muse Spark looks for it too (SAM doesn't know many
+  a box and a pixel mask for each match; these can be empty or wrong. This path uses the boxes,
+  and the masks are left undecoded so it stays quick. Muse Spark looks for it too (SAM doesn't know many
   game things, like a pixel-art cat) and for your character. The answer is from your character
   when it's known ("4 steps up and 2 to your left", nearest first), and each match gets a short
   sound panned to its side.
+- **What's around me?** (`agent.py`, `locate.py`): an open question about what's in view, with
+  a short prompt, asks Muse Spark what to look for. Its `find` tool sends SAM 3.1 up to five
+  phrases on one frame, one call each and all at once, since SAM takes a phrase a call. Each
+  mask is decoded and measured (where its pixels are, what share of the screen they cover); a
+  thing two phrases outlined counts once. The player hears what was found, a ping panned to
+  each thing, then Spark's answer from the numbers and the picture. Position and area say how
+  big a thing looks, not how far away it is, so the answer doesn't claim a distance. In the full
+  agent `find` is an ordinary tool. The masks are PNGs in `<log>.masks/` beside the session log,
+  and the log's `find` event has frame time, phrases and boxes.
 - **Health warnings** (`hud.py`): for real-time games, Muse Spark finds the health and stamina
   bars once; then a few lines of pixel math read them on every frame and play a sound when they
   get low.

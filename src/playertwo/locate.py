@@ -346,9 +346,9 @@ def found_text(found: list[Found]) -> str:
 
 
 def _plural(phrase: str) -> str:
-    if phrase.endswith("s"):
+    if phrase.endswith("s") and not phrase.endswith(("ss", "us")):
         return phrase
-    if phrase.endswith(("sh", "ch", "x")):
+    if phrase.endswith(("ss", "us", "sh", "ch", "x")):
         return phrase + "es"
     if phrase.endswith("y") and phrase[-2:-1] not in "aeiou":
         return phrase[:-1] + "ies"

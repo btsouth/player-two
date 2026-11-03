@@ -340,6 +340,7 @@ def test_found_line_says_what_was_found_in_order():
                        Found("leafy tree", [m] * 8), Found("oak", [m])]) == (
         "I can see a horse, three large rocks, several leafy trees and an oak.")
     assert found_line([Found("bush", [m, m])]) == "I can see two bushes."
+    assert found_line([Found("cactus", [m, m])]) == "I can see two cactuses."
     assert found_line([Found("the distant mountains", [m, m])]) == (
         "I can see two distant mountains.")
     assert found_line([Found("door")]) == "I can't pick out any of those on screen."

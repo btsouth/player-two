@@ -37,8 +37,9 @@ flowchart LR
     muse --> voice
 ```
 
-**Muse picks the tool. Code finds the path and plays the turns.** Supported Chrono Trigger
-commands can also go straight from the local router to an executor. Its default fight routine
+**Muse picks the tool for requests that reach the agent. Code finds the path and plays the
+turns.** Plain requests go straight from a local router to code with no model turn: "where's
+the door?" goes to SAM 3.1, and supported Chrono Trigger commands to an executor. Its default fight routine
 chooses attacks, healing and revives with local rules; Muse does not choose those turns.
 Kokoro runs locally. The Meta models use hosted APIs. Details and limits are below.
 
@@ -201,7 +202,7 @@ speech-dispatcher and NVDA; JAWS is implemented but untested.
 |---|---|
 | Muse Spark 1.3 | Scene narration streams to speech (`narrator.py`, `muse.py`); tool-calling plans in `agent.py`; visual grounding and fallback reads. Offline tools label maps/rooms and build walkthrough steps. The default Chrono Trigger fight loop uses local rules, not model-selected turns. |
 | Muse Voice Transcribe | Live speech-to-text in `listen.py`, with game keywords. It is not the speaking voice. |
-| SAM 3.1 | Segmentation/boxes for “where is it?” and optional walking target refinement (`locate.py`, `walk.py`). No-match falls back to Spark; it is not required for each press. |
+| SAM 3.1 | “Where is it?” (boxes, spoken and panned) and walking target refinement (`locate.py`, `walk.py`), where no match falls back to Spark. For open questions (“what's around me?”), Muse Spark's `find` tool has SAM outline up to five kinds of thing on one frame; the pixel masks are decoded with Meta's `meta-sam-parser`, measured for position and share of the screen, and written beside the session log. Spark answers from those numbers and the picture; they don't say how far away anything is, so neither does it. SAM is not used for each press. |
 | Muse Spark Open | `brain = "open"` switches narration and tool calls to a hosted OpenAI-compatible provider. A saved-frame narration on Baseten returned the visible result text in 6.0 s on Nov 1; this is not a new live agent benchmark. SAM and transcription remain on Meta's API. |
 
 The voice is [Kokoro](https://github.com/hexgrad/kokoro), running locally. Silero VAD detects
