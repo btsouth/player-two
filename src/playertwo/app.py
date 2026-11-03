@@ -343,7 +343,6 @@ class Session:
         self.talk_started = 0.0
         self.capture_failures = 0
         self.asked = ""
-        self.agent_line = False  # what the agent said is still playing, or about to
         self._last_show = 0.0
         self.agent_task: asyncio.Task | None = None
         self.paused = False
@@ -915,6 +914,8 @@ class Session:
         else:
             self.silent_streak += 1
             self.quiet_until = time.monotonic() + min(16.0, 2.0 ** self.silent_streak)
+
+    agent_line = False  # what the agent said is still playing, or about to
 
     # A settled screen this different from the last one is a new scene, back-off or not.
     SCENE_CUT = 0.3

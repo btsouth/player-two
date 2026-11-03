@@ -459,3 +459,26 @@ def test_an_answer_that_replaced_held_narration_is_never_cut_off():
         assert not stopped and s.mixer.current_tag() == ""
 
     asyncio.run(go())
+
+
+async def test_a_new_scene_doesnt_cut_off_what_the_agent_said():
+    s = ears_session(Ears(ever=False))
+    s.pending = (frame(time.monotonic() - 1.0), 1.0)  # a whole new scene
+    s.utt, s.transcribing, s.hands_active = None, False, False
+    s.error_until = s.soft_until = s.quiet_until = 0.0
+    s.SCENE_CUT = 0.5
+    s._reads = lambda f: False
+    s._ears_on = lambda: False
+    idle = [False]
+    s.voice = SimpleNamespace(idle=lambda: idle[0])
+    started = []
+    s._narrate = lambda f, interrupt=False: started.append(interrupt) or asyncio.sleep(0)
+    s.narrating = s.describing = None
+    s.agent_line = True
+    s._maybe_narrate()
+    assert not started and s.pending is not None
+    idle[0] = True
+    s._maybe_narrate()
+    assert not s.agent_line
+    await s.narrating
+    assert started
