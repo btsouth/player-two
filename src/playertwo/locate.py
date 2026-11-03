@@ -345,7 +345,15 @@ def found_text(found: list[Found]) -> str:
     return "\n".join(lines)
 
 
+# Things there's some of, not one of.
+MASS = re.compile(r"\b(grass|water|sand|mud|snow|dirt|smoke|lava|ice|fog|gravel|hay)$",
+                  re.IGNORECASE)
+
+
 def _plural(phrase: str) -> str:
+    for one, many in (("person", "people"), ("woman", "women"), ("man", "men")):
+        if phrase.endswith(one):
+            return phrase[:-len(one)] + many
     if phrase.endswith("s") and not phrase.endswith(("ss", "us")):
         return phrase
     if phrase.endswith(("ss", "us", "sh", "ch", "x")):
@@ -362,7 +370,9 @@ def found_line(found: list[Found]) -> str:
     for f in found:
         n = len(f.matches)
         name = re.sub(r"^(a|an|the|some)\s+", "", f.phrase, flags=re.IGNORECASE)
-        if n == 1:
+        if n and MASS.search(name):
+            parts.append(f"some {name}")
+        elif n == 1:
             parts.append(f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}")
         elif n > 1:
             parts.append(f"{ {2: 'two', 3: 'three'}.get(n, 'several') } {_plural(name)}")
