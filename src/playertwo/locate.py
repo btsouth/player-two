@@ -245,6 +245,10 @@ async def segment(muse: Muse, img: Image.Image, phrase: str, side: int = 1280) -
 FIND_MAX = 5  # phrases in one find
 PING_MAX = 8  # things pinged after one find
 SAM_LOOK_S = 8.0  # a phrase SAM hasn't answered by then is left out, so the player isn't kept
+# The picture find sends SAM. Masks decode in pure Python, a few microseconds a pixel on one
+# core: at 1280 a big tree took over a second, with the player waiting on it. Position and
+# area don't need more. (For pictures, scripts/sam_masks.py asks for more on its own.)
+FIND_SIDE = 960
 
 
 @dataclass
@@ -276,7 +280,7 @@ async def find_all(muse: Muse, img: Image.Image, phrases: list[str]) -> list[Fou
     async def one(phrase: str) -> Found:
         try:
             async with asyncio.timeout(SAM_LOOK_S):
-                matches = await segment(muse, img, phrase)
+                matches = await segment(muse, img, phrase, side=FIND_SIDE)
             # In a thread: a big mask takes a moment, and the game's audio shouldn't wait.
             return Found(phrase, matches, await asyncio.to_thread(lambda: [
                 measure(m) for m in matches]))
@@ -366,6 +370,18 @@ WHERE = re.compile(
 # agent's job, not a question about where things are on screen.
 ACTION_WORDS = {"and", "then", "use", "open", "go", "attack", "heal", "buy", "sell", "equip",
                 "talk", "pick", "give", "cast", "hit", "to", "with", "for", "me", "out"}
+
+
+OPEN_REQUEST = re.compile(
+    r"^(?:hey,? |so,? |okay,? |ok,? )?(?:what|what's|whats|anything|is there|are there|is anyone"
+    r"|is anybody|can i|could i|where can|where could)\b.*\b(?:around|nearby|near|cover|hide"
+    r"|behind|ahead|out there|in front|next to|beside|see from|see here)\b", re.IGNORECASE)
+
+
+def open_request(text: str) -> bool:
+    """An open question about what's in view ("what's around me?"), for find, where the
+    model's first move is plain and shouldn't take long."""
+    return bool(OPEN_REQUEST.match(text.strip().replace("\u2019", "'")))
 
 
 def where_request(text: str) -> str | None:

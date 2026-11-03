@@ -41,7 +41,7 @@ from .battle import (
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
-from .locate import FIND_MAX, find_all, find_phrases, found_text
+from .locate import FIND_MAX, FIND_SIDE, find_all, find_phrases, found_text, open_request
 from .muse import Muse, image_part
 from .notes import GameNotes
 from .prompts import (
@@ -53,6 +53,8 @@ from .prompts import (
     FOES_NAMED,
     GAME_CONTEXT,
     LANGUAGE,
+    OPEN_ANSWER,
+    OPEN_LOOK,
     WHO_GLOVE,
 )
 from .screen import Frame, thumb
@@ -385,6 +387,7 @@ FIELD_MENU = True  # the field_menu tool is offered (menu.py)
 BATTLE_TOOLS = [*CT_TOOLS[:2], *(t for t in TOOLS if t["function"]["name"] in (
     "say", "ask_player", "remember", "wait", "finish"))]
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
+FIND_ONLY = [t for t in TOOLS if t["function"]["name"] == "find"]
 TOOL_TEXT = json.dumps([*TOOLS, *CT_TOOLS])  # the tools as the model reads them
 # Out of steps but not done: the player can say to keep going (that adds steps).
 FINISH_OR_ASK = [t for t in TOOLS if t["function"]["name"] in ("finish", "ask_player")]
@@ -395,10 +398,6 @@ WALK_ERRORS = (ValueError, TypeError, IndexError, OSError, RuntimeError, openai.
 WALK_FAILED = ("blocked", "timeout", "lost", "not_found", "walking failed")
 # A text box or a cutscene in the way: not the way being cut off, nor a walk that got there.
 WALK_PAUSED = ("didnt_move", "interrupted")
-
-
-FIND_DONE = ("Answer the player now: call finish with two short spoken sentences, no line "
-             "breaks.")
 
 
 def merge_finds(calls: list) -> list:
@@ -1511,7 +1510,7 @@ class Agent:
         phrases = find_phrases(a.get("phrases"))
         if not phrases:
             return "find needs phrases: a list of things to outline, one thing each"
-        frame = await self.grab()
+        frame = self._found_frame = await self.grab()
         frame_t, t = time.time(), time.monotonic()
         found = await find_all(self.muse, frame.image, phrases[:FIND_MAX])
         if self.on_action:
@@ -1521,6 +1520,57 @@ class Agent:
         text = found_text(found)
         if phrases[FIND_MAX:]:
             text += f"\nNot looked for, five at a time: {', '.join(phrases[FIND_MAX:])}"
+        return text
+
+    async def _open_answer(self, request: str, frame: Frame, run: Run, t0: float,
+                           recent: str) -> str:
+        """An open question about what's in view, answered from SAM's outlines: Muse Spark
+        says what to look for, then answers from the result. Both with short prompts, since
+        the player's waiting and nothing gets pressed. "" if it didn't come to an answer,
+        and the full agent takes the request."""
+        about = LANGUAGE.format(language=self.language) + (
+            "\n" + GAME_CONTEXT.format(game=self.game) if self.game else "")
+        said = (f"Earlier requests:\n{recent}\n\n" if recent else "") + \
+            f'The player says: "{request}"'
+        t = time.monotonic()
+        msg = await self.muse.tools(
+            [{"role": "system", "content": f"{OPEN_LOOK}\n{about}"},
+             {"role": "user", "content": [image_part(frame.image, self.muse.s.image_max_side),
+                                          {"type": "text", "text": said}]}],
+            FIND_ONLY, effort="minimal")
+        run.turns.append({"model_s": round(time.monotonic() - t, 2)})
+        await self.go.wait()
+        find = next((c for c in merge_finds(msg.tool_calls or [])
+                     if c.function.name == "find"), None)
+        if find is None or self.cancelled:
+            return ""
+        try:
+            args = json.loads(find.function.arguments or "{}")
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(args, dict) or not find_phrases(args.get("phrases")):
+            return ""
+        step = Step("find", args, time.monotonic() - t0)
+        run.steps.append(step)
+        t = time.monotonic()
+        step.result = await self._find(args)
+        self._grounds.add(step.result, json.dumps(args))
+        run.turns[-1]["act_s"] = round(time.monotonic() - t, 2)
+        await self.go.wait()
+        if self.cancelled:
+            return ""
+        t = time.monotonic()
+        text = "".join([d async for d in self.muse.stream(
+            [{"role": "system", "content": f"{OPEN_ANSWER}\n{about}"},
+             {"role": "user", "content": [image_part(self._found_frame.image, FIND_SIDE),
+                                          {"type": "text",
+                                           "text": f"{said}\n\n{step.result}"}]}],
+            effort="minimal")])
+        run.turns.append({"model_s": round(time.monotonic() - t, 2)})
+        text = " ".join(text.split())
+        if not text or self.cancelled or not await self._on_topic(text):
+            return ""
+        await self._speak(text)
         return text
 
     def _tools(self, frame: Frame | None) -> list[dict]:
@@ -2841,6 +2891,13 @@ class Agent:
                                         tried, self._battle_note(), TOOL_TEXT, BATTLE_CT,
                                         *heard)
         self._held = 0  # lines not said for being off the point, this request
+        if self._battle is None and not tried and open_request(request):
+            line = await self._open_answer(request, frame, run, t0, recent)
+            if line or self.cancelled:
+                run.outcome = line or "cancelled"
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
         # The player's answer to a question sets a new course: it gets turns of its own.
         budget, _turn, out_of_turns = self.max_turns, -1, True
         # A fight: as many battle commands as the player named, then only finish (live:
@@ -2849,7 +2906,6 @@ class Agent:
         asked = len(COMMANDS.findall(" ".join(request.lower().split())))
         commanded = sum(1 for st in run.steps if st.tool == "battle"
                         and st.result.startswith("done:"))
-        calls: list = []
         while _turn + 1 < budget:
             _turn += 1
             if self.cancelled:
@@ -2859,14 +2915,10 @@ class Agent:
             t_model = time.monotonic()
             last_turn = _turn == budget - 1
             done_fighting = bool(asked) and self._battle is not None and commanded >= asked
-            # After find the looking is done: only the answer is left, and the player's
-            # waiting (live: 8 s of thinking at the usual effort, on the same picture).
-            found_it = bool(calls) and all(c.function.name == "find" for c in calls)
             msg = await self.muse.tools(trim_images(msgs), self._tools(frame)
                                         if not last_turn and not done_fighting
                                         else FINISH_ONLY if done_fighting or not self.ask
-                                        else FINISH_OR_ASK,
-                                        effort="minimal" if found_it else None)
+                                        else FINISH_OR_ASK)
             turn = {"model_s": round(time.monotonic() - t_model, 2)}
             run.turns.append(turn)
             await self.go.wait()
@@ -3044,11 +3096,6 @@ class Agent:
                         "You were out of steps, so the player was asked whether to keep "
                         f'going. They said: "{answer}". Carry on.')})
             turn["act_s"] = round(time.monotonic() - t_act, 2)
-            if calls and all(c.function.name == "find" for c in calls) and not last_turn:
-                # Nothing moved for it, and its result is about the picture already seen:
-                # no second picture to wait on, the answer's all that's left.
-                msgs.append({"role": "user", "content": FIND_DONE})
-                continue
             t_look = time.monotonic()
             # After a say too: the model may be waiting for text still typing out.
             if noise is None and calls and all(c.function.name in STILL_TOOLS

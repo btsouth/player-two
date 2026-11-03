@@ -131,10 +131,11 @@ class Stream:
 class FakeMuse:
     """Spark splits its phrases across two finds, then answers; SAM answers from RAW."""
 
-    def __init__(self, bad=()):
-        self.asked, self.images, self.efforts, self.seen = [], [], [], []
+    def __init__(self, bad=(), answer="A horse right of the middle of the screen."):
+        self.asked, self.images, self.efforts, self.seen, self.offered = [], [], [], [], []
         self.bad = bad
-        self.s = SimpleNamespace(image_max_side=1280)
+        self.answer = answer
+        self.s = SimpleNamespace(image_max_side=1280, effort="minimal", agent_effort="low")
         self.client = SimpleNamespace(responses=SimpleNamespace(stream=self._sam))
 
     def _sam(self, model, input):
@@ -149,6 +150,7 @@ class FakeMuse:
     async def tools(self, messages, tools, effort=None, max_tokens=3000):
         self.efforts.append(effort)
         self.seen.append(messages)
+        self.offered.append([t["function"]["name"] for t in tools])
         if len(self.efforts) == 1:
             return SimpleNamespace(content="", tool_calls=[
                 call("find", {"phrases": ["horse"]}, "a"),
@@ -156,13 +158,18 @@ class FakeMuse:
         return SimpleNamespace(content="", tool_calls=[
             call("finish", {"text": "A horse right of the middle of the screen."}, "c")])
 
+    async def stream(self, messages, effort=None, max_tokens=1500):
+        self.efforts.append(effort)
+        self.seen.append(messages)
+        for word in self.answer.split(" "):
+            yield word + " "
 
-async def run_agent(muse):
+
+async def run_agent(muse, request="What's around me, and what could I hide behind?"):
     img = Image.new("RGB", (1280, 720), (90, 120, 60))
-    said, acts, grabs = [], [], []
+    said, acts = [], []
 
     async def grab():
-        grabs.append(1)
         return Frame(img, 1.0)
 
     async def speak(text):
@@ -170,26 +177,28 @@ async def run_agent(muse):
 
     agent = Agent(muse, SimpleNamespace(), grab, speak, game="Some Game",
                   on_action=lambda n, a: acts.append((n, a)))
-    run = await agent.run("What's around me, and what could I hide behind?")
-    return run, said, acts, grabs
+    return await agent.run(request), said, acts
 
 
-async def test_the_agent_gathers_split_finds_on_one_frame(tmp_path):
+async def test_an_open_question_gathers_split_finds_on_one_frame_and_answers():
     muse = FakeMuse()
-    run, said, acts, _ = await run_agent(muse)
+    run, said, acts = await run_agent(muse)
     assert sorted(muse.asked) == ["boulder", "horse"]  # one phrase a SAM call, as written
     assert len(set(muse.images)) == 1  # one frame
-    assert [s.tool for s in run.steps] == ["find", "finish"]
+    assert muse.offered == [["find"]]
+    assert [s.tool for s in run.steps] == ["find"]
     assert said == ["A horse right of the middle of the screen."]
-    # The answer's turn is quick and has no second picture to read.
-    assert muse.efforts == [None, "minimal"]
-    last = muse.seen[1]
-    assert sum(isinstance(m["content"], list) for m in last if m["role"] == "user") == 1
-    # The tool result is short and says what it can't.
+    assert run.outcome == said[0]
+    # Short prompts both ways, at the quickest effort: the player's waiting.
+    assert muse.efforts == ["minimal", "minimal"]
+    assert all(len(m[0]["content"]) < 1500 for m in muse.seen)
+    # The answer is written from the result, which says what it can't.
     result = run.steps[0].result
     assert "horse: 1 found" in result and "boulder: none found" in result
     assert "not how far away" in result
     assert "mask" not in result.lower()
+    assert result in muse.seen[1][1]["content"][1]["text"]
+    assert "never give a distance" in muse.seen[1][0]["content"]
     # The log gets the whole of it through on_action.
     [(name, data)] = [a for a in acts if a[0] == "found"]
     assert name == "found" and data["phrases"] == ["horse", "boulder"]
@@ -197,6 +206,31 @@ async def test_the_agent_gathers_split_finds_on_one_frame(tmp_path):
     [horse, boulder] = data["found"]
     assert horse.matches[0].mask is not None and not boulder.matches
     assert not any(a[0] == "find" for a in acts)  # no focus change, nothing pressed
+
+
+async def test_a_find_in_any_other_request_is_an_ordinary_tool_of_the_full_agent():
+    muse = FakeMuse()
+    run, said, _ = await run_agent(muse, "Get me to shelter")
+    assert sorted(muse.asked) == ["boulder", "horse"]
+    assert "find" in muse.offered[0] and "press" in muse.offered[0]
+    assert [s.tool for s in run.steps] == ["find", "finish"]
+    assert said == ["A horse right of the middle of the screen."]
+
+
+async def test_an_open_question_without_a_find_goes_to_the_full_agent():
+    class NoFind(FakeMuse):
+        async def tools(self, messages, tools, effort=None, max_tokens=3000):
+            self.offered.append([t["function"]["name"] for t in tools])
+            if len(self.offered) == 1:
+                return SimpleNamespace(content="Lots of things.", tool_calls=[])
+            return SimpleNamespace(content="", tool_calls=[
+                call("finish", {"text": "A horse, on the right of the screen."}, "c")])
+
+    muse = NoFind()
+    run, said, _ = await run_agent(muse, "What's around me?")
+    assert muse.offered[0] == ["find"] and "press" in muse.offered[1]
+    assert said == ["A horse, on the right of the screen."]
+    assert [s.tool for s in run.steps] == ["finish"]
 
 
 async def test_one_phrase_failing_leaves_the_others():
@@ -290,6 +324,18 @@ def test_session_logs_masks_beside_the_log_and_pings_each_object(tmp_path):
     assert cues == ["idle", ("ping", pan), ("ping", pan), ("ping", pan)]
     assert pan == 0.54  # 0.29 on screen, spread
     assert s.found is None
+
+
+def test_open_request_spots_open_questions_only():
+    from playertwo.locate import open_request
+
+    for text in ("What could I use for cover, and is my horse near any of it?",
+                 "What\u2019s around me?", "Is there anywhere to hide?", "What's out there ahead?",
+                 "ok what can I see from here", "Is anyone nearby?"):
+        assert open_request(text), text
+    for text in ("What's the battle mode set to?", "Where's my horse?", "What does it say?",
+                 "What's my health?", "Attack the one in front"):
+        assert not open_request(text), text
 
 
 def test_where_questions_stay_on_the_fast_path_and_open_ones_go_to_the_agent():
