@@ -391,6 +391,7 @@ class Session:
                            self.agent_say,
                            game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
                            language=settings.language, on_action=self.on_action)
+        self.agent.ping_found = self._ping_found
         # What was said lately (narration, the reader, answers): the screen in words, for
         # the agent's check that a line it's about to say is about the game.
         self.agent.context_lines = lambda: [e["text"] for e in self.events.recent
@@ -595,7 +596,7 @@ class Session:
                          seconds=args["seconds"], found=record)
 
     async def _ping_found(self) -> None:
-        """A ping from where each thing find outlined is, once the answer's been said."""
+        """A ping from where each thing find outlined is, once what's being said is said."""
         order = ping_order(self.found or [])
         self.found = None
         if not order:

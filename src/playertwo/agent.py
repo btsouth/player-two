@@ -41,7 +41,15 @@ from .battle import (
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
-from .locate import FIND_MAX, FIND_SIDE, find_all, find_phrases, found_text, open_request
+from .locate import (
+    FIND_MAX,
+    FIND_SIDE,
+    find_all,
+    find_phrases,
+    found_line,
+    found_text,
+    open_request,
+)
 from .muse import Muse, image_part
 from .notes import GameNotes
 from .prompts import (
@@ -658,6 +666,7 @@ class Agent:
         self.max_settle_s = max_settle_s
         self.ask = ask
         self.on_action = on_action
+        self.ping_found: Callable[[], Awaitable[None]] | None = None  # the sound of a find
         self.look_before_confirm = look_before_confirm
         self.confirm = confirm
         self.language = language
@@ -1512,7 +1521,7 @@ class Agent:
             return "find needs phrases: a list of things to outline, one thing each"
         frame = self._found_frame = await self.grab()
         frame_t, t = time.time(), time.monotonic()
-        found = await find_all(self.muse, frame.image, phrases[:FIND_MAX])
+        found = self._found = await find_all(self.muse, frame.image, phrases[:FIND_MAX])
         if self.on_action:
             self.on_action("found", {"frame_t": frame_t, "phrases": phrases[:FIND_MAX],
                                      "found": found,
@@ -1526,8 +1535,10 @@ class Agent:
                            recent: str) -> str:
         """An open question about what's in view, answered from SAM's outlines: Muse Spark
         says what to look for, then answers from the result. Both with short prompts, since
-        the player's waiting and nothing gets pressed. "" if it didn't come to an answer,
-        and the full agent takes the request."""
+        the player's waiting and nothing gets pressed. As soon as SAM's back they hear what
+        it found and a ping from where each thing is, which is about as long as Spark takes
+        to think (live: 3 to 10 s a turn, whatever the prompt or the picture's size). "" if
+        it didn't come to an answer, and the full agent takes the request."""
         about = LANGUAGE.format(language=self.language) + (
             "\n" + GAME_CONTEXT.format(game=self.game) if self.game else "")
         said = (f"Earlier requests:\n{recent}\n\n" if recent else "") + \
@@ -1553,25 +1564,51 @@ class Agent:
         step = Step("find", args, time.monotonic() - t0)
         run.steps.append(step)
         t = time.monotonic()
-        step.result = await self._find(args)
+        await self._find(args)
+        found = self._found
+        step.result = found_text(found)
         self._grounds.add(step.result, json.dumps(args))
         run.turns[-1]["act_s"] = round(time.monotonic() - t, 2)
         await self.go.wait()
         if self.cancelled:
             return ""
-        t = time.monotonic()
-        text = "".join([d async for d in self.muse.stream(
-            [{"role": "system", "content": f"{OPEN_ANSWER}\n{about}"},
-             {"role": "user", "content": [image_part(self._found_frame.image, FIND_SIDE),
-                                          {"type": "text",
-                                           "text": f"{said}\n\n{step.result}"}]}],
-            effort="minimal")])
-        run.turns.append({"model_s": round(time.monotonic() - t, 2)})
+        heard = found_line(found) if "English" in self.language else ""
+
+        async def first_sound() -> None:
+            if heard:
+                await self._speak(heard)
+            if self.ping_found:
+                await self.ping_found()
+
+        sounding = asyncio.create_task(first_sound())
+        try:
+            t = time.monotonic()
+            text = "".join([d async for d in self.muse.stream(
+                [{"role": "system", "content": f"{OPEN_ANSWER}\n{about}"},
+                 {"role": "user", "content": [
+                     image_part(self._found_frame.image, FIND_SIDE),
+                     {"type": "text", "text": f"{said}\n\n{step.result}"
+                      + (f'\n\nThey have just heard: "{heard}"' if heard else "")}]}],
+                effort="minimal")])
+            run.turns.append({"model_s": round(time.monotonic() - t, 2)})
+            await sounding
+        except openai.APIError as exc:
+            # They've heard what was found: a stuck second turn needn't undo that.
+            if self.on_action:
+                self.on_action("walk_note", {"text": f"answer after find failed: {exc}"})
+            if heard:
+                return heard
+            raise
+        finally:
+            sounding.cancel()
         text = " ".join(text.split())
-        if not text or self.cancelled or not await self._on_topic(text):
-            return ""
+        # It's about what was outlined, by name: no need of a second look on top of the wait.
+        named = {stem for f in found if f.matches for stem in ontopic.content(f.phrase)}
+        sure = bool(named & set(ontopic.content(text))) and not ontopic.about_itself(text)
+        if not text or self.cancelled or not (sure or await self._on_topic(text)):
+            return heard
         await self._speak(text)
-        return text
+        return f"{heard} {text}".strip()
 
     def _tools(self, frame: Frame | None) -> list[dict]:
         if self._battle is not None:

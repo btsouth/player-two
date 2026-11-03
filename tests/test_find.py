@@ -187,8 +187,9 @@ async def test_an_open_question_gathers_split_finds_on_one_frame_and_answers():
     assert len(set(muse.images)) == 1  # one frame
     assert muse.offered == [["find"]]
     assert [s.tool for s in run.steps] == ["find"]
-    assert said == ["A horse right of the middle of the screen."]
-    assert run.outcome == said[0]
+    # What SAM found at once, then what Spark makes of it.
+    assert said == ["I can see a horse.", "A horse right of the middle of the screen."]
+    assert run.outcome == " ".join(said)
     # Short prompts both ways, at the quickest effort: the player's waiting.
     assert muse.efforts == ["minimal", "minimal"]
     assert all(len(m[0]["content"]) < 1500 for m in muse.seen)
@@ -261,6 +262,58 @@ def test_found_text_lists_the_biggest_and_counts_the_rest():
     line = found_text([Found("tree", [Match(0, 0, 0)] * 9, many)]).split("\n")[1]
     assert line.startswith("tree: 9 found") and line.endswith("and 3 smaller")
     assert line.index("area 9.0%") < line.index("area 8.0%")
+
+
+async def test_pings_come_after_the_found_line_and_before_the_answer():
+    muse = FakeMuse()
+    order = []
+    img = Image.new("RGB", (1280, 720))
+
+    async def grab():
+        return Frame(img, 1.0)
+
+    async def speak(text):
+        order.append(text)
+
+    async def ping():
+        order.append("ping")
+
+    agent = Agent(muse, SimpleNamespace(), grab, speak, game="Some Game")
+    agent.ping_found = ping
+    await agent.run("What's around me?")
+    assert order == ["I can see a horse.", "ping", "A horse right of the middle of the screen."]
+
+
+async def test_an_answer_naming_nothing_found_still_gets_the_second_look():
+    muse = FakeMuse(answer="Football fouls are called by the referee on the pitch every game.")
+    verdicts = []
+
+    async def no(*a):
+        verdicts.append(a)
+        return False
+
+    from playertwo import ontopic
+
+    keep, ontopic.second_look = ontopic.second_look, no
+    try:
+        run, said, _ = await run_agent(muse, "What's around me?")
+    finally:
+        ontopic.second_look = keep
+    assert verdicts and said == ["I can see a horse."]
+    assert run.outcome == "I can see a horse."
+
+
+def test_found_line_says_what_was_found_in_order():
+    from playertwo.locate import found_line
+
+    m = Match(0.5, 0.5, 0.1)
+    assert found_line([Found("horse", [m]), Found("large rock", [m] * 3), Found("cactus"),
+                       Found("leafy tree", [m] * 8), Found("oak", [m])]) == (
+        "I can see a horse, three large rocks, several leafy trees and an oak.")
+    assert found_line([Found("bush", [m, m])]) == "I can see two bushes."
+    assert found_line([Found("the distant mountains", [m, m])]) == (
+        "I can see two distant mountains.")
+    assert found_line([Found("door")]) == "I can't pick out any of those on screen."
 
 
 def test_ping_order_is_per_object_a_phrase_at_a_time_left_to_right():

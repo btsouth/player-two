@@ -3,7 +3,7 @@
 
     python scripts/vision_ask.py frame.png "What's around me?" -o out/ --game "Some Game"
 
-Writes out/system.txt (the prompt), out/run.json (request, every tool call and result, what was said and when, the
+Writes out/prompts.txt, out/run.json (request, every tool call and result, what was said and when, the
 model's turns), out/masks/ (one PNG per mask, by box) and out/overlay.png.
 """
 
@@ -25,6 +25,7 @@ from playertwo.config import Settings
 from playertwo.locate import found_record, ping_order, wide_pan
 from playertwo.muse import Muse
 from playertwo.notes import GameNotes
+from playertwo.prompts import OPEN_ANSWER, OPEN_LOOK
 from playertwo.screen import Frame
 
 COLORS = [(242, 193, 78), (90, 200, 250), (250, 110, 110), (120, 230, 140), (200, 140, 250)]
@@ -79,7 +80,14 @@ async def main(a) -> int:
     with tempfile.TemporaryDirectory() as notes:
         agent = Agent(muse, controls, grab, speak, game=a.game, on_action=on_action,
                       notes=GameNotes(Path(notes)))
-        (a.out / "system.txt").write_text(agent.system())
+
+        async def sound() -> None:
+            # As long as saying the found line and the pings take in the app.
+            await asyncio.sleep(len(said[-1]["text"]) * 0.065 if said else 0)
+            await asyncio.sleep(0.28 * len(ping_order(last)) + 0.25 * len(last))
+
+        agent.ping_found = sound
+        (a.out / "prompts.txt").write_text(f"{OPEN_LOOK}\n\n{OPEN_ANSWER}\n\n{agent.system()}")
         run = await agent.run(a.request, await grab())
     (a.out / "run.json").write_text(json.dumps({
         "image": str(a.image), "request": a.request, "game": a.game, "model": muse.model,

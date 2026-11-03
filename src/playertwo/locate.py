@@ -323,6 +323,33 @@ def found_text(found: list[Found]) -> str:
     return "\n".join(lines)
 
 
+def _plural(phrase: str) -> str:
+    if phrase.endswith("s"):
+        return phrase
+    if phrase.endswith(("sh", "ch", "x")):
+        return phrase + "es"
+    if phrase.endswith("y") and phrase[-2:-1] not in "aeiou":
+        return phrase[:-1] + "ies"
+    return phrase + "s"
+
+
+def found_line(found: list[Found]) -> str:
+    """What was outlined, in a sentence, in the order the pings come. SAM's counts run high on
+    small things, so more than three is "several"."""
+    parts = []
+    for f in found:
+        n = len(f.matches)
+        name = re.sub(r"^(a|an|the|some)\s+", "", f.phrase, flags=re.IGNORECASE)
+        if n == 1:
+            parts.append(f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}")
+        elif n > 1:
+            parts.append(f"{ {2: 'two', 3: 'three'}.get(n, 'several') } {_plural(name)}")
+    if not parts:
+        return "I can't pick out any of those on screen."
+    return "I can see " + (parts[0] if len(parts) == 1
+                           else ", ".join(parts[:-1]) + " and " + parts[-1]) + "."
+
+
 def ping_order(found: list[Found], limit: int = PING_MAX) -> list[tuple[str, float]]:
     """(phrase, pan) to ping, a phrase at a time and left to right within it. Past `limit`
     the biggest of each phrase take turns, so every phrase found gets heard."""
