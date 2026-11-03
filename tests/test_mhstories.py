@@ -669,3 +669,8 @@ def test_a_message_read_twice_as_it_fades_in_is_said_once(game, quick):
 
     run(go())
     assert said == ["That's a part broken!", "We lost a heart."]
+
+
+def test_a_broken_part_hit_to_finish_it_off_isnt_called_the_target():
+    plan = m.Plan("attack", part=part("Tail", "slash", broken=True), weapon=1)
+    assert m.Lines().choice(view(), plan, False) == "Hitting it with the sword."

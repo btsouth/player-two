@@ -764,7 +764,9 @@ class Lines:
             return self.pick(f"{plan.item} on {'you' if plan.on == 'Zerk' else plan.on}.",
                              f"Another {plan.item.lower()} for "
                              f"{'you' if plan.on == 'Zerk' else plan.on}.")
-        part = plan.part.name.lower() if plan.part and named(plan.part) else ""
+        # A part already broken isn't what's being worked on: it's only where the damage goes.
+        part = plan.part.name.lower() if plan.part and named(plan.part) and not plan.part.broken \
+            else ""
         weapon = short(view.weapons[plan.weapon].name) if view.weapons else ""
         if plan.do == "skill" and plan.skill:
             where = f" on the {part}" if part and part != self.opened_on else ""
@@ -1499,7 +1501,7 @@ class Fight:
             if "broke" in text and "part" in text:  # which one, the next wheel shows
                 self.break_heard = True
                 self.say(self.lines.pick("That's a part broken!", "Another part broken!"))
-            if "got us" in text:  # a rider or partner down, and a heart with them
+            if "got us" in text or "in trouble" in text:  # someone down, and a heart with them
                 self.say(self.lines.pick("We lost a heart.", "That's another heart gone."))
             if "toppled" in text:
                 self.say(self.lines.pick("It's down!", "Knocked it over again."))
