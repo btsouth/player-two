@@ -11,7 +11,7 @@ answers aloud, sends controller or keyboard input, and checks what changed.
 Chrono Trigger has the deepest support. Monster Hunter Stories 3 uses a game-specific
 battle routine. Red Dead Redemption demonstrates reading, answering and keyboard input.
 
-**No blind player has tested it yet.**
+**No blind or motor-impaired player has tested it yet.**
 
 ## How it works
 
@@ -282,15 +282,16 @@ suite above. Its requests are typed. Live microphone requests and the final vide
 
 | Game | In this cut | Scope |
 |---|---|---|
-| Chrono Trigger (Steam) | A low-HP rescue win, then a forest walk and the request “Keep going” to reach Guardia Castle | Local code plays the fight turns. The forest fight is omitted and labelled; castle arrival follows a second request. This cut does not show the shop or the return to the fair. |
+| Hollow Knight: Silksong | Reads a line of the opening poem and describes a scene, unprompted | Nothing written for this game |
+| Chrono Trigger (Steam) | A low-HP rescue win | Local code plays the fight turns. |
 | Monster Hunter Stories 3 | Battle status, weak points and a Somnacanth win | A routine written for this game plays the turns. Source gameplay uses the game's 2x battle setting; the film plays that recording at 1x. No potion use is shown. |
-| Red Dead Redemption | Opens the journal with keyboard input, reads one complete sentence, then finds a horse with SAM 3.1 in a labelled separate take | A person moves John. No autonomous 3D traversal. No Red Dead-specific code was written; its game notes contain one line, `Voiced: all`. |
+| Red Dead Redemption | Opens the journal with keyboard input, then in one take: a cover question, Spark's `find`, SAM 3.1's outlines, a ping per object, Spark's answer | A person moves John. No autonomous 3D traversal. No Red Dead code; one line in a local notes file. |
 
 Separate from this cut: eight recorded Somnacanth takes won eight fights. Frame review found
 false next-attack narration in three earlier takes; none was found in the selected take, t13.
 That is developer review, not a guarantee of correct narration. In the recorded Red Dead SAM
 session, two of six requests returned no boxes; the film selects a successful horse request.
-The Linux game-speech hold reduced overlap on one separate recorded clip from 12.7 s to 1.1 s;
+In the recorded cover-question session on Red Dead, 4 of 8 attempts were true against the frame SAM saw; the film selects one. The Linux game-speech hold reduced overlap on one separate recorded clip from 12.7 s to 1.1 s;
 one separate 87 s live cutscene had no Player Two line. Those benchmarks are not shown in this cut.
 
 Final spoken results for Chrono Trigger, Monster Hunter Stories 3 and Red Dead Redemption,
