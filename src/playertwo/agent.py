@@ -41,6 +41,15 @@ from .battle import (
 from .controls import BUTTONS, DIRECTIONS, Controls
 from .ctsteam import State
 from .explore import ANGLES, Trail, find_me, keep_walking, words
+from .locate import (
+    FIND_MAX,
+    FIND_SIDE,
+    find_all,
+    find_phrases,
+    found_line,
+    found_text,
+    open_request,
+)
 from .muse import Muse, image_part
 from .notes import GameNotes
 from .prompts import (
@@ -52,6 +61,8 @@ from .prompts import (
     FOES_NAMED,
     GAME_CONTEXT,
     LANGUAGE,
+    OPEN_ANSWER,
+    OPEN_LOOK,
     WHO_GLOVE,
 )
 from .screen import Frame, thumb
@@ -64,7 +75,7 @@ PROGRESS_GAP_S = 8.0
 # (live 3: lines 8 s apart at most left silences of 4 to 14 s in a fight).
 FIGHT_LINE_GAP_S = 4.0
 # Tools that press nothing: after them the screen is looked at once, not waited on.
-STILL_TOOLS = {"where_am_i", "next_goal", "guide", "exits", "area_map", "remember"}
+STILL_TOOLS = {"where_am_i", "next_goal", "guide", "exits", "area_map", "remember", "find"}
 # Walking around by trial and error in one request stops after this long: wandering on
 # camera looks lost, and an honest "I don't know the way here yet" is better.
 FOES_SIDE = 1536  # the enemy count's picture, longest side (see count_foes)
@@ -254,6 +265,19 @@ TOOLS = [
                        "to look for something that isn't on screen.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "find",
+        "description": "Have SAM 3.1 outline things on the screen right now, for an open "
+                       "question about what's around or what could be used for something. "
+                       "Give every thing worth checking in one call, up to five, one thing "
+                       "per phrase. For each it returns how many, where on the screen and how "
+                       "much of the screen it covers. That says how big a thing looks, not "
+                       "how far away it is. Presses nothing.",
+        "parameters": {"type": "object", "properties": {
+            "phrases": {"type": "array", "items": {"type": "string"},
+                        "description": "Up to five, each a thing to outline in a few plain "
+                                       "words, such as \"tree\" or \"wooden door\"."},
+        }, "required": ["phrases"]}}},
+    {"type": "function", "function": {
         "name": "area_map",
         "description": "See a map of this area so far, stitched from everything on "
                        "screen while walking (2D games): exits, gaps, paths and people "
@@ -371,6 +395,7 @@ FIELD_MENU = True  # the field_menu tool is offered (menu.py)
 BATTLE_TOOLS = [*CT_TOOLS[:2], *(t for t in TOOLS if t["function"]["name"] in (
     "say", "ask_player", "remember", "wait", "finish"))]
 FINISH_ONLY = [t for t in TOOLS if t["function"]["name"] == "finish"]
+FIND_ONLY = [t for t in TOOLS if t["function"]["name"] == "find"]
 TOOL_TEXT = json.dumps([*TOOLS, *CT_TOOLS])  # the tools as the model reads them
 # Out of steps but not done: the player can say to keep going (that adds steps).
 FINISH_OR_ASK = [t for t in TOOLS if t["function"]["name"] in ("finish", "ask_player")]
@@ -381,6 +406,20 @@ WALK_ERRORS = (ValueError, TypeError, IndexError, OSError, RuntimeError, openai.
 WALK_FAILED = ("blocked", "timeout", "lost", "not_found", "walking failed")
 # A text box or a cutscene in the way: not the way being cut off, nor a walk that got there.
 WALK_PAUSED = ("didnt_move", "interrupted")
+
+
+def merge_finds(calls: list) -> list:
+    """The model tends to send one find a phrase: they become one, the first, so all its
+    phrases are looked for at once on one frame and answered once."""
+    finds = [c for c in calls if c.function.name == "find"]
+    if len(finds) < 2:
+        return calls
+    phrases = []
+    for c in finds:
+        with contextlib.suppress(json.JSONDecodeError, AttributeError):
+            phrases += find_phrases(json.loads(c.function.arguments or "{}").get("phrases"))
+    finds[0].function.arguments = json.dumps({"phrases": find_phrases(phrases)})
+    return [c for c in calls if c.function.name != "find" or c is finds[0]]
 
 
 def screen_change(a: Frame, b: Frame, cell: float = 0.06) -> float:
@@ -627,6 +666,7 @@ class Agent:
         self.max_settle_s = max_settle_s
         self.ask = ask
         self.on_action = on_action
+        self.ping_found: Callable[[], Awaitable[None]] | None = None  # the sound of a find
         self.look_before_confirm = look_before_confirm
         self.confirm = confirm
         self.language = language
@@ -923,6 +963,8 @@ class Agent:
                 done += (". Stopped before confirming: look at what is highlighted now. If it "
                          "is what the player wants, press a on its own; if not, fix it first.")
             return done
+        if name == "find":
+            return await self._find(a)
         if self.on_action and name != "talk_to":  # its walk_to says it
             self.on_action(name, a)
         if name == "wait":
@@ -1470,6 +1512,106 @@ class Agent:
         if st is None:
             return ""
         return f"{lead}{BATTLE_CT}\nThe fight now: {ctsteam.describe(st)}\n\n"
+
+    async def _find(self, a: dict) -> str:
+        """SAM's outlines on one frame, for the model to reason over; the log and the pings
+        get them through on_action."""
+        phrases = find_phrases(a.get("phrases"))
+        if not phrases:
+            return "find needs phrases: a list of things to outline, one thing each"
+        frame = self._found_frame = await self.grab()
+        frame_t, t = time.time(), time.monotonic()
+        found = self._found = await find_all(self.muse, frame.image, phrases[:FIND_MAX])
+        if self.on_action:
+            self.on_action("found", {"frame_t": frame_t, "phrases": phrases[:FIND_MAX],
+                                     "found": found,
+                                     "seconds": round(time.monotonic() - t, 2)})
+        text = found_text(found)
+        if phrases[FIND_MAX:]:
+            text += f"\nNot looked for, five at a time: {', '.join(phrases[FIND_MAX:])}"
+        return text
+
+    async def _open_answer(self, request: str, frame: Frame, run: Run, t0: float,
+                           recent: str) -> str:
+        """An open question about what's in view, answered from SAM's outlines: Muse Spark
+        says what to look for, then answers from the result. Both with short prompts, since
+        the player's waiting and nothing gets pressed. As soon as SAM's back they hear what
+        it found and a ping from where each thing is, which is about as long as Spark takes
+        to think (live: 3 to 10 s a turn, whatever the prompt or the picture's size). "" if
+        it didn't come to an answer, and the full agent takes the request."""
+        about = LANGUAGE.format(language=self.language) + (
+            "\n" + GAME_CONTEXT.format(game=self.game) if self.game else "")
+        said = (f"Earlier requests:\n{recent}\n\n" if recent else "") + \
+            f'The player says: "{request}"'
+        t = time.monotonic()
+        msg = await self.muse.tools(
+            [{"role": "system", "content": f"{OPEN_LOOK}\n{about}"},
+             {"role": "user", "content": [image_part(frame.image, self.muse.s.image_max_side),
+                                          {"type": "text", "text": said}]}],
+            FIND_ONLY, effort="minimal")
+        run.turns.append({"model_s": round(time.monotonic() - t, 2)})
+        await self.go.wait()
+        find = next((c for c in merge_finds(msg.tool_calls or [])
+                     if c.function.name == "find"), None)
+        if find is None or self.cancelled:
+            return ""
+        try:
+            args = json.loads(find.function.arguments or "{}")
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(args, dict) or not find_phrases(args.get("phrases")):
+            return ""
+        step = Step("find", args, time.monotonic() - t0)
+        run.steps.append(step)
+        t = time.monotonic()
+        await self._find(args)
+        found = self._found
+        step.result = found_text(found)
+        self._grounds.add(step.result, json.dumps(args))
+        run.turns[-1]["act_s"] = round(time.monotonic() - t, 2)
+        await self.go.wait()
+        if self.cancelled:
+            return ""
+        heard = found_line(found) if "English" in self.language else ""
+
+        async def first_sound() -> None:
+            if heard:
+                await self._speak(heard)
+            if self.ping_found:
+                await self.ping_found()
+
+        sounding = asyncio.create_task(first_sound())
+        try:
+            t = time.monotonic()
+            text = "".join([d async for d in self.muse.stream(
+                [{"role": "system", "content": f"{OPEN_ANSWER}\n{about}"},
+                 {"role": "user", "content": [
+                     image_part(self._found_frame.image, FIND_SIDE),
+                     {"type": "text", "text": f"{said}\n\n{step.result}"
+                      + (f'\n\nThey have just heard: "{heard}"' if heard else "")}]}],
+                effort="minimal")])
+            run.turns.append({"model_s": round(time.monotonic() - t, 2)})
+            await sounding
+        except openai.APIError as exc:
+            # They've heard what was found: a stuck second turn needn't undo that. Let the
+            # line and the pings finish first, even when the failure came fast.
+            with contextlib.suppress(Exception):
+                await sounding
+            if self.on_action:
+                self.on_action("walk_note", {"text": f"answer after find failed: {exc}"})
+            if heard:
+                return heard
+            raise
+        finally:
+            sounding.cancel()
+        text = " ".join(text.split())
+        # It's about what was outlined, by name: no need of a second look on top of the wait.
+        named = {stem for f in found if f.matches for stem in ontopic.content(f.phrase)}
+        sure = bool(named & set(ontopic.content(text))) and not ontopic.about_itself(text)
+        if not text or self.cancelled or not (sure or await self._on_topic(text)):
+            return heard
+        await self._speak(text)
+        return f"{heard} {text}".strip()
 
     def _tools(self, frame: Frame | None) -> list[dict]:
         if self._battle is not None:
@@ -2789,6 +2931,13 @@ class Agent:
                                         tried, self._battle_note(), TOOL_TEXT, BATTLE_CT,
                                         *heard)
         self._held = 0  # lines not said for being off the point, this request
+        if self._battle is None and not tried and open_request(request):
+            line = await self._open_answer(request, frame, run, t0, recent)
+            if line or self.cancelled:
+                run.outcome = line or "cancelled"
+                run.seconds = time.monotonic() - t0
+                self.history.append(f"{request} -> {run.outcome}")
+                return run
         # The player's answer to a question sets a new course: it gets turns of its own.
         budget, _turn, out_of_turns = self.max_turns, -1, True
         # A fight: as many battle commands as the player named, then only finish (live:
@@ -2817,7 +2966,7 @@ class Agent:
                 run.outcome = "cancelled"
                 out_of_turns = False
                 break
-            calls = msg.tool_calls or []
+            calls = merge_finds(msg.tool_calls or [])
             msgs.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": [c.model_dump() for c in calls] or None})
             if not calls:

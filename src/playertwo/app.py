@@ -17,12 +17,13 @@ import numpy as np
 from . import ctscreen
 from .ack import ack
 from .agent import Agent
-from .audio import Mixer
+from .audio import PING_NOTES, Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
 from .delivery import companion_line, read_line_style
 from .gameaudio import GameEars, known_voicing, voiced_hint, window_identity
 from .listen import HandsFree, Mic, Utterance, addressed, wake_match
+from .locate import found_record, ping_order, wide_pan
 from .muse import Muse
 from .narrator import Narrator
 from .prompts import (
@@ -380,6 +381,7 @@ class Session:
         self._tasks: set[asyncio.Task] = set()
         self.side_task: asyncio.Task | None = None  # a "where is" or health-bar search
         self.guide_task: asyncio.Task | None = None  # "walk me to it": the side task, too
+        self.found = None  # what the agent's find outlined, this request
         self.unnamed_answer = False  # the answer came hands-free, without "Player Two"
         self.last_trouble = ""  # the last problem said, for "what's wrong?"
         self.fps_before_hud: float | None = None
@@ -389,6 +391,7 @@ class Session:
                            self.agent_say,
                            game=settings.game, ask=self.agent_ask, confirm=settings.confirm,
                            language=settings.language, on_action=self.on_action)
+        self.agent.ping_found = self._ping_found
         # What was said lately (narration, the reader, answers): the screen in words, for
         # the agent's check that a line it's about to say is about the game.
         self.agent.context_lines = lambda: [e["text"] for e in self.events.recent
@@ -553,6 +556,9 @@ class Session:
         self.events.emit("frame", jpeg=base64.b64encode(buf.getvalue()).decode())
 
     def on_action(self, name: str, args: dict) -> None:
+        if name == "found":  # nothing pressed, so the game keeps or loses focus as it was
+            self._log_found(args)
+            return
         # Most games ignore controllers and keys while another window has focus.
         with contextlib.suppress(Exception):
             self.focus_game()
@@ -574,6 +580,45 @@ class Session:
             self.events.emit("off_topic", **args)
         elif name.startswith("mh_"):
             self.events.emit("mh", name=name, **args)
+
+    def _log_found(self, args: dict) -> None:
+        """What find outlined, for the log (masks as files beside it) and the pings."""
+        self.found = args["found"]
+        frame_t = args["frame_t"]
+        log = self.events.log_path
+        try:
+            record = found_record(self.found, log.with_suffix(".masks") if log else None,
+                                  f"{frame_t:.3f}-")
+        except Exception as exc:  # noqa: BLE001  the masks are a record; the answer goes on
+            self.events.emit("error", where="find", message=str(exc)[:300])
+            record = found_record(self.found)
+        self.events.emit("find", frame_t=frame_t, phrases=args["phrases"],
+                         seconds=args["seconds"], found=record)
+
+    async def _ping_found(self) -> None:
+        """A ping from where each thing find outlined is, once what's being said is said."""
+        order = ping_order(self.found or [])
+        self.found = None
+        if not order:
+            return
+        await self.voice.wait_idle(10)
+        # One thing gets three pings: a single short blip is easy to miss over a game.
+        if len(order) == 1:
+            for _ in range(3):
+                self.events.emit("ping", phrase=order[0][0], pan=order[0][1])
+                self.voice.cue("ping", pan=wide_pan(order[0][1]))
+                await asyncio.sleep(0.28)
+            return
+        kinds = list(dict.fromkeys(phrase for phrase, _ in order))
+        before = order[0][0]
+        for phrase, pan in order:
+            if phrase != before:
+                await asyncio.sleep(0.22)  # a beat between one kind of thing and the next
+            before = phrase
+            note = min(kinds.index(phrase), len(PING_NOTES) - 1)
+            self.events.emit("ping", phrase=phrase, pan=pan, note=note)
+            self.voice.cue(f"ping{note}", pan=wide_pan(pan))
+            await asyncio.sleep(0.34)
 
     def current_status(self) -> str:
         if self.utt is not None or self.hands_active:
@@ -1814,6 +1859,7 @@ class Session:
 
     async def _agent(self, text: str) -> None:
         began = time.time()
+        self.found = None  # what find outlined, this request
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
         self.pending = None
@@ -1841,6 +1887,7 @@ class Session:
                                  "result": s.result[:200]}
                                 for s in run.steps],
                          turns=run.turns, seconds=round(run.seconds, 2))
+        await self._ping_found()
         # The narrator gets one look at the screen the agent left, from a clean start: a
         # line of dialogue that came up as it finished is story the player would miss.
         # What the agent said is in the narrator's recent lines, so it isn't said again,

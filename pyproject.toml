@@ -25,6 +25,8 @@ dependencies = [
     "onnxruntime-gpu>=1.23; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "onnxruntime>=1.20; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "opencv-python-headless>=5.0.0.93",
+    # Meta's decoder for SAM 3.1's mask payloads (pure Python, no dependencies).
+    "meta-sam-parser==0.1.0",
 ]
 
 [project.optional-dependencies]
