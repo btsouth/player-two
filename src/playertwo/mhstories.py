@@ -1643,6 +1643,9 @@ class Fight:
             name = self.status.get("name")
             return self.what_line or (f"It's a {name}." if name else "I couldn't read that one.")
         if mode == "weak":
+            # With no turn played this may be a new fight (run from, and caught again): look.
+            if not self.turns:
+                self.parts, self.status = [], {}
             if not self.parts or not all(named(p) for p in self.parts):
                 if not self.weapons:
                     await self.load_gear()

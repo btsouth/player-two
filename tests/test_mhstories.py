@@ -674,3 +674,23 @@ def test_a_message_read_twice_as_it_fades_in_is_said_once(game, quick):
 def test_a_broken_part_hit_to_finish_it_off_isnt_called_the_target():
     plan = m.Plan("attack", part=part("Tail", "slash", broken=True), weapon=1)
     assert m.Lines().choice(view(), plan, False) == "Hitting it with the sword."
+
+
+def test_where_weak_looks_again_until_a_turn_has_been_played(game, quick):
+    said = []
+    wheel_pictures(game, quick)
+    muse = FakeMuse([])
+    f = asked_for(game, muse, said)
+
+    async def go():
+        await f.run("Where's it weak?", "weak")
+        await f.settle_reads()
+        await f.run("Where's it weak?", "weak")  # run away, caught again: maybe not the same one
+        await f.settle_reads()
+        assert muse.asked.count("wheel") == 2
+        await f.run("Take this fight for me.", "turn")
+        await f.run("Where's it weak?", "weak")
+        await f.settle_reads()
+
+    run(go())
+    assert muse.asked.count("wheel") == 2
