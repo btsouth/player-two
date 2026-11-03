@@ -1,8 +1,9 @@
 """Where is it? SAM 3.1 finds every match for a phrase, then we say and play where.
 
-Muse Spark is good at describing a scene; SAM 3.1 is exact about pixels. For "where's
-the door?" the player gets a spoken direction plus a short sound panned to where each
-match is, so they can hear the layout.
+Muse Spark is good at describing a scene; SAM 3.1 outlines each thing to the pixel, and
+the masks it sends are kept on each Match (decoded only when asked for). For "where's the
+door?" the player gets a spoken direction plus a short sound panned to where each match
+is, so they can hear the layout.
 """
 
 from __future__ import annotations
@@ -12,12 +13,53 @@ import re
 import time
 from dataclasses import dataclass
 
+import numpy as np
 from PIL import Image
 
 from .muse import Muse, image_part
 
 BOX = re.compile(
     r"<\|box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+);w=(\d+);h=(\d+)\|>")
+# The mask token that follows a box. Its payload holds no "|" (see the SAM 3 protocol).
+BOX_MASK = re.compile(BOX.pattern + r"(?:<\|mask;(?P<mask>[^|]*)\|>)?")
+MASK_DATA = re.compile(r"(?:^|;)\s*data=(\d+),(\d+),([~!][^;]*)")
+
+
+@dataclass(frozen=True)
+class Mask:
+    """One SAM mask as sent: a raster the size of its box, placed at the box's corner."""
+
+    height: int
+    width: int
+    payload: str  # with its encoding marker: "~" lossless, "!" one bit
+    left: int  # the box's corner in the frame SAM saw
+    top: int
+    frame_w: int
+    frame_h: int
+
+    def raster(self) -> np.ndarray:
+        """height x width array of 0 and 1. Slow for a big mask: use a thread when live."""
+        from meta_sam_parser import SegmentationMask, decode_mask_to_raster
+
+        raw = decode_mask_to_raster(SegmentationMask(
+            encoding="lossless" if self.payload.startswith("~") else "one_bit",
+            payload=self.payload, width=self.width, height=self.height))
+        return np.frombuffer(raw, dtype=np.uint8).reshape(self.height, self.width)
+
+    def full_frame(self) -> np.ndarray:
+        """frame_h x frame_w array of 0 and 1, the mask where it is on the frame."""
+        out = np.zeros((self.frame_h, self.frame_w), dtype=np.uint8)
+        part = self.raster()[:max(0, self.frame_h - self.top), :max(0, self.frame_w - self.left)]
+        out[self.top:self.top + part.shape[0], self.left:self.left + part.shape[1]] = part
+        return out
+
+
+def parse_mask(fields: str | None, left: int, top: int, w: int, h: int) -> Mask | None:
+    """The mask token's fields, or None when there's no usable payload (a box is still kept)."""
+    m = MASK_DATA.search(fields or "")
+    if not m or int(m.group(1)) <= 0 or int(m.group(2)) <= 0:
+        return None
+    return Mask(int(m.group(1)), int(m.group(2)), m.group(3), left, top, w, h)
 
 
 @dataclass
@@ -26,6 +68,7 @@ class Match:
     cy: float  # 0..1 down the screen
     area: float  # fraction of the screen covered
     box: tuple[float, float, float, float] | None = None  # x1, y1, x2, y2, 0..1
+    mask: Mask | None = None  # SAM's own outline, when it came from SAM
 
     @property
     def pan(self) -> float:
@@ -39,14 +82,46 @@ def wide_pan(pan: float) -> float:
 
 def parse_boxes(text: str) -> list[Match]:
     out = []
-    for m in BOX.finditer(text):
-        x1, y1, x2, y2, w, h = (int(v) for v in m.groups())
+    for m in BOX_MASK.finditer(text):
+        x1, y1, x2, y2, w, h = (int(v) for v in m.groups()[:6])
         if w <= 0 or h <= 0:
             continue
         out.append(Match(((x1 + x2) / 2) / w, ((y1 + y2) / 2) / h,
                          max(0, (x2 - x1) * (y2 - y1)) / (w * h),
-                         (x1 / w, y1 / h, x2 / w, y2 / h)))
+                         (x1 / w, y1 / h, x2 / w, y2 / h),
+                         parse_mask(m.group("mask"), x1, y1, w, h)))
     return out
+
+
+@dataclass(frozen=True)
+class Shape:
+    """A thing's measured place on the frame: what its pixels cover, not its box."""
+
+    cx: float  # the middle of its pixels, 0..1
+    cy: float
+    area: float  # fraction of the screen its pixels cover
+    x1: float  # how far its pixels reach, 0..1
+    y1: float
+    x2: float
+    y2: float
+
+    @property
+    def pan(self) -> float:
+        return round(self.cx * 2 - 1, 2)
+
+
+def measure(m: Match) -> Shape:
+    """Decode a match's mask and measure it. A match without one is measured by its box."""
+    if m.mask is not None:
+        grid = m.mask.full_frame()
+        ys, xs = np.nonzero(grid)
+        if len(xs):
+            w, h = m.mask.frame_w, m.mask.frame_h
+            return Shape(float(xs.mean() + 0.5) / w, float(ys.mean() + 0.5) / h,
+                         len(xs) / (w * h), int(xs.min()) / w, int(ys.min()) / h,
+                         (int(xs.max()) + 1) / w, (int(ys.max()) + 1) / h)
+    x1, y1, x2, y2 = m.box or (m.cx, m.cy, m.cx, m.cy)
+    return Shape(m.cx, m.cy, m.area, x1, y1, x2, y2)
 
 
 def where_words(m: Match) -> str:
@@ -140,9 +215,11 @@ async def locate(muse: Muse, img: Image.Image, phrase: str) -> tuple[list[Match]
     return await segment(muse, img, phrase), time.monotonic() - t
 
 
-async def segment(muse: Muse, img: Image.Image, phrase: str) -> list[Match]:
-    """Every match SAM 3.1 finds for `phrase` on the frame, with its box."""
-    part = image_part(img, 1280)
+async def segment(muse: Muse, img: Image.Image, phrase: str, side: int = 1280) -> list[Match]:
+    """Every match SAM 3.1 finds for one phrase on the frame, with its box and mask. It
+    takes one phrase a call: "horse. tree. rock" comes back empty. `side` is the longest
+    side of the picture sent, and so of the mask that comes back."""
+    part = image_part(img, side)
     text = ""
     async with muse.client.responses.stream(
         model="sam-3.1",
