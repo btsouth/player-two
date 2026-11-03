@@ -2,11 +2,13 @@
 
 import asyncio
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageFilter
 
+from playertwo import walk as walk_module
 from playertwo.walk import Look, Walker, new_place, phase_shift, snap
 
 
@@ -118,6 +120,37 @@ async def walk(game, muse=None, timeout=15.0):
     return await w.walk("the green chest", timeout=timeout), w
 
 
+@pytest.fixture
+def on_game_time(monkeypatch):
+    """The walker's timers run on the simulated game's own time.
+
+    Game moves a step per capture, so on a slow machine it walks slower against the
+    walker's real-time limits. Each capture here takes the same game time on any machine,
+    and the walker's own waits still count. Returns what puts a Game on that clock.
+    """
+    clock = [0.0]
+
+    async def sleep(seconds):
+        clock[0] += seconds
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(walk_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(walk_module, "asyncio",
+                        SimpleNamespace(sleep=sleep, gather=asyncio.gather))
+
+    def timed(game, capture_seconds=0.01):
+        grab = game.grab
+
+        async def captured():
+            clock[0] += capture_seconds
+            return await grab()
+
+        game.grab = captured
+        return game
+
+    return timed
+
+
 def test_template_and_scroll_measurement():
     img = np.asarray(texture(480, 270).convert("L"), dtype=np.float32)
     moved = np.roll(img, (5, -7), axis=(0, 1))
@@ -154,8 +187,8 @@ async def test_goes_around_a_wall_by_the_waypoint():
     assert result.outcome == "arrived", result.text()
 
 
-async def test_asks_again_when_blocked_without_a_way_around():
-    game = Game(start=(150, 600), goal=(800, 600), wall=(450, 0, 510, 1400))
+async def test_asks_again_when_blocked_without_a_way_around(on_game_time):
+    game = on_game_time(Game(start=(150, 600), goal=(800, 600), wall=(450, 0, 510, 1400)))
     muse = FakeMuse(game)
     result, _ = await walk(game, muse, timeout=12)
     assert result.outcome in ("blocked", "timeout")
@@ -383,12 +416,13 @@ async def test_starting_up_against_a_wall_is_not_a_cutscene():
     assert result.outcome == "arrived", result.text()
 
 
-async def test_lets_go_while_asking_again_and_a_waypoint_isnt_being_stuck():
-    game = Game(start=(150, 600), goal=(800, 600), wall=(450, 450, 510, 760), speed=3.0)
+async def test_lets_go_while_asking_again_and_a_waypoint_isnt_being_stuck(on_game_time):
+    game = on_game_time(
+        Game(start=(150, 600), goal=(800, 600), wall=(450, 450, 510, 760), speed=3.0))
     result, _ = await walk(game, FakeMuse(game, via=[(480, 380)]), timeout=40)
     assert result.outcome == "arrived", result.text()
     assert len(game.asked) == 1, game.asked  # reaching the waypoint isn't "no progress"
-    game2 = Game(start=(150, 600), goal=(800, 600), wall=(450, 0, 510, 1400))
+    game2 = on_game_time(Game(start=(150, 600), goal=(800, 600), wall=(450, 0, 510, 1400)))
     await walk(game2, timeout=12)
     assert len(game2.asked) > 1 and all(s is None for s in game2.held_when_asked)
 
