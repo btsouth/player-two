@@ -435,3 +435,27 @@ def test_where_questions_stay_on_the_fast_path_and_open_ones_go_to_the_agent():
         assert where_request(open_request) is None
         assert guide_request(open_request) is None
         assert not where_am_i(open_request)
+
+
+def test_each_kind_of_thing_gets_its_own_note_and_every_ping_is_logged(tmp_path):
+    import asyncio
+
+    from playertwo.app import Events, Session
+    from playertwo.audio import CUES, PING_NOTES
+
+    s = object.__new__(Session)
+    s.events = Events()
+    s.events.log_path = tmp_path / "take.events.jsonl"
+    cues = []
+
+    async def wait_idle(timeout):
+        pass
+
+    s.voice = SimpleNamespace(wait_idle=wait_idle, cue=lambda name, pan=0.0: cues.append(name))
+    s.found = [Found("rock", shapes=[shape(0.1), shape(0.9)]), Found("horse", shapes=[shape(0.5)])]
+    asyncio.run(s._ping_found())
+    assert cues == ["ping0", "ping0", "ping1"]
+    assert all(f"ping{n}" in CUES for n in range(len(PING_NOTES)))
+    logged = [json.loads(line) for line in s.events.log_path.read_text().splitlines()]
+    assert [(e["kind"], e["phrase"], e["note"]) for e in logged] == [
+        ("ping", "rock", 0), ("ping", "rock", 0), ("ping", "horse", 1)]

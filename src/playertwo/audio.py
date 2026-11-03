@@ -271,3 +271,8 @@ CUES = {
     "critical": lambda: np.concatenate([tone(392, 80), tone(392, 80), tone(392, 80)]),
     "ping": lambda: tone(1200, 120, volume=0.6),  # heard over a game, on laptop speakers too
 }
+# After a look around, each kind of thing gets its own note, so the player can tell rocks from
+# trees by ear. Rising steps of a chord: pleasant in a run, and all high enough for small speakers.
+PING_NOTES = (831, 1047, 1245, 1661, 2093)
+for _n, _hz in enumerate(PING_NOTES):
+    CUES[f"ping{_n}"] = lambda hz=_hz: tone(hz, 120, volume=0.6)

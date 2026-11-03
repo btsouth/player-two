@@ -17,7 +17,7 @@ import numpy as np
 from . import ctscreen
 from .ack import ack
 from .agent import Agent
-from .audio import Mixer
+from .audio import PING_NOTES, Mixer
 from .config import Settings, first_run, open_control, save_settings, socket_path, start_control
 from .controls import BUTTONS, DIRECTIONS, ControlsError, open_controls
 from .delivery import companion_line, read_line_style
@@ -602,14 +602,23 @@ class Session:
         if not order:
             return
         await self.voice.wait_idle(10)
-        before = order[0][0]
         # One thing gets three pings: a single short blip is easy to miss over a game.
-        for phrase, pan in order if len(order) > 1 else order * 3:
+        if len(order) == 1:
+            for _ in range(3):
+                self.events.emit("ping", phrase=order[0][0], pan=order[0][1])
+                self.voice.cue("ping", pan=wide_pan(order[0][1]))
+                await asyncio.sleep(0.28)
+            return
+        kinds = list(dict.fromkeys(phrase for phrase, _ in order))
+        before = order[0][0]
+        for phrase, pan in order:
             if phrase != before:
-                await asyncio.sleep(0.15)  # a beat between one kind of thing and the next
+                await asyncio.sleep(0.22)  # a beat between one kind of thing and the next
             before = phrase
-            self.voice.cue("ping", pan=wide_pan(pan))
-            await asyncio.sleep(0.28)
+            note = min(kinds.index(phrase), len(PING_NOTES) - 1)
+            self.events.emit("ping", phrase=phrase, pan=pan, note=note)
+            self.voice.cue(f"ping{note}", pan=wide_pan(pan))
+            await asyncio.sleep(0.34)
 
     def current_status(self) -> str:
         if self.utt is not None or self.hands_active:
