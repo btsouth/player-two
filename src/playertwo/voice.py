@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import re
 import shutil
@@ -102,7 +103,8 @@ def load_kokoro():
     # long error about missing libraries on every machine without them.
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
-    opts.intra_op_num_threads = 2
+    # A share of the machine: two threads next to a running game took seconds over each line.
+    opts.intra_op_num_threads = max(2, min(6, (os.cpu_count() or 2) // 3))
     opts.inter_op_num_threads = 1
     sess = ort.InferenceSession(onnx, opts, providers=["CPUExecutionProvider"])
     return Kokoro.from_session(sess, voices), "cpu"
@@ -134,8 +136,8 @@ def first_chunk_split(sentence: str, limit: int = 60) -> list[str]:
     return [sentence]
 
 
-def speech_chunks(text: str, limit: int = 240) -> list[str]:
-    """Join adjacent complete sentences when available without waiting for more text."""
+def speech_chunks(text: str, limit: int = 120) -> list[str]:
+    """Join short adjacent sentences. Not long ones: the first has to wait for all it joins."""
     chunks = []
     for sentence in split_sentences(text):
         if chunks and len(chunks[-1]) + len(sentence) + 1 <= limit:

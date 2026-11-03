@@ -343,6 +343,7 @@ class Session:
         self.talk_started = 0.0
         self.capture_failures = 0
         self.asked = ""
+        self.agent_line = False  # what the agent said is still playing, or about to
         self._last_show = 0.0
         self.agent_task: asyncio.Task | None = None
         self.paused = False
@@ -707,6 +708,7 @@ class Session:
             return
         self.events.emit("say", text=text, source="agent")
         self.narrator.recent.append(text)
+        self.agent_line = True
         await self.voice.say(text, interrupt=False)
 
     # Narration
@@ -935,6 +937,10 @@ class Session:
         if self.describing is not None and self.narrating is self.describing \
                 and not self.voice.idle():
             return  # the player asked: they hear the answer out, even over a new scene
+        if self.agent_line:
+            if not self.voice.idle():
+                return  # the same for what the agent said, once its turn is over
+            self.agent_line = False
         frame, change = self.pending
         if self._reads(frame):
             if self.read_t < frame.t - self.watcher.settle_s:
