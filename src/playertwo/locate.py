@@ -32,6 +32,11 @@ class Match:
         return round(self.cx * 2 - 1, 2)
 
 
+def wide_pan(pan: float) -> float:
+    """Spread a screen position for the ear, so off-centre is obvious on room speakers."""
+    return round(math.copysign(abs(pan) ** 0.5, pan), 2)
+
+
 def parse_boxes(text: str) -> list[Match]:
     out = []
     for m in BOX.finditer(text):

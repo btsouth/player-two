@@ -1962,7 +1962,7 @@ class Session:
             self.trouble(exc, "where", answer=True)
 
     async def _where(self, phrase: str) -> None:
-        from .locate import describe, describe_from, locate, pan_from, point
+        from .locate import describe, describe_from, locate, pan_from, point, wide_pan
 
         if self.narrating and not self.narrating.done():
             self.narrating.cancel()
@@ -2008,8 +2008,9 @@ class Session:
         self.narrator.recent.append(text)
         await self.voice.say(text)
         await self.voice.wait_idle(10)
-        for _m, pan in pans[:8]:
-            self.voice.cue("ping", pan=pan)
+        # One thing gets three pings: a single short blip is easy to miss over a game.
+        for _m, pan in pans[:8] if len(pans) > 1 else pans * 3:
+            self.voice.cue("ping", pan=wide_pan(pan))
             await asyncio.sleep(0.28)
 
     async def _where_spark(self, frame: Frame, phrase: str):

@@ -23,8 +23,6 @@ def companion_line(text: str) -> str:
                   r"We reached \1, but \2. \3, so \4.", text)
     text = re.sub(r"^Hit the (.+) with the (.+), the (.+) with the (.+), and the (.+) with the (.+)\.$",
                   r"Use the \2 on its \1, the \4 on its \3 and the \6 on its \5.", text)
-    text = re.sub(r"^Your Journal is open on (.+), for (.+)\.$",
-                  r"Your journal's open to the \1 for \2.", text)
     text = re.sub(r"^(\w+) uses ([^.]+)\.$", r"\1's using \2.", text)
     text = re.sub(r"^(\w+)'s level increased!$", r"\1 went up a level!", text)
     text = re.sub(r"^Won the fight: (.+)\.$", r"We won! You earned \1.", text)
