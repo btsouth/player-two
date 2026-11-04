@@ -342,7 +342,7 @@ def test_party_hits_and_heals_are_said_once_the_numbers_are_steady():
     r.update(fight(780, 494), now=0)
     assert r.update(fight(780, 494), now=0.3) == ""  # the first steady reading: no news
     assert r.update(fight(660, 494), now=0.6) == ""  # once: it may be mid-change
-    assert r.update(fight(660, 494), now=0.9) == "Crono took 120."
+    assert r.update(fight(660, 494), now=0.9) == "Crono took 120 damage."
     assert r.update(fight(660, 494), now=1.2) == ""
     r.update(fight(660, 480), now=1.5)
     assert r.update(fight(660, 480), now=1.8) == ""  # a scratch isn't worth a word
@@ -651,7 +651,7 @@ def test_letters_that_come_apart_on_the_battle_bar_are_put_back():
 
 def test_hp_changes_while_player_two_acted_are_not_said_after_it():
     """Live 2026-11-01: "Crono hit the left one, but their combo dropped Crono to 1 HP"
-    was followed by the reader's "Crono took 779." The agent's report covers what
+    was followed by the reader's "Crono took 779 damage." The agent's report covers what
     happened while it acted; the reader starts over from the screen it left."""
     from playertwo.ctsteam import Member, State
 
@@ -735,7 +735,7 @@ def test_a_hit_that_leaves_someone_low_is_one_line_and_not_said_again():
     r.update(_fight(), now=0)
     r.update(_fight(), now=0.3)
     assert r.update(_fight(Frog=1), now=0.6) == ""  # mid-change: wait for the hit's line
-    assert r.update(_fight(Frog=1), now=0.9) == "Frog took 493, down to 1."
+    assert r.update(_fight(Frog=1), now=0.9) == "Frog took 493 damage, down to 1 HP."
     for t in (1.2, 25.0, 60.0):
         assert r.update(_fight(Frog=1), now=t) == ""  # still low: no reminders
     assert r.update(_fight(Frog=0), now=61) == "Frog is down."

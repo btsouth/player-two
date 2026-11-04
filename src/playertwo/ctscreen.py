@@ -640,7 +640,7 @@ class Reader:
         self.hp, self.hp_new = {}, {}
 
     def _hits(self, lk: Look) -> tuple[str, set[str], set[str]]:
-        """Party HP that changed since the last steady reading: "Frog took 493, down to 1".
+        """Party HP that changed since the last steady reading: "Frog took 493 damage, down to 1 HP".
         Only a reading two looks agree on counts (an attack can cover the numbers), only a
         change of a tenth of someone's HP or more, and a knockout is left to danger. Also
         who the line covers (their low HP is said in it) and whose HP is still changing
@@ -667,7 +667,7 @@ class Reader:
                 covered.add(name)
             elif hp < old:
                 low = hp < top / 3
-                out.append(f"{name} took {old - hp}" + (f", down to {hp}" if low else ""))
+                out.append(f"{name} took {old - hp} damage" + (f", down to {hp} HP" if low else ""))
                 if low:
                     covered.add(name)
             else:
@@ -713,7 +713,7 @@ class Reader:
 
     def prime(self) -> None:
         """Player Two just acted and said what came of it: HP read before that isn't the
-        baseline any more ("Crono took 779" after "the combo dropped Crono to 1 HP")."""
+        baseline any more ("Crono took 779 damage" after "the combo dropped Crono to 1 HP")."""
         self.hp, self.hp_new = {}, {}
 
     @property
