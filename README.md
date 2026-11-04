@@ -11,8 +11,6 @@ answers aloud, sends controller or keyboard input, and checks what changed.
 Chrono Trigger has the deepest support. Monster Hunter Stories 3 uses a game-specific
 battle routine. Red Dead Redemption demonstrates reading, answering and keyboard input.
 
-**No blind or motor-impaired player has tested it yet.**
-
 ## How it works
 
 ```mermaid
@@ -46,13 +44,10 @@ Kokoro runs locally. The Meta models use hosted APIs. Details and limits are bel
 
 ## Live results
 
-Chrono Trigger on Steam, Nov 2, build `9c7c6f3`, Battle Mode set to Wait. Each run restarted the game
-and loaded the same save. Requests were typed into the running app. The voice path has its own
-tests: 63 of 63 synthetic spoken lines matched the typed command parser's decisions and arguments
-in the same game/screen context. That checks transcription and routing, not completed actions or a
-real microphone. "Done" means the task finished correctly, checked against the game's screen.
-Action times end at logged task completion; the final spoken result can continue afterwards.
-Local-answer times include the spoken answer. First words can include an acknowledgement.
+Chrono Trigger on Steam, Nov 2, build `9c7c6f3`, Battle Mode set to Wait. Each run restarted the
+game and loaded the same save, with requests typed into the running app. "Done" means the task
+finished correctly, checked against the game's screen. Separately, 63 of 63 synthetic spoken lines
+matched the typed parser's decisions in the same game and screen context.
 
 | Request | Done | Whole task |
 |---|---:|---|
@@ -65,12 +60,8 @@ Local-answer times include the spoken answer. First words can include an acknowl
 | Win this fight for me, after a combo took two or three of the party to 1 HP | 4/5 | Wins 42 to 53 s |
 
 In the one lost fight the party was wiped out right after Cyclone was picked. Player Two then went
-back through the title and loaded the last save without being asked. One more run didn't count
-because the launch script failed before the fight started. Completed tasks can still fail the
-narration timing checks: all six purchase runs did. These counts measure completion, not speech
-quality. Just before these runs, on a slightly older build, a purchase wandered for 65 s by the
-seller and said nothing, so the walker was changed to give up sooner. This is a small sample on
-one save, not a general success rate. Earlier builds lost 3/3 boss attempts.
+back through the title and loaded the last save without being asked. A small sample on one save.
+[Test notes](docs/validation.md#notes-on-the-live-results) have the details.
 
 ## Try it
 
@@ -129,8 +120,8 @@ fixes are not installed until merged. ViGEmBus is retired; if unavailable, keybo
 is the fallback. ARM uses keyboard control. Use a windowed or borderless game.
 After setup, `player-two --help` lists the commands. A fresh application install on a Windows 11
 laptop from public main `259ca29` completed, including setup, help, an offline check and a real
-saved-frame Muse response on Nov 2. This was an existing Windows installation, not a clean OS.
-The deep Chrono Trigger path has only been measured on Linux.
+saved-frame Muse response on Nov 2.
+The deep Chrono Trigger path has been measured on Linux.
 
 If a valid key/model returns HTTP 404 on a cloud network, see the
 [IPv4/IPv6 validation caveat](docs/validation.md#a-real-call-without-a-game). The tested Ubuntu
@@ -211,7 +202,7 @@ speech. Open weights are hosted, not running on the player's PC. Baseten's publi
 $1.25/M input, $0.15/M cached input and $4.25/M output tokens
 ([provider](https://www.baseten.co/library/muse-spark-open/)); the saved-frame call used
 2,401 input and 294 output tokens, approximately $0.0043 before credits. This is an estimate,
-not an invoice. A shorter 400-token JSON probe exhausted its budget and returned no usable content.
+not an invoice.
 
 ## Interesting engineering
 
@@ -236,19 +227,17 @@ not an invoice. A shorter 400-token JSON probe exhausted its budget and returned
 
 ## Limits and player control
 
-**The measured navigation/shop configuration cannot currently be reproduced from this repo alone.**
-**It does not include the private maps, room surveys, game packs, walkthroughs or saves used
-for the navigation results above.** You need your own game. See [game data](#game-data).
+The navigation and shop results above use private maps and game packs, which contain game art and
+can't ship here, so they don't reproduce from a fresh clone. See [game data](#game-data).
 
 The strongest action support is Chrono Trigger in Wait mode. Deep support costs per-game work.
 Generic descriptions and tools can fail on other games; action games and autonomous 3D traversal
 are not supported. Moving the game between monitors can break image scale matching.
 
-Hands-free has generated-voice tests, not player validation in a real room. Safety prompts for
+No blind or motor-impaired player has tested it yet. Safety prompts for
 saving, loading and story choices are model instructions, not an enforced transaction boundary.
 Single-player only: virtual input can conflict with online anti-cheat. Screen frames and speech
 are sent to model providers; local notes and event logs may contain game text or your requests.
-No blind player has used this build. No outreach or user-benefit outcome is claimed.
 
 ## What you can say
 
@@ -274,39 +263,25 @@ these commands, with behavior dependent on the game:
 | "what's wrong?" | what it can and can't reach (game, controller, microphone, talk key) and the last problem |
 | "help" / "goodbye" | what you can say / quit |
 
-## Recorded demo
+## The film
 
-The current paced film is a selection of recorded developer trials, not the live-results
-suite above. Its requests are typed. Live microphone requests and the final video URL remain
-**TODO-FINAL** for the final voice recording.
+The film shows chosen takes of the real app on real games, with requests in the developer's voice.
+[Test notes](docs/validation.md#notes-on-the-film) have the rates behind them.
 
-| Game | In this cut | Scope |
+| Game | In the film | How it's played |
 |---|---|---|
 | Hollow Knight: Silksong | Reads a line of the opening poem and describes a scene, unprompted | Nothing written for this game |
-| Chrono Trigger (Steam) | A low-HP rescue win | Local code plays the fight turns. |
-| Monster Hunter Stories 3 | Battle status, weak points and a Somnacanth win | A routine written for this game plays the turns. Source gameplay uses the game's 2x battle setting; the film plays that recording at 1x. No potion use is shown. |
-| Red Dead Redemption | Opens the journal with keyboard input, then in one take: a cover question, Spark's `find`, SAM 3.1's outlines, a ping per object, Spark's answer | A person moves John. No autonomous 3D traversal. No Red Dead code; one line in a local notes file. |
-
-Separate from this cut: eight recorded Somnacanth takes won eight fights. Frame review found
-false next-attack narration in three earlier takes; none was found in the selected take, t13.
-That is developer review, not a guarantee of correct narration. In the recorded Red Dead SAM
-session, two of six requests returned no boxes; the film selects a successful horse request.
-In the recorded cover-question session on Red Dead, 4 of 8 attempts were true against the frame SAM saw; the film selects one. The Linux game-speech hold reduced overlap on one separate recorded clip from 12.7 s to 1.1 s;
-one separate 87 s live cutscene had no Player Two line. Those benchmarks are not shown in this cut.
-
-Final spoken results for Chrono Trigger, Monster Hunter Stories 3 and Red Dead Redemption,
-the video URL and its exact merged source commit are **TODO-FINAL**. There is no claim of beating
-Lavos, playing arbitrary games or replacing a game's own accessibility features.
+| Chrono Trigger (Steam) | A low-HP rescue win | Local code plays the fight turns |
+| Monster Hunter Stories 3 | Battle status, weak points and a win | A routine written for this game plays the turns. Recorded at the game's 2x battle setting, shown at 1x |
+| Red Dead Redemption | Opens the journal with keyboard input, then in one take: a cover question, Spark's `find`, SAM 3.1's outlines, a ping per object, Spark's answer | A person moves John. No Red Dead code; one line in a local notes file |
 
 ## Related work
 
 Player Two joins a growing set of tools for game access, including [RetroArch's AI narrator](https://docs.libretro.com/guides/ai-service/),
 [GamerAstra](https://arxiv.org/abs/2506.22937v2), [AI Content Describer for NVDA](https://github.com/cartertemm/AI-content-describer)
-and [GamePals](https://arxiv.org/html/2601.11218v1). GamerAstra tested with eight blind or
-low-vision users; Player Two has no such user evidence. Our tested focus is mainstream
+and [GamePals](https://arxiv.org/html/2601.11218v1). Player Two's focus is mainstream
 commercial games on real hardware, voice input and output, and reading, answering and asked-for
-button presses through a Muse tool loop and local executors. The current film uses typed
-requests; voice routing has separate synthetic-audio tests.
+button presses through a Muse tool loop and local executors.
 
 ## Built during the event
 
@@ -314,7 +289,6 @@ requests; voice routing has separate synthetic-audio tests.
 `5a89075`, Oct 27, 2026 at 17:55 ET. The reader, agent, navigation, tools and tests in this
 repository were built for the Meta Global AI Developer Hackathon, Indie track.
 Dependencies and the commercial games themselves predate the event. MIT licensed code.
-These are developer measurements, not accessibility validation.
 
 ## Game data
 
@@ -328,10 +302,8 @@ What Player Two knows about a game lives in `~/.config/player-two/`, not in this
   in an emulator with the game's memory as ground truth (`scripts/survey.py`,
   `scripts/survey_rooms.py`). They contain game art, so they aren't shared here.
 
-Without these, a judge gets the generic narration/question interface, generic control tools,
-the packaged pixel reader and synthetic test scenes. Named map trips, surveyed-room routes,
-people matching and the demonstrated seller approach are not reproducible from a fresh clone.
-Visual walking can attempt a visible target, with no equivalent map coverage or success claim.
+Without these you get the generic narration and question interface, generic control tools, the
+packaged pixel reader and synthetic test scenes.
 [Game-data requirements and distribution limits](docs/game-data.md) explain what is missing.
 
 **`src/playertwo/data/ct_steam/`** is the one piece of Chrono Trigger data in the repo, about
@@ -386,7 +358,7 @@ uv run python scripts/self_check.py
 
 [Validation notes](docs/validation.md) record clean-install and model checks with their limits.
 CI runs Linux lint/tests and Windows tests. Frame-dependent tests skip when private recordings
-are absent; a green public run does not prove the full live-game claims. `tests/test_nav.py`
+are absent. `tests/test_nav.py`
 and the synthetic walker tests exercise geometry without a model or game. Bench tools under
 `scripts/` separate model calls, deterministic execution and game-state ground truth.
 

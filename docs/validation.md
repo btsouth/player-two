@@ -44,10 +44,25 @@ script, suite and a window-enumeration import check. Frame/map tests skip when t
 game data is absent. A green run does not establish real microphone quality, accessible
 independent play, game capture, input delivery or reliable live-game narration.
 
-The README's live-results table names its separate source build and typed-request conditions.
-Its completion counts are not narration-quality pass rates. Current film footage, synthetic
-speech routing and developer live trials are separate kinds of evidence. No blind-player
-validation is claimed.
+## Notes on the live results
+
+Action times end at logged task completion; the final spoken result can continue afterwards.
+Local-answer times include the spoken answer. First words can include an acknowledgement. Completion
+counts are not narration-quality pass rates: all six purchase runs finished but missed the narration
+timing checks. One more fight run didn't count because the launch script failed before the fight
+started. Just before these runs, on a slightly older build, a purchase wandered for 65 s by the
+seller and said nothing, so the walker was changed to give up sooner. Earlier builds lost 3/3 boss
+attempts. The 63 spoken-line check covers transcription and routing, not completed actions or a real
+microphone.
+
+## Notes on the film
+
+The film shows chosen takes from developer sessions. Eight recorded Somnacanth takes won eight fights;
+frame review found false next-attack narration in three earlier takes. In the recorded Red Dead SAM
+session, two of six requests returned no boxes. In the recorded cover-question session on Red Dead,
+4 of 8 attempts were true against the frame SAM saw. The Linux game-speech hold reduced overlap on one
+recorded clip from 12.7 s to 1.1 s, and one separate 87 s live cutscene had no Player Two line. There
+is no claim of beating Lavos, playing arbitrary games or replacing a game's own accessibility features.
 
 ## Hosted open-weight check
 
