@@ -73,7 +73,7 @@ class TestSpeechText:
         assert first_chunk_split("Your turn, go.") == ["Your turn, go."]
 
     def test_clean(self):
-        assert clean_for_speech("**HP** is low") == "H.P. is low"
+        assert clean_for_speech("**HP** is low") == "HP is low"
 
     def test_voice_for_language(self):
         assert voice_for("Spanish") == ("es", "ef_dora")
@@ -476,7 +476,7 @@ async def test_screen_reader_streams_sentences_in_order():
     v = ScreenReaderVoice(Settings(), Mixer("file"), fake)
     out = await v.say_stream(deltas())
     await asyncio.sleep(0)
-    assert fake.said == ["Yosuke: Dude, that was close.", "Your H.P. is low."]
+    assert fake.said == ["Yosuke: Dude, that was close.", "Your HP is low."]
     assert out == v.last_spoken and fake.stops == 1
 
     fake.said.clear()

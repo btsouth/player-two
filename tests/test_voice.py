@@ -74,7 +74,7 @@ async def test_simultaneous_status_events_share_one_synthesis_but_keep_order():
     v.first_audio_ms = []
     await asyncio.gather(v.say("Frog's at 1 HP.", interrupt=False),
                          v.say("Crono and Marle are fine.", interrupt=False))
-    assert pushed == ["Frog's at 1 H.P. Crono and Marle are fine."]
+    assert pushed == ["Frog's at 1 HP. Crono and Marle are fine."]
 
 
 async def test_stop_discards_a_status_batch_before_synthesis():

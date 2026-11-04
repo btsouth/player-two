@@ -167,7 +167,6 @@ def tidy(text: str) -> str:
 
 def clean_for_speech(text: str) -> str:
     text = tidy(re.sub(r"[*_#`>]+", "", text))
-    text = re.sub(r"\b([HSM]P)\b\.?", lambda m: ".".join(m.group(1)) + ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
