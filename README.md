@@ -3,6 +3,8 @@
 An AI co-op partner for blind, low-vision and motor-impaired gamers: it reads the screen,
 answers questions and presses the buttons when you ask.
 
+**[Watch the 3 minute demo](https://www.youtube.com/watch?v=M-frK7z2au8)**
+
 For players who want help reading a menu, finding a doorway or taking a turn in a
 commercial game. Ask a question or delegate an action; Player Two reads the game window,
 answers aloud, sends controller or keyboard input, and checks what changed.
