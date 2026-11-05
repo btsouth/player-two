@@ -3,8 +3,6 @@
 An AI co-op partner for blind, low-vision and motor-impaired gamers: it reads the screen,
 answers questions and presses the buttons when you ask.
 
-> **VIDEO PLACEHOLDER: final 3 minute demo goes here before submission.**
-
 For players who want help reading a menu, finding a doorway or taking a turn in a
 commercial game. Ask a question or delegate an action; Player Two reads the game window,
 answers aloud, sends controller or keyboard input, and checks what changed.
@@ -270,9 +268,9 @@ The film shows chosen takes of the real app on real games, with requests in the 
 
 | Game | In the film | How it's played |
 |---|---|---|
-| Hollow Knight: Silksong | Reads a line of the opening poem and describes a scene, unprompted | Nothing written for this game |
-| Chrono Trigger (Steam) | A low-HP rescue win | Local code plays the fight turns |
-| Monster Hunter Stories 3 | Battle status, weak points and a win | A routine written for this game plays the turns. Recorded at the game's 2x battle setting, shown at 1x |
+| Hollow Knight: Silksong | Reads the opening poem and describes a scene, unprompted | Nothing written for this game |
+| Chrono Trigger (Steam) | Reads the fight on a black screen, then heals and fights to the win when asked. "Stop" hands it back | Local code reads the HP and plays the fight turns |
+| Monster Hunter Stories 3 | Muse Spark reads the weak points; it calls an attack and wins | A routine written for this game plays the turns. Recorded at the game's 2x battle setting, shown at 1x |
 | Red Dead Redemption | Opens the journal with keyboard input, then in one take: a cover question, Spark's `find`, SAM 3.1's outlines, a ping per object, Spark's answer | A person moves John. No Red Dead code; one line in a local notes file |
 
 ## Related work
